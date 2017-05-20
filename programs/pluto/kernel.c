@@ -504,7 +504,7 @@ int fmt_common_shell_out(char *buf, int blen, const struct connection *c,
 			c->nflog_group);
 	}
 
-	if (!sr->this.has_cat)
+	// if (!sr->this.has_cat)  AA_2017_05 move cat to xfrm
 		catstr[0] = '\0';
 
 	connmarkstr[0] = '\0';
@@ -1511,8 +1511,10 @@ bool eroute_connection(const struct spd_route *sr,
 	if (sa_proto == SA_INT)
 		peer = aftoinfo(addrtypeof(peer))->any;
 
+	
 	if (sr->this.has_cat) {
 		addrtosubnet(&sr->this.host_addr, &client);
+		/*
 		bool t = raw_eroute(&sr->this.host_addr, &client,
 				peer, &sr->that.client,
 				cur_spi,
@@ -1529,8 +1531,9 @@ bool eroute_connection(const struct spd_route *sr,
 				);
 		if (!t)
 			libreswan_log("CAT: failed to eroute additional Client Address Translation policy");
-
 	DBG(DBG_CONTROL, DBG_log("%s CAT extra route added return=%d", __func__, t));
+	*/
+	DBG(DBG_CONTROL, DBG_log("%s CAT should be added to SA", __func__));
 	}
 
 	return raw_eroute(&sr->this.host_addr, &sr->this.client,
