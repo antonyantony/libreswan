@@ -1363,9 +1363,13 @@ static bool ikev2_set_ia(pb_stream *cp_a_pbs, struct state *st)
 				st->st_serialno, c->name, c->instance_serial,
 				ipstr(&ip, &ip_str)));
 		} else {
-			c->spd.this.client.addr = ip;
-			c->spd.this.client.maskbits = 32;
-			st->st_ts_this = ikev2_end_to_ts(&c->spd.this);
+			{
+			/* this temporary to match TSi TSr, later mangled */
+				c->spd.this.client.addr = ip;
+				c->spd.this.client.maskbits = 32;
+				st->st_ts_this = ikev2_end_to_ts(&c->spd.this);
+			}
+			c->spd.this.cat_ip = ip;
 			c->spd.this.has_cat = TRUE; /* create iptable entry */
 		}
 	} else {

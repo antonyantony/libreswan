@@ -3885,6 +3885,20 @@ stf_status ikev2_process_child_sa_pl(struct msg_digest *md,
 	return ret;
 }
 
+static void ikev2_mangle_cat(struct state *st)
+{
+	struct connection *c = st->st_connection;
+	char s1[SUBNETTOT_BUF];
+	char s2[SUBNETTOT_BUF];
+
+	subnettot(&c->spd.this.client, 0, s1, sizeof(s1));
+	addrtosubnet(&c->spd.this.host_addr, &c->spd.this.client);
+	subnettot(&c->spd.this.client, 0, s2, sizeof(s2));
+
+	DBG(DBG_CONTROL, DBG_log("CAT mangle c->spd.this.client with host address"
+				"%s => %s", s1, s2));
+}
+
 static stf_status ikev2_process_ts_and_rest(struct msg_digest *md)
 {
 	int cp_r;
@@ -4087,6 +4101,9 @@ static stf_status ikev2_process_ts_and_rest(struct msg_digest *md)
 			}
 		} /* for */
 	} /* notification block */
+
+	if (c->spd.this.has_cat)
+		ikev2_mangle_cat(st);
 
 	ikev2_derive_child_keys(st, md->original_role);
 
