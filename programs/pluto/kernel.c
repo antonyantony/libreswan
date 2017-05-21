@@ -1725,6 +1725,7 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 	struct connection *c = st->st_connection;
 	ip_subnet src, dst;
 	ip_subnet src_client, dst_client;
+	ip_address *caddr;
 	ipsec_spi_t inner_spi = 0;
 	unsigned int proto = 0;
 	enum eroute_type esatype = ET_UNSPEC;
@@ -1762,13 +1763,15 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		dst.addr = c->spd.this.host_addr;
 		src_client = c->spd.that.client;
 		dst_client = c->spd.this.client;
+		caddr = &c->spd.this.host_addr;
 	} else {
 		src.addr = c->spd.this.host_addr,
 		dst.addr = c->spd.that.host_addr;
 		src_client = c->spd.this.client;
 		dst_client = c->spd.that.client;
-	}
+		caddr = &c->spd.this.cat_ip;
 
+	}
 
 	if (st->st_ah.attrs.encapsulation == ENCAPSULATION_MODE_TUNNEL ||
 		st->st_esp.attrs.encapsulation == ENCAPSULATION_MODE_TUNNEL ||
@@ -1796,7 +1799,8 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 	said_boilerplate.transport_proto = c->spd.this.protocol;
 	said_boilerplate.sa_lifetime = c->sa_ipsec_life_seconds;
 	said_boilerplate.outif = -1;
-	said_boilerplate.caddr = &c->spd.this.cat_ip;
+	said_boilerplate.caddr = caddr;
+
 #ifdef HAVE_LABELED_IPSEC
 	said_boilerplate.sec_ctx = st->sec_ctx;
 #endif
