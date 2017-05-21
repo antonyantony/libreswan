@@ -83,6 +83,8 @@ struct kernel_sa {
 	const ip_address *src;
 	const ip_address *dst;
 
+	const ip_address *caddr;
+
 	const ip_subnet *src_client;
 	const ip_subnet *dst_client;
 

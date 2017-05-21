@@ -1233,6 +1233,17 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 		attr = (struct rtattr *)((char *)attr + attr->rta_len);
 	}
 
+	if (sa->caddr != NULL) {
+		xfrm_address_t xcaddr;
+		attr->rta_type = XFRMA_CATADDR;
+		attr->rta_len = RTA_LENGTH(sizeof(xfrm_address_t));
+
+		ip2xfrm(sa->caddr, &xcaddr);
+		memcpy(RTA_DATA(attr), &xcaddr, sizeof(xcaddr));
+
+		req.n.nlmsg_len += attr->rta_len;
+		attr = (struct rtattr *)((char *)attr + attr->rta_len);
+	}
 
 #ifdef HAVE_LABELED_IPSEC
 	if (sa->sec_ctx != NULL) {
