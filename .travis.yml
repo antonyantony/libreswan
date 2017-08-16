@@ -1,15 +1,26 @@
+sudo: required
+
 services: docker
 
 language: c
 
 os:
   - linux
-  - osx
 
 compiler:
   - clang
   - gcc
 
-script:
-  - scripts/build.sh
+before_install:
+  #- docker build -t swanbase -f testing/docker/Dockerfile-ubuntu-zesty-travis .
+  - docker build -t swanbase -f testing/docker/Dockerfile-centos-7-travis .
+  - echo $PWD
+  - sudo docker run -h west --privileged --net=none --name swanbase -v $PWD:/home/build/libreswan -v /sys/fs/cgroup:/sys/fs/cgroup:ro -d swanbase /sbin/init
+   # - sudo docker run -h west --privileged --net=none --name swanbase -v $PWD:/home/build/libreswan -v /sys/fs/cgroup:/sys/fs/cgroup:ro -d swanbase /usr/sbin/init
+  - sudo docker ps
 
+script:
+  - ls
+  - uname -a
+  - sudo docker exec -ti swanbase  /bin/bash -c 'cd /home/build/libreswan && make base'
+  - sudo docker exec -ti swanbase  /bin/bash -c 'cd /home/build/libreswan && make install-base'

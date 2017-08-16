@@ -1,0 +1,31 @@
+FROM fedora:26
+MAINTAINER "Antony Antony" <antony@phenome.org>
+ENV container docker
+RUN dnf -y update;
+RUN dnf -y install systemd; \
+(cd /lib/systemd/system/sysinit.target.wants/; for i in *; do [ $i == systemd-tmpfiles-setup.service ] || rm -f $i; done); \
+rm -f /lib/systemd/system/multi-user.target.wants/*;\
+rm -f /etc/systemd/system/*.wants/*;\
+rm -f /lib/systemd/system/local-fs.target.wants/*; \
+rm -f /lib/systemd/system/sockets.target.wants/*udev*; \
+rm -f /lib/systemd/system/sockets.target.wants/*initctl*; \
+rm -f /lib/systemd/system/basic.target.wants/*;\
+rm -f /lib/systemd/system/anaconda.target.wants/*;
+#put these first that way if install break you start it up.
+VOLUME [ "/sys/fs/cgroup" ]
+CMD ["/usr/sbin/init"]
+RUN dnf install -y ElectricFence audit-libs-devel bind-utils bison \
+ conntrack-tools curl-devel dnf-plugins-core fipscheck-devel flex gcc git \
+ hping3 ike-scan iproute iptables ipsec-tools ldns-devel libcap-ng-devel \
+ libevent-devel libfaketime libseccomp libseccomp-devel libselinux-devel \
+ lsof make mtr nc net-tools nmap nsd nspr-devel nss-devel nss-tools ocspd \
+ openldap-devel openssh-server openssh-clients pam-devel pam-devel pexpect \
+ psmisc pyOpenSSL python3-cryptography python3-pexpect python3-setproctitle \
+ redhat-rpm-config rpm-build screen strace strongswan systemd-devel tcpdump \
+ telnet traceroute trousers unbound unbound-devel unbound-libs valgrind \
+ vim-enhanced wget xl2tpd xmlto;
+RUN echo " * soft core unlimited" >> /etc/security/limits.conf
+RUN echo " DAEMON_COREFILE_LIMIT='unlimited'" >> /etc/sysconfig/pluto
+#
+RUN mkdir -p /home/build/libreswan
+RUN dnf -y update; dnf clean all
