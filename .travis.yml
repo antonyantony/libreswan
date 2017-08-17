@@ -12,9 +12,17 @@ compiler:
   - gcc
 
 before_install:
-  #- docker build -t swanbase -f testing/docker/Dockerfile-ubuntu-zesty-travis .
-  - echo "USE_DNSSEC=false" >> Makefile.inc.local
-  - docker build -t swanbase -f testing/docker/Dockerfile-centos-7-travis .
+  #
+  # Fedora 26
+  - docker build -t swanbase -f testing/docker/Dockerfile-f26-travis .
+  #
+  # Ubuntu zesty
+  # - docker build -t swanbase -f testing/docker/Dockerfile-ubuntu-zesty-travis .
+  #
+  # CentOS 7
+  # - echo "USE_DNSSEC=false" >> Makefile.inc.local
+  # - docker build -t swanbase -f testing/docker/Dockerfile-centos-7-travis .
+  #
   - echo $PWD
   - sudo docker run -h west --privileged --net=none --name swanbase -v $PWD:/home/build/libreswan -v /sys/fs/cgroup:/sys/fs/cgroup:ro -d swanbase /sbin/init
    # - sudo docker run -h west --privileged --net=none --name swanbase -v $PWD:/home/build/libreswan -v /sys/fs/cgroup:/sys/fs/cgroup:ro -d swanbase /usr/sbin/init
