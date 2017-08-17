@@ -1,3 +1,6 @@
+Travis CI:
+[![Build Status](https://secure.travis-ci.org/antonyantony/libreswan.png?branch=travis-fedora-26)](https://travis-ci.org/antonyantony/libreswan/branches)
+
 # Libreswan
 The Libreswan Project   https://libreswan.org/
 
