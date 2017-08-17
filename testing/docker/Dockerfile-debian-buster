@@ -1,0 +1,48 @@
+FROM debian:buster
+ENV container docker
+# RUN echo 'deb http://deb.debian.org/debian experimental main' > /etc/apt/sources.list.d/experimental.list
+# RUN echo 'deb http://deb.debian.org/debian wheezy-backports main' > /etc/apt/sources.list.d/backports.list
+# Don't start any optional services except for the few we need. 
+# RUN echo "precedence ::ffff:0:0/96  100" >> /etc/gai.conf
+# RUN echo "net.ipv6.conf.all.disable_ipv6=1" >> /etc/sysctl.conf
+# RUN sysctl -p 
+RUN apt-get update
+RUN apt-get -y install systemd
+RUN find /etc/systemd/system \
+         /lib/systemd/system \
+         -path '*.wants/*' \
+         -not -name '*journald*' \
+         -not -name '*systemd-tmpfiles*' \
+         -not -name '*systemd-user-sessions*' \
+         -exec rm \{} \;
+RUN systemctl set-default multi-user.target
+CMD ["/bin/bash", "-c", "exec /sbin/init --log-target=journal 3>&1"]
+#
+RUN apt-get update && apt-get install -y apt-src dns-root-data devscripts \
+ 	equivs iproute2 less locales openssh-server vim  screen wget
+
+RUN rm -rf /etc/ssh/ssh_host*
+#
+#
+RUN ssh-keygen -b 1024 -t rsa -f /etc/ssh/ssh_host_key
+RUN ssh-keygen -b 1024 -t rsa -f /etc/ssh/ssh_host_rsa_key
+RUN mkdir /root/.ssh && \
+  touch /root/.ssh/authorized_keys && \
+  chmod 700 /root/.ssh && \
+  chmod 600 /root/.ssh/authorized_keys
+# copy the file /root/.ssh/authorized_keys to cwd
+ADD authorized_keys /root/.ssh/authorized_keys
+RUN chmod 400 /root/.ssh/authorized_keys
+RUN chown -R root:root /root/.ssh
+RUN sed -i '/PermitRootLogin/d' /etc/ssh/sshd_config
+RUN echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
+RUN sed -i 's/UsePAM\syes/UsePAM no/' /etc/ssh/sshd_config
+RUN echo "UseDNS no" >> /etc/ssh/sshd_config
+RUN echo 'export EDITOR=vim' >> /root/.bash_profile
+RUN systemctl enable ssh
+RUN sed -i '/StrictModes/d' /etc/ssh/sshd_config
+RUN echo "StrictModes no" >> /etc/ssh/sshd_config
+RUN wget  -O libreswan-debian-control https://raw.githubusercontent.com/libreswan/libreswan/master/debian/control
+RUN mk-build-deps --install --tool "apt-get -o Debug::pkgProblemResolver=yes -y --no-install-recommends" libreswan-debian-control
+RUN localedef -i en_US -f UTF-8 en_US.UTF-8
+STOPSIGNAL SIGRTMIN+3 

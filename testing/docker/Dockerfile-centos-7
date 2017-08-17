@@ -26,8 +26,8 @@ RUN yum install -y ElectricFence audit-libs-devel bind-utils bison \
  telnet traceroute trousers unbound unbound-devel unbound-libs valgrind \
  vim-enhanced wget xl2tpd xmlto;
 RUN mkdir -p /home/build/libreswan
-# VOLUME ["/home/build/libreswan:/home/build/libreswan"]
-# RUN ln -s /home/build/libreswan/testing /testing
+VOLUME ["/home/build/libreswan:/home/build/libreswan"]
+RUN ln -s /home/build/libreswan/testing /testing
 RUN echo " * soft core unlimited" >> /etc/security/limits.conf
 RUN echo " DAEMON_COREFILE_LIMIT='unlimited'" >> /etc/sysconfig/pluto
 #
@@ -37,13 +37,13 @@ RUN mkdir /var/run/sshd
 # create ssh host keys
 RUN ssh-keygen -b 1024 -t rsa -f /etc/ssh/ssh_host_key
 RUN ssh-keygen -b 1024 -t rsa -f /etc/ssh/ssh_host_rsa_key
+RUN ssh-keygen -b 1024 -t dsa -f /etc/ssh/ssh_host_dsa_key
 # move public key to enable ssh keys login
-# copy the file /root/.ssh/authorized_keys to cwd
 ADD testing/baseconfigs/all/root/.ssh/authorized_keys /root/.ssh/authorized_keys
 RUN chmod 400 /root/.ssh/authorized_keys
 RUN chown -R root:root /root/.ssh
 RUN  systemctl enable sshd.service
-# tell ssh to not use ugly PAM
+# tweak ssh configs
 RUN sed -i '/ssh_host_dsa/d' /etc/ssh/sshd_config
 RUN sed -i '/PermitRootLogin/d' /etc/ssh/sshd_config
 RUN sed -i '/UsePAM/d' /etc/ssh/sshd_config
@@ -62,6 +62,6 @@ RUN echo 'export EDITOR=vim' >> /root/.bash_profile
 RUN systemctl enable rc-local.service
 RUN printf 'export TERM=xterm\nexport EDITOR=vim\n' > /etc/profile.d/docker_exec_hack.sh
 RUN yum -y update; yum clean all
-# RUN wget http://dl.fedoraproject.org/pub/epel/7/x86_64/e/epel-release-7-9.noarch.rpm
-# RUN rpm -ivh epel-release-7-9.noarch.rpm
-# RUN yum --enablerepo=epel-testing install bash-completion
+RUN wget http://dl.fedoraproject.org/pub/epel/7/x86_64/e/epel-release-7-9.noarch.rpm
+RUN rpm -ivh epel-release-7-9.noarch.rpm
+RUN yum --enablerepo=epel-testing install bash-completion
