@@ -11,7 +11,15 @@ compiler:
   - clang
   - gcc
 
+
+env:
+  global:
+   # The next declaration is the encrypted COVERITY_SCAN_TOKEN, created
+   #   via the "travis encrypt" command using the project repo's public key
+   - secure: "kRv+F1u7b+rT7HvURXODdGRJWPdpricYab2zyqb8TCP1SDxlS3IU3/CfMjgk2g0pV4DzfYxcXLIwuULp2Qe7G25EIysjFaK6IU154GXAAp5JzAILyMwRumeXkbl7RCn9BTUwntIWHST+RLqMHZjrFbpwRdm9FBtaM251f6QrX25hBXyGg6lktajnQZKi9rBEyEQ2uvsIvkMTWubERQRRqukeqRb9h7TOhRwb8n1mntyV1ucOvndf+9MD5Wk7F76eH1MF8kDq25pZSqWqOLd/UlbZWZcaAfasXRdJWj2dPHf4mapG2FBRLTBk+bu8wM8fi9V9wIZD+jnnd1nJDf704lRvNUF8Aab7ltcDS2K8/2p0uV17Zl7pLLWXG8s3vYSKccbHcbWnLjRM0Z4lfuQAoNJgzk41Ygqv1/5qxyLmLxh8aG+LAAHSpI7QKFs6lCB4bUCMbCvKZTkw7k4BtS83Q5rqNcUa5bdfwPGV9SAyDUXv/GryElj0Bw6EDH0skOZKLKsp4os/GNxxFerpuqUaVgbrucd6YwhY2aETGmXHPQfALviFAcIqDuKNK/CUkJHDritQI+qCmROWUGCJx6jVnC178gRRJDXnAYpsOx+sGWvc7TNY7vmETI6JQjaZoymVSWNHPap2z62BlXs4BlG3YWaYyJeb//A8m5e5UO75rMI="
+
 before_install:
+  - echo -n | openssl s_client -connect scan.coverity.com:443 | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' | sudo tee -a /etc/ssl/certs/ca-
   #
   # Fedora 26
   - docker build -t swanbase -f testing/docker/Dockerfile-f26-travis .
@@ -27,6 +35,16 @@ before_install:
   - sudo docker run -h west --privileged --net=none --name swanbase -v $PWD:/home/build/libreswan -v /sys/fs/cgroup:/sys/fs/cgroup:ro -d swanbase /sbin/init
    # - sudo docker run -h west --privileged --net=none --name swanbase -v $PWD:/home/build/libreswan -v /sys/fs/cgroup:/sys/fs/cgroup:ro -d swanbase /usr/sbin/init
   - sudo docker ps
+
+addons:
+  coverity_scan:
+    project:
+      name: "antonyantony/libreswan"
+      description: "F26 Build submitted via Travis CI"
+    notification_email: antony@phenome.org
+    build_command_prepend: "make clean"
+    build_command:   "make base"
+    branch_pattern: coverity_scan
 
 script:
   - ls
