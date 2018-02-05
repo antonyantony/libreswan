@@ -1,3 +1,22 @@
+libreswan (3.23-1) unstable; urgency=medium
+
+  [ Daniel Kahn Gillmor ]
+  * New upstream release
+  * drop patches already upstream, refresh remaining patches
+
+  [ Antony Antony ]
+  * tests/opportunistic fix, asymetric dnssec test
+
+  [ Daniel Kahn Gillmor ]
+  * d/copyright: Format: use https
+  * d/copyright: remove dropped file
+  * avoid lintian complaint by skipping my skipped test :P
+    (override_dh_auto_test-does-not-check-DEB_BUILD_PROFILES)
+  * quit persecuting Antony Antony, again
+  * fix spelling
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Mon, 05 Feb 2018 16:23:59 -0500
+
 libreswan (3.22-4) unstable; urgency=medium
 
   * conflict with strongswan-libcharon (Closes: #886842)
