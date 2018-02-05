@@ -49,4 +49,6 @@ override_dh_auto_install-arch:
 		DESTDIR=$(CURDIR)/debian/libreswan
 
 override_dh_auto_test:
-	 echo "Skip dh_auto_test"
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	echo "Skip dh_auto_test"
+endif
