@@ -1,3 +1,10 @@
+libreswan (3.23-2) unstable; urgency=medium
+
+  * d/tests/opportunistic: do not fail on initial systemctl status
+  * d/control: Rules-Requires-Root: no
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Tue, 13 Feb 2018 10:59:46 -0500
+
 libreswan (3.23-1) unstable; urgency=medium
 
   [ Daniel Kahn Gillmor ]
