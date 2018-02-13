@@ -15,7 +15,7 @@ grep -F "$badstring" "${AUTOPKGTEST_ARTIFACTS}/before.html"
 
 echo "0.0.0.0/0" > /etc/ipsec.d/policies/private-or-clear
 
-systemctl status ipsec
+systemctl status ipsec || true
 
 cp /usr/share/doc/libreswan/examples/oe-dnssec-client.conf /etc/ipsec.d/
 
