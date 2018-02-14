@@ -1,3 +1,9 @@
+libreswan (3.23-3) unstable; urgency=medium
+
+  * d/tests/opportunistic: more details on failure
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Wed, 14 Feb 2018 13:08:09 -0500
+
 libreswan (3.23-2) unstable; urgency=medium
 
   * d/tests/opportunistic: do not fail on initial systemctl status
