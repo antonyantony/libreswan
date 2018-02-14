@@ -19,7 +19,11 @@ systemctl status ipsec || true
 
 cp /usr/share/doc/libreswan/examples/oe-dnssec-client.conf /etc/ipsec.d/
 
-systemctl restart ipsec
+if ! systemctl restart ipsec ; then
+    printf "systemctl restart failed with %d\n" "$?"
+    systemctl status ipsec || true
+    journalctl -xe
+fi
 
 systemctl status ipsec
 
