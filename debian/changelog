@@ -1,3 +1,9 @@
+libreswan (3.23-4) unstable; urgency=medium
+
+  * d/tests/control: isolation-container → isolation-machine
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Thu, 15 Feb 2018 12:03:58 -0500
+
 libreswan (3.23-3) unstable; urgency=medium
 
   * d/tests/opportunistic: more details on failure
