@@ -1,0 +1,9 @@
+A routed host-to-host tunnel using xfrmi interface.
+
+xfrmi is a new feature. You need a kernel support.
+The support is available in kernel 4.19+ set CONFIG_XFRM_INTERFACE=y or m
+
+road will have device ipsec0
+ip rule show
+ip route show table 50
+ip -s link show ipsec0
