@@ -1,0 +1,119 @@
+/testing/guestbin/swan-prep
+road #
+ ip addr show dev lo | grep 192.0.3.254 && ip del add 192.0.3.254/24 dev lo
+road #
+ ip link show ipsec0 2>/dev/null && ip link del ipsec0
+road #
+ ip route del table 50 192.1.2.23 dev eth0 2>/dev/null
+road #
+ ip route del table 200 default dev eth0 via 192.1.3.254 2>/dev/null
+road #
+ echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter
+road #
+ ipsec start
+Redirecting to: systemctl start ipsec.service
+road #
+ /testing/pluto/bin/wait-until-pluto-started
+road #
+ ipsec whack --impair retransmits
+road #
+ ipsec auto --add road
+002 added connection description "road"
+road #
+ echo "initdone"
+initdone
+road #
+ ipsec auto --up road
+002 "road" #1: initiating v2 parent SA
+133 "road" #1: STATE_PARENT_I1: initiate
+133 "road" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
+002 "road" #1: suppressing retransmit because IMPAIR_RETRANSMITS is set.
+134 "road" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=aes_gcm_16_256 integ=n/a prf=sha2_512 group=MODP2048}
+002 "road" #2: suppressing retransmit because IMPAIR_RETRANSMITS is set.
+002 "road" #2: IKEv2 mode peer ID is ID_FQDN: '@east'
+003 "road" #2: Authenticated using authby=secret
+002 "road" #2: negotiated connection [192.0.3.0-192.0.3.255:0-65535 0] -> [192.0.2.0-192.0.2.255:0-65535 0]
+004 "road" #2: STATE_V2_IPSEC_I: IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256-NONE NATOA=none NATD=none DPD=passive}
+road #
+ ip addr show dev lo | grep 192.0.3.254 || ip addr add 192.0.3.254/24 dev lo
+road #
+ ip link add ipsec0 type xfrm xfrmi-id 6 dev eth0
+road #
+ ip link set ipsec0 up
+road #
+ ip rule add prio 100 to 192.0.2.0/24 not fwmark 7/0xffffffff lookup 50
+road #
+ sleep  2
+road #
+ ip route add table 50 192.0.2.0/24 dev ipsec0 src 192.0.3.254
+road #
+ ping -w 4 -c 4 192.0.2.254
+PING 192.0.2.254 (192.0.2.254) 56(84) bytes of data.
+64 bytes from 192.0.2.254: icmp_seq=1 ttl=64 time=0.XXX ms
+64 bytes from 192.0.2.254: icmp_seq=2 ttl=64 time=0.XXX ms
+64 bytes from 192.0.2.254: icmp_seq=3 ttl=64 time=0.XXX ms
+64 bytes from 192.0.2.254: icmp_seq=4 ttl=64 time=0.XXX ms
+--- 192.0.2.254 ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time XXXX
+rtt min/avg/max/mdev = 0.XXX/0.XXX/0.XXX/0.XXX ms
+road #
+ ipsec whack --trafficstatus
+006 #2: "road", type=ESP, add_time=1234567890, inBytes=336, outBytes=336, id='@east'
+road #
+ ip -s link show ipsec0
+4: ipsec0@eth0: <NOARP,UP,LOWER_UP> mtu 1500 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+    link/none 12:00:00:ab:cd:02 brd ff:ff:ff:ff:ff:ff
+    RX: bytes  packets  errors  dropped overrun mcast   
+    336        4        0       0       0       0       
+    TX: bytes  packets  errors  dropped carrier collsns 
+    616        4        0       0       0       0       
+road #
+ echo done
+done
+road #
+ ipsec look
+road NOW
+XFRM state:
+src 192.1.2.23 dst 192.1.3.209
+	proto esp spi 0xSPISPIXX reqid REQID mode tunnel
+	replay-window 32 flag af-unspec
+	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
+	xfrm-interface id: 6
+	output-mark: 7 
+src 192.1.3.209 dst 192.1.2.23
+	proto esp spi 0xSPISPIXX reqid REQID mode tunnel
+	replay-window 32 flag af-unspec
+	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
+	xfrm-interface id: 6
+	output-mark: 7 
+XFRM policy:
+src 192.0.2.0/24 dst 192.0.3.0/24
+	dir fwd priority 3 ptype main
+	tmpl src 192.1.2.23 dst 192.1.3.209
+		proto esp reqid REQID mode tunnel
+	xfrm-interface id: 6
+src 192.0.2.0/24 dst 192.0.3.0/24
+	dir in priority 3 ptype main
+	tmpl src 192.1.2.23 dst 192.1.3.209
+		proto esp reqid REQID mode tunnel
+	xfrm-interface id: 6
+src 192.0.3.0/24 dst 192.0.2.0/24
+	dir out priority 3 ptype main
+	tmpl src 192.1.3.209 dst 192.1.2.23
+		proto esp reqid REQID mode tunnel
+	xfrm-interface id: 6
+XFRM done
+IPSEC mangle TABLES
+NEW_IPSEC_CONN mangle TABLES
+ROUTING TABLES
+default via 192.1.3.254 dev eth0 
+192.1.3.0/24 dev eth0 proto kernel scope link src 192.1.3.209 
+NSS_CERTIFICATES
+Certificate Nickname                                         Trust Attributes
+                                                             SSL,S/MIME,JAR/XPI
+road #
+road #
+ ../bin/check-for-core.sh
+road #
+ if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
+

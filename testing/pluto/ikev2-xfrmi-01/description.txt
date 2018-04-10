@@ -1,0 +1,3 @@
+A routed subnet-to-subnet tunnel using xfrmi interface.
+xfrmi is an expirimental feature. You kernel with xfrmi2 support.
+Early support for it came out in Feb 2018 by Steffen Klassert.
