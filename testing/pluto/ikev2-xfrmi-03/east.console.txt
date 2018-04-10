@@ -1,0 +1,25 @@
+/testing/guestbin/swan-prep
+east #
+ ipsec start
+Redirecting to: systemctl start ipsec.service
+east #
+ /testing/pluto/bin/wait-until-pluto-started
+east #
+ ipsec auto --add north-east-a
+002 added connection description "north-east-a"
+east #
+ ipsec auto --add north-east-b
+002 added connection description "north-east-b"
+east #
+ echo "initdone"
+initdone
+east #
+ ipsec whack --trafficstatus
+006 #2: "north-east-a", type=ESP, add_time=1234567890, inBytes=336, outBytes=336, id='@north'
+006 #4: "north-east-b", type=ESP, add_time=1234567890, inBytes=336, outBytes=336, id='@north'
+east #
+east #
+ ../bin/check-for-core.sh
+east #
+ if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
+

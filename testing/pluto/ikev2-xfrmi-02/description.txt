@@ -1,0 +1,4 @@
+A routed host-to-host tunnel using xfrmi interface.
+
+xfrm is an expirimental feature. You a need kernel that support xfrmi3
+An early support for xfrmi came out in Feb 2018 by Steffen Klassert.
