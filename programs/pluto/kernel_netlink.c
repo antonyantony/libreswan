@@ -565,6 +565,8 @@ static bool netlink_raw_eroute(const ip_address *this_host,
 			deltatime_t use_lifetime UNUSED,
 			uint32_t sa_priority,
 			const struct sa_marks *sa_marks,
+			const uint32_t xfrm_omark,
+			const uint32_t xfrm_if_id,
 			enum pluto_sadb_operations sadb_op,
 			const char *text_said
 #ifdef HAVE_LABELED_IPSEC
@@ -812,6 +814,23 @@ static bool netlink_raw_eroute(const ip_address *this_host,
 				mark_attr->rta_len = RTA_LENGTH(mark_attr->rta_len);
 				req.n.nlmsg_len += mark_attr->rta_len;
 			}
+		}
+		if (xfrm_omark > 0) {
+			struct rtattr *attr = (struct rtattr *)((char *)&req + req.n.nlmsg_len);
+			DBG(DBG_KERNEL, DBG_log("netlink: XFRMA_OUTPUT_MARK to %" PRIu32, xfrm_omark));
+			attr->rta_type = XFRMA_OUTPUT_MARK;
+			attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
+			memcpy(RTA_DATA(attr), &xfrm_omark, sizeof(uint32_t));
+			req.n.nlmsg_len += attr->rta_len;
+		}
+
+		if (xfrm_if_id > 0) {
+			struct rtattr *attr = (struct rtattr *)((char *)&req + req.n.nlmsg_len);
+			DBG(DBG_KERNEL, DBG_log("netlink: XFRMA_IF_ID to %" PRIu32, xfrm_if_id));
+			attr->rta_type = XFRMA_IF_ID;
+			attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
+			memcpy(RTA_DATA(attr), &xfrm_if_id, sizeof(uint32_t));
+			req.n.nlmsg_len += attr->rta_len;
 		}
 	}
 
@@ -1583,6 +1602,23 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 
 			}
 		}
+		if (sa->xfrm_omark > 0) {
+			DBG(DBG_KERNEL, DBG_log("netlink: XFRMA_OUTPUT_MARK to %" PRIu32, sa->xfrm_omark));
+			attr->rta_type = XFRMA_OUTPUT_MARK;
+			attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
+			memcpy(RTA_DATA(attr), &sa->xfrm_omark, sizeof(uint32_t));
+			req.n.nlmsg_len += attr->rta_len;
+			attr = (struct rtattr *)((char *)attr + attr->rta_len);
+		}
+
+		if (sa->xfrm_if_id > 0) {
+			DBG(DBG_KERNEL, DBG_log("netlink: XFRMA_IF_ID to %" PRIu32, sa->xfrm_if_id));
+			attr->rta_type = XFRMA_IF_ID;
+			attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
+			memcpy(RTA_DATA(attr), &sa->xfrm_if_id, sizeof(uint32_t));
+			req.n.nlmsg_len += attr->rta_len;
+			attr = (struct rtattr *)((char *)attr + attr->rta_len);
+		}
 	}
 
 	if (sa->natt_type != 0) {
@@ -2253,7 +2289,8 @@ static bool netlink_sag_eroute(const struct state *st, const struct spd_route *s
 
 	return eroute_connection(sr, inner_spi, inner_spi, inner_proto,
 				inner_esatype, proto_info + i,
-				calculate_sa_prio(c), &c->sa_marks, op, opname
+				calculate_sa_prio(c), &c->sa_marks,
+				c->xfrm_omark, c->xfrm_if_id, op, opname
 #ifdef HAVE_LABELED_IPSEC
 				, st->st_connection->policy_label
 #endif
@@ -2385,6 +2422,7 @@ static bool netlink_shunt_eroute(const struct connection *c,
 					deltatime(0),
 					calculate_sa_prio(c),
 					&c->sa_marks,
+					c->xfrm_omark, c->xfrm_if_id,
 					op, buf2
 #ifdef HAVE_LABELED_IPSEC
 					, c->policy_label
@@ -2421,6 +2459,8 @@ static bool netlink_shunt_eroute(const struct connection *c,
 					deltatime(0),
 					calculate_sa_prio(c),
 					&c->sa_marks,
+					c->xfrm_omark,
+					c->xfrm_if_id,
 					op, buf2
 #ifdef HAVE_LABELED_IPSEC
 					, c->policy_label

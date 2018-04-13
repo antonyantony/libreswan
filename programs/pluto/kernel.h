@@ -137,6 +137,8 @@ struct kernel_sa {
 	struct xfrm_user_sec_ctx_ike *sec_ctx;
 #endif
 	const char *nic_offload_dev;
+	uint32_t xfrm_omark;
+	uint32_t xfrm_if_id;
 
 	deltatime_t sa_lifetime; /* number of seconds until SA expires */
 	/*
@@ -199,6 +201,8 @@ struct kernel_ops {
 			   deltatime_t use_lifetime,
 			   uint32_t sa_priority,
 			   const struct sa_marks *sa_marks,
+			   const uint32_t xfrm_omark,
+			   const uint32_t xfrm_if_id,
 			   enum pluto_sadb_operations op,
 			   const char *text_said
 #ifdef HAVE_LABELED_IPSEC
@@ -410,6 +414,8 @@ extern bool eroute_connection(const struct spd_route *sr,
 			      const struct pfkey_proto_info *proto_info,
 			      uint32_t sa_priority,
 			      const struct sa_marks *sa_marks,
+			      const uint32_t xfrm_omark,
+			      const uint32_t xfrm_if_id,
 			      unsigned int op, const char *opname
 #ifdef HAVE_LABELED_IPSEC
 			      , const char *policy_label
@@ -462,6 +468,8 @@ extern bool raw_eroute(const ip_address *this_host,
 		       deltatime_t use_lifetime,
 		       uint32_t sa_priority,
 		       const struct sa_marks *sa_marks,
+		       const uint32_t xfrm_omark,
+		       const uint32_t xfrm_if_id,
 		       enum pluto_sadb_operations op,
 		       const char *opname
 #ifdef HAVE_LABELED_IPSEC

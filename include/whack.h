@@ -321,6 +321,8 @@ struct whack_message {
 	char *vti_iface;
 	bool vti_routing; /* perform routing into vti device or not */
 	bool vti_shared; /* use remote %any and skip cleanup on down? */
+	uint32_t xfrm_omark;
+	uint32_t xfrm_if_id;
 
 	/* what metric to put on ipsec routes */
 	int metric;
