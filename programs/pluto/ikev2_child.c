@@ -61,6 +61,9 @@
 #include "ikev2_send.h"
 #include "ikev2_message.h"
 #include "ikev2_ts.h"
+#ifdef USE_XFRM_INTERFACE
+# include "xfrm_interface.h"
+#endif
 
 static stf_status ikev2_cp_reply_state(const struct msg_digest *md,
 	struct state **ret_cst,
@@ -377,6 +380,10 @@ stf_status ikev2_child_sa_respond(struct msg_digest *md,
 		/* skip check for rekey */
 		ike->sa.st_connection->newest_isakmp_sa = ike->sa.st_serialno;
 	} else {
+#ifdef USE_XFRM_INTERFACE
+		if (c->xfrm_if == yna_yes || c->xfrm_if == yna_auto)
+			setup_xfrm_interface(c);
+#endif
 		ISAKMP_SA_established(&ike->sa);
 	}
 

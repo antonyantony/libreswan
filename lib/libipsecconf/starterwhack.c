@@ -674,6 +674,7 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	msg.modecfg_banner = conn->modecfg_banner;
 	conn_log_val(conn, "modecfgbanner", msg.modecfg_banner);
 
+	msg.xfrm_if = conn->options[KBF_XFRM_IF];
 	msg.conn_mark_both = conn->conn_mark_both;
 	conn_log_val(conn, "mark", msg.conn_mark_both);
 	msg.conn_mark_in = conn->conn_mark_in;

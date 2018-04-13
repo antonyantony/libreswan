@@ -58,6 +58,8 @@ enum ike_version {
 
 #define IKE_BUF_AUTO 0 /* use system values for IKE socket buffer size */
 
+#define DEFAULT_XFRM_IF_NAME "ipsec0"
+
 enum kernel_interface {
 	NO_KERNEL = 1,
 	USE_KLIPS = 2,

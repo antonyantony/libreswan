@@ -174,6 +174,7 @@ enum keyword_numeric_config_field {
 	KBF_VTI_ROUTING,	/* let updown do routing into VTI device */
 	KBF_VTI_SHARED,		/* VTI device is shared - enable checks and disable cleanup */
 	KBF_NIC_OFFLOAD,	/* xfrm offload to network device */
+	KBF_XFRM_IF,		/* xfrmi support n/y/a & */
 	KBF_ROOF
 };
 

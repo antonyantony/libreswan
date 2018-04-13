@@ -191,6 +191,7 @@ void ipsecconf_default_values(struct starter_config *cfg)
 
 	cfg->conn_default.left.authby = AUTH_UNSET;
 	cfg->conn_default.right.authby = AUTH_UNSET;
+	cfg->conn_default.xfrm_if = yna_no;
 }
 
 /*

@@ -599,6 +599,9 @@ const struct keyword_def ipsec_conf_keywords[] = {
   { "mark",  kv_conn,  kt_string,  KSCF_CONN_MARK_BOTH, NULL, NULL, },
   { "mark-in",  kv_conn,  kt_string,  KSCF_CONN_MARK_IN, NULL, NULL, },
   { "mark-out",  kv_conn,  kt_string,  KSCF_CONN_MARK_OUT, NULL, NULL, },
+#ifdef USE_XFRM_INTERFACE
+  { "xfrm-interface", kv_conn, kt_enum, KBF_XFRM_IF, &kw_yna_list, NULL, },
+#endif
   { "vti-interface",  kv_conn,  kt_string,  KSCF_VTI_IFACE, NULL, NULL, },
   { "vti-routing",  kv_conn,  kt_bool,  KBF_VTI_ROUTING, NULL, NULL, },
   { "vti-shared",  kv_conn,  kt_bool,  KBF_VTI_SHARED, NULL, NULL, },

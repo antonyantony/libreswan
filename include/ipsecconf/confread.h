@@ -124,6 +124,7 @@ struct starter_conn {
 	char *accept_redirect_to;
 	bool vti_routing;
 	bool vti_shared;
+	bool xfrm_if;
 };
 
 struct starter_config {

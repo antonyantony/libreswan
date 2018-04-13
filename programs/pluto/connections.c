@@ -89,6 +89,9 @@
 #include "ip_address.h"
 #include "af_info.h"
 #include "keyhi.h" /* for SECKEY_DestroyPublicKey */
+#ifdef USE_XFRM_INTERFACE
+# include "xfrm_interface.h"
+#endif
 
 struct connection *connections = NULL;
 
@@ -318,6 +321,7 @@ void delete_connection(struct connection *c, bool relations)
 	pfreeany(c->foodgroup);
 	pfreeany(c->connalias);
 	pfreeany(c->vti_iface);
+	pfreeany(c->xfrm_if_name);
 	pfreeany(c->modecfg_dns);
 	pfreeany(c->modecfg_domains);
 	pfreeany(c->modecfg_banner);
@@ -1516,6 +1520,16 @@ void add_connection(const struct whack_message *wm)
 			wm->name);
 		return;
 	}
+#ifdef USE_XFRM_INTERFACE
+	if (wm->xfrm_if) {
+		err_t e = xfrm_iface_supported();
+		if (e != NULL) {
+			loglog(RC_FATAL, "Failed to load connection %s : XFRM interface unsupported : %s",
+					wm->name, e);
+		return;
+		}
+	}
+#endif
 
 	/*
 	 * Connection values are set using strings in the whack
@@ -1781,6 +1795,7 @@ void add_connection(const struct whack_message *wm)
 		c->vti_iface = wm->vti_iface;
 		c->vti_routing = wm->vti_routing;
 		c->vti_shared = wm->vti_shared;
+		c->xfrm_if = wm->xfrm_if;
 	}
 
 #ifdef HAVE_NM

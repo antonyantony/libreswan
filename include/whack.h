@@ -331,6 +331,8 @@ struct whack_message {
 	char *vti_iface;
 	bool vti_routing; /* perform routing into vti device or not */
 	bool vti_shared; /* use remote %any and skip cleanup on down? */
+	enum yna_options xfrm_if;
+	char *xfrm_if_name;
 
 	/* for RFC 5685 - IKEv2 Redirect mechanism */
 	char *redirect_to;

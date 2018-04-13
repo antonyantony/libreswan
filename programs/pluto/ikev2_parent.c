@@ -83,6 +83,9 @@
 #include "ikev2_message.h"
 #include "ikev2_ts.h"
 #include "ikev2_msgid.h"
+#ifdef USE_XFRM_INTERFACE
+# include "xfrm_interface.h"
+#endif
 
 #include "crypt_symkey.h" /* for release_symkey */
 struct mobike {
@@ -3505,6 +3508,13 @@ static stf_status ikev2_process_ts_and_rest(struct msg_digest *md)
 
 	ikev2_derive_child_keys(child);
 
+#ifdef USE_XFRM_INTERFACE
+	/* before calling do_command() */
+	if (st->st_state != STATE_V2_REKEY_CHILD_I)
+		if (st->st_connection->xfrm_if == yna_yes ||
+				st->st_connection->xfrm_if == yna_auto)
+			setup_xfrm_interface(st->st_connection);
+#endif
 	/* now install child SAs */
 	if (!install_ipsec_sa(st, TRUE))
 		return STF_FATAL;
