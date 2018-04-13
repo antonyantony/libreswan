@@ -1718,6 +1718,9 @@ void add_connection(const struct whack_message *wm)
 		c->vti_routing = wm->vti_routing;
 		c->vti_shared = wm->vti_shared;
 
+		c->xfrm_omark = wm->xfrm_omark;
+		c->xfrm_if_id = wm->xfrm_if_id;
+
 		} else { /* not !NEVER_NEGOTIATE() */
 			/* set default to AUTH_NEVER if unset and we do not expect to do IKE */
 			if (wm->left.authby == AUTH_UNSET && wm->right.authby == AUTH_UNSET) {

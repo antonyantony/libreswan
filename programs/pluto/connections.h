@@ -239,6 +239,8 @@ struct connection {
 	char *vti_iface;
 	bool vti_routing; /* should updown perform routing into the vti device */
 	bool vti_shared; /* should updown leave remote empty and not cleanup device on down */
+	uint32_t xfrm_omark; /* XFRMA_OUTPUT_MARK, for routing after transformation */
+	uint32_t xfrm_if_id; /* interface id XFRMA_IF_ID initiatl support */
 	deltatime_t r_interval; /* initial retransmit time, doubles each time */
 	deltatime_t r_timeout; /* max time (in secs) for one packet exchange attempt */
 	reqid_t sa_reqid;

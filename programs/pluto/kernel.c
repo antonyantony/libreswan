@@ -1265,6 +1265,8 @@ bool raw_eroute(const ip_address *this_host,
 		deltatime_t use_lifetime,
 		uint32_t sa_priority,
 		const struct sa_marks *sa_marks,
+		const uint32_t xfrm_omark,
+		const uint32_t xfrm_if_id,
 		enum pluto_sadb_operations op,
 		const char *opname
 #ifdef HAVE_LABELED_IPSEC
@@ -1323,7 +1325,9 @@ bool raw_eroute(const ip_address *this_host,
 					cur_spi, new_spi, sa_proto,
 					transport_proto,
 					esatype, proto_info,
-					use_lifetime, sa_priority, sa_marks, op, text_said
+					use_lifetime, sa_priority, sa_marks,
+					xfrm_omark, xfrm_if_id,
+					op, text_said
 #ifdef HAVE_LABELED_IPSEC
 					, policy_label
 #endif
@@ -1452,6 +1456,7 @@ static bool fiddle_bare_shunt(const ip_address *src, const ip_address *dst,
 			deltatime(SHUNT_PATIENCE),
 			0, /* we don't know connection for priority yet */
 			NULL, /* sa_marks */
+			0, 0,
 			op, why
 #ifdef HAVE_LABELED_IPSEC
 			, NULL
@@ -1540,6 +1545,8 @@ bool eroute_connection(const struct spd_route *sr,
 		const struct pfkey_proto_info *proto_info,
 		uint32_t sa_priority,
 		const struct sa_marks *sa_marks,
+		const uint32_t xfrm_omark,
+		const uint32_t xfrm_if_id,
 		unsigned int op, const char *opname
 #ifdef HAVE_LABELED_IPSEC
 		, const char *policy_label
@@ -1567,7 +1574,8 @@ bool eroute_connection(const struct spd_route *sr,
 				esatype,
 				proto_info,
 				deltatime(0),
-				sa_priority, sa_marks, op, buf2
+				sa_priority, sa_marks,
+				xfrm_omark, xfrm_if_id, op, buf2
 #ifdef HAVE_LABELED_IPSEC
 				, policy_label
 #endif
@@ -1587,7 +1595,9 @@ bool eroute_connection(const struct spd_route *sr,
 			esatype,
 			proto_info,
 			deltatime(0),
-			sa_priority, sa_marks, op, buf2
+			sa_priority, sa_marks,
+			xfrm_omark, xfrm_if_id,
+			op, buf2
 #ifdef HAVE_LABELED_IPSEC
 			, policy_label
 #endif
@@ -1675,7 +1685,7 @@ bool assign_holdpass(const struct connection *c,
 						SA_INT, ET_INT,
 						null_proto_info,
 						calculate_sa_prio(c),
-						NULL,
+						NULL, 0, 0,
 						op,
 						reason
 #ifdef HAVE_LABELED_IPSEC
@@ -2129,6 +2139,9 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		DBG(DBG_KERNEL, DBG_log("setting IPsec SA replay-window to %d",
 			c->sa_replay_window));
 
+		said_next->xfrm_omark = c->xfrm_omark;
+		said_next->xfrm_if_id = c->xfrm_if_id;
+
 		if (!inbound && c->sa_tfcpad != 0 && !st->st_seen_no_tfc) {
 			DBG(DBG_KERNEL, DBG_log("Enabling TFC at %d bytes (up to PMTU)", c->sa_tfcpad));
 			said_next->tfcpad = c->sa_tfcpad;
@@ -2428,6 +2441,8 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 				deltatime(0),		/* lifetime */
 				calculate_sa_prio(c),	/* priority */
 				&c->sa_marks,		/* IPsec SA marks */
+				c->xfrm_omark,
+				c->xfrm_if_id,
 				ERO_ADD_INBOUND,	/* op */
 				"add inbound"		/* opname */
 #ifdef HAVE_LABELED_IPSEC
@@ -2524,6 +2539,8 @@ static bool teardown_half_ipsec_sa(struct state *st, bool inbound)
 				deltatime(0),
 				calculate_sa_prio(c),
 				&c->sa_marks,
+				c->xfrm_omark,
+				c->xfrm_if_id,
 				ERO_DEL_INBOUND,
 				"delete inbound"
 #ifdef HAVE_LABELED_IPSEC
@@ -3156,6 +3173,7 @@ bool route_and_eroute(struct connection *c,
 						deltatime(SHUNT_PATIENCE),
 						calculate_sa_prio(c),
 						NULL,
+						0, 0,
 						ERO_REPLACE,
 						"restore"
 #ifdef HAVE_LABELED_IPSEC

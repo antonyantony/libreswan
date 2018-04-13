@@ -215,6 +215,8 @@ enum keyword_string_conn_field {
 	KSCF_CONN_MARK_IN,
 	KSCF_CONN_MARK_OUT,
 	KSCF_VTI_IFACE,
+	KBF_MARK_XFRM_OUTPUT,
+	KBF_XFRM_IF_ID,
 	KSCF_MAX
 };
 

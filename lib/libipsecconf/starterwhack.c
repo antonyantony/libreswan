@@ -672,6 +672,8 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" modecfgbanner=%s",
 		conn->name, msg.modecfg_banner);
 
+	msg.xfrm_omark = conn->options[KBF_MARK_XFRM_OUTPUT];
+	msg.xfrm_if_id = conn->options[KBF_XFRM_IF_ID];
 	msg.conn_mark_both = conn->conn_mark_both;
 	starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" mark=%s",
 		conn->name, msg.conn_mark_both);
