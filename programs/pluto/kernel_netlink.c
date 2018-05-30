@@ -2867,7 +2867,8 @@ static bool netlink_v6holes()
 			LOG_ERRNO(errno, "\"%s\"", proc_f);
 		}
 	} else {
-		LOG_ERRNO(errno, "could not stat \"%s\"", proc_f);
+		LOG_ERRNO(errno, "could not stat \"%s\" IPV6 disabled in kernel", proc_f);
+		return TRUE; /* pretend success, do not exit pluto */
 	}
 
 	if (disable_ipv6 == 1) {
