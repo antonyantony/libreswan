@@ -11,7 +11,7 @@ KVM_INSTALL_RPM_LIST = 'rpm -aq > /var/tmp/rpm-qa-fedora-updates.log'
 # interscace It does not seems to run the first time when called from
 # /etc/rc.d/rc.local This slows down installation. If you 7 prefixes
 # it could cost 40 min:)
-KVM_F26_HACK=$(KVMSH) --shutdown $(1)$(2) '/testing/guestbin/swan-transmogrify'
+KVM_F26_HACK=$(KVMSH) --shutdown $(1)$(2) '/testing/guestbin/swan-transmogrify; dnf builddep -y iproute'
 KVM_UDEV_HACK=$(KVMSH) --shutdown $(1)$(2) 'ln -s /dev/null /etc/udev/rules.d/80-net-name-slot.rules'
 
 KVM_PACKAGES = \
@@ -72,6 +72,8 @@ KVM_PACKAGES = \
     wget \
     xl2tpd \
     xmlto \
+    fedpkg fedora-packager rpmdevtools ncurses-devel pesign \
+    qt3-devel libXi-devel gcc-c++ bc elfutils-libelf-devel \
     https://download.nohats.ca/strongswan/strongswan-5.6.0-1.fc22.x86_64.rpm \
     https://download.nohats.ca/libfaketime/libfaketime-0.9.6-4.fc22.x86_64.rpm
 

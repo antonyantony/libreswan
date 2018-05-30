@@ -637,7 +637,7 @@ $(KVM_BASEDIR)/$(KVM_BASE_DOMAIN).ks: | $(KVM_ISO) $(KVM_KICKSTART_FILE) $(KVM_B
 		--vcpus=1 \
 		--memory 1024 \
 		--nographics \
-		--disk size=8,cache=writeback,path=$(basename $@).qcow2 \
+		--disk size=32,cache=writeback,path=$(basename $@).qcow2 \
 		$(VIRT_BASE_GATEWAY) \
 		$(VIRT_RND) \
 		--location=$(KVM_ISO) \
