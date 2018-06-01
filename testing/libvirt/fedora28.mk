@@ -11,8 +11,8 @@ KVM_INSTALL_RPM_LIST = 'rpm -aq > /var/tmp/rpm-qa-fedora-updates.log'
 # interscace It does not seems to run the first time when called from
 # /etc/rc.d/rc.local This slows down installation. If you 7 prefixes
 # it could cost 40 min:)
-KVM_F26_HACK=$(KVMSH) --shutdown $(1)$(2) '/testing/guestbin/swan-transmogrify; dnf builddep -y iproute'
-KVM_UDEV_HACK=$(KVMSH) --shutdown $(1)$(2) 'ln -s /dev/null /etc/udev/rules.d/80-net-name-slot.rules'
+KVM_F26_HACK=$(KVMSH) --shutdown $(1)$(2) '/testing/guestbin/swan-transmogrify'
+KVM_CLONE_HACKS= $(KVMSH) --shutdown $(1)$(2) 'ln -s /dev/null /etc/udev/rules.d/80-net-name-slot.rules; dnf builddep -y iproute'
 
 KVM_PACKAGES = \
     ElectricFence \
