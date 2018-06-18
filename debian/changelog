@@ -1,3 +1,12 @@
+libreswan (3.23-5) unstable; urgency=medium
+
+  * move to DEP-14 branch naming
+  * Standards-Version: bump to 4.1.4 (no changes needed)
+  * d/rules: drop unneeded PUBDIR definitions
+  * drop spelling-error lintian overrides about Antony Antony (no longer needed)
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Mon, 18 Jun 2018 12:45:39 -0400
+
 libreswan (3.23-4) unstable; urgency=medium
 
   * d/tests/control: isolation-container → isolation-machine
