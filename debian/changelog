@@ -1,3 +1,9 @@
+libreswan (3.23-6) unstable; urgency=medium
+
+  * avoid -fstack-protector-all on ia64
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Tue, 19 Jun 2018 22:39:57 -0400
+
 libreswan (3.23-5) unstable; urgency=medium
 
   * move to DEP-14 branch naming
