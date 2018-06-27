@@ -23,6 +23,7 @@ road #
 106 "xauth-road-eastnet" #1: STATE_MAIN_I2: sent MI2, expecting MR2
 108 "xauth-road-eastnet" #1: STATE_MAIN_I3: sent MI3, expecting MR3
 002 "xauth-road-eastnet" #1: Peer ID is ID_FQDN: '@east'
+003 "xauth-road-eastnet" #1: Authenticated using RSA
 004 "xauth-road-eastnet" #1: STATE_MAIN_I4: ISAKMP SA established {auth=RSA_SIG cipher=aes_256 integ=sha2_256 group=MODP2048}
 041 "xauth-road-eastnet" #1: xauth-road-eastnet prompt for Username:
 040 "xauth-road-eastnet" #1: xauth-road-eastnet prompt for Password:
@@ -47,6 +48,7 @@ road #
 106 "xauth-road-eastnet" #2: STATE_MAIN_I2: sent MI2, expecting MR2
 108 "xauth-road-eastnet" #2: STATE_MAIN_I3: sent MI3, expecting MR3
 002 "xauth-road-eastnet" #2: Peer ID is ID_FQDN: '@east'
+003 "xauth-road-eastnet" #2: Authenticated using RSA
 004 "xauth-road-eastnet" #2: STATE_MAIN_I4: ISAKMP SA established {auth=RSA_SIG cipher=aes_256 integ=sha2_256 group=MODP2048}
 041 "xauth-road-eastnet" #2: xauth-road-eastnet prompt for Username:
 040 "xauth-road-eastnet" #2: xauth-road-eastnet prompt for Password:
@@ -75,30 +77,30 @@ road #
  echo done
 done
 road #
- ipsec look
+ ../../pluto/bin/ipsec-look.sh
 road NOW
 XFRM state:
 src 192.1.2.23 dst 192.1.3.209
-	proto esp spi 0xSPISPIXX reqid REQID mode tunnel
+	proto esp spi 0xSPISPI reqid REQID mode tunnel
 	replay-window 32 flag af-unspec
 	auth-trunc hmac(sha1) 0xHASHKEY 96
 	enc cbc(aes) 0xENCKEY
 src 192.1.3.209 dst 192.1.2.23
-	proto esp spi 0xSPISPIXX reqid REQID mode tunnel
+	proto esp spi 0xSPISPI reqid REQID mode tunnel
 	replay-window 32 flag af-unspec
 	auth-trunc hmac(sha1) 0xHASHKEY 96
 	enc cbc(aes) 0xENCKEY
 XFRM policy:
-src 192.0.2.0/24 dst 192.1.3.209/32 
-	dir fwd priority 2088 ptype main 
+src 192.0.2.0/24 dst 192.1.3.209/32
+	dir fwd priority 1040359 ptype main
 	tmpl src 192.1.2.23 dst 192.1.3.209
 		proto esp reqid REQID mode tunnel
-src 192.0.2.0/24 dst 192.1.3.209/32 
-	dir in priority 2088 ptype main 
+src 192.0.2.0/24 dst 192.1.3.209/32
+	dir in priority 1040359 ptype main
 	tmpl src 192.1.2.23 dst 192.1.3.209
 		proto esp reqid REQID mode tunnel
-src 192.1.3.209/32 dst 192.0.2.0/24 
-	dir out priority 2088 ptype main 
+src 192.1.3.209/32 dst 192.0.2.0/24
+	dir out priority 1040359 ptype main
 	tmpl src 192.1.3.209 dst 192.1.2.23
 		proto esp reqid REQID mode tunnel
 XFRM done

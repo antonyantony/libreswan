@@ -36,13 +36,14 @@
 #include "kernel_alg.h"
 #include "alg_info.h"
 #include "ike_alg.h"
-#include "ike_alg_null.h"
+#include "ike_alg_none.h"
 #include "plutoalg.h"
 #include "crypto.h"
 #include "spdb.h"
 #include "db_ops.h"
 #include "log.h"
 #include "whack.h"
+#include "ikev1.h"	/* for ikev1_quick_dh() */
 
 static bool kernel_alg_db_add(struct db_context *db_ctx,
 			      const struct proposal_info *esp_info,
@@ -270,7 +271,13 @@ void kernel_alg_show_connection(const struct connection *c, const char *instance
 	const char *pfsbuf;
 
 	if (c->policy & POLICY_PFS) {
-		const struct oakley_group_desc *dh = child_dh(c);
+		/*
+		 * Get the DH algorthm specified for the child (ESP or AH).
+		 *
+		 * If this is NULL and PFS is required then callers fall back to using
+		 * the parent's DH algorithm.
+		 */
+		const struct oakley_group_desc *dh = ikev1_quick_pfs(c->alg_info_esp);
 		if (dh != NULL) {
 			pfsbuf = dh->common.fqn;
 		} else {

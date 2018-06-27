@@ -53,20 +53,7 @@
  * the chunk will not be written, but it is awkward to paste const on it.
  */
 
-/* a macro to discard the const portion of a variable to avoid
- * otherwise unavoidable -Wcast-qual warnings.
- * USE WITH CAUTION and only when you know it's safe to discard the const
- */
-
-#ifdef __GNUC__
-#define DISCARD_CONST(vartype, \
-		      varname) (__extension__({ const vartype tmp = (varname); \
-						(vartype)(uintptr_t)tmp; }))
-#else
-#define DISCARD_CONST(vartype, varname) ((vartype)(uintptr_t)(varname))
-#endif
-
-void build_id_payload(struct isakmp_ipsec_id *hd, chunk_t *tl, struct end *end)
+void build_id_payload(struct isakmp_ipsec_id *hd, chunk_t *tl, struct end *end, bool nullid)
 {
 	const struct id *id = &end->id;
 	const unsigned char *p;
@@ -74,6 +61,14 @@ void build_id_payload(struct isakmp_ipsec_id *hd, chunk_t *tl, struct end *end)
 	zero(hd);	/* OK: no pointer fields */
 	*tl = empty_chunk;
 	hd->isaiid_idtype = id->kind;
+
+	if (nullid) {
+		hd->isaiid_idtype = ID_NULL;
+		tl->len = 0;
+		tl->ptr = NULL;
+		return;
+	}
+
 	switch (id->kind) {
 	case ID_NONE:
 		hd->isaiid_idtype =

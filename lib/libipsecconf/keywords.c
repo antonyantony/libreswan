@@ -3,7 +3,7 @@
  * Copyright (C) 2003-2006 Michael Richardson <mcr@xelerance.com>
  * Copyright (C) 2007-2010 Paul Wouters <paul@xelerance.com>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2013-2016 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2013-2018 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2013 David McCullough <ucdevel@gmail.com>
  * Copyright (C) 2013-2016 Antony Antony <antony@phenome.org>
@@ -98,27 +98,31 @@ static const struct keyword_enum_value kw_ynf_values[] = {
 	{ "insist",    ynf_force },
 	{ "force",     ynf_force },
 };
+
 static const struct keyword_enum_values kw_ynf_list = VALUES_INITIALIZER(kw_ynf_values);
 
-static const struct keyword_enum_value kw_esn_values[] = {
-	{ "yes",     esn_yes  },
-	{ "no",    esn_no },
-	{ "either",   esn_either },
+/* Values for yes/no/auto, used by encapsulation and nic-offload */
+static const struct keyword_enum_value kw_yna_values[] = {
+	{ "yes",	yna_yes  },
+	{ "no",		yna_no },
+	{ "auto",	yna_auto },
 };
-static const struct keyword_enum_values kw_esn_list = VALUES_INITIALIZER(kw_esn_values);
+static const struct keyword_enum_values kw_yna_list = VALUES_INITIALIZER(kw_yna_values);
 
-static const struct keyword_enum_value kw_encaps_values[] = {
-	{ "yes",     encaps_yes  },
-	{ "no",    encaps_no },
-	{ "auto",   encaps_auto },
+static const struct keyword_enum_value kw_esn_values[] = {
+	{ "yes",	ESN_YES  },
+	{ "no",		ESN_NO },
+	{ "either",	ESN_EITHER },
 };
-static const struct keyword_enum_values kw_encaps_list = VALUES_INITIALIZER(kw_encaps_values);
+
+static const struct keyword_enum_values kw_esn_list = VALUES_INITIALIZER(kw_esn_values);
 
 static const struct keyword_enum_value kw_ddos_values[] = {
 	{ "auto",      DDOS_AUTO },
 	{ "busy",      DDOS_FORCE_BUSY },
 	{ "unlimited", DDOS_FORCE_UNLIMITED },
 };
+
 static const struct keyword_enum_values kw_ddos_list = VALUES_INITIALIZER(kw_ddos_values);
 
 #ifdef HAVE_SECCOMP
@@ -127,27 +131,17 @@ static const struct keyword_enum_value kw_seccomp_values[] = {
 	{ "disabled", SECCOMP_DISABLED },
 	{ "tolerant", SECCOMP_TOLERANT },
 };
+
 static const struct keyword_enum_values kw_seccomp_list = VALUES_INITIALIZER(kw_seccomp_values);
 #endif
 
-/*
- * Values for authby={never, rsasig, secret, null}
- */
-static const struct keyword_enum_value kw_authby_values[] = {
-        { "secret",    POLICY_PSK },
-        { "rsasig",    POLICY_RSASIG },
-        { "never",     POLICY_AUTH_NEVER },
-        { "null",      POLICY_AUTH_NULL },
-        { "secret|rsasig",    POLICY_PSK | POLICY_RSASIG},
-};
-static const struct keyword_enum_values kw_authby_list = VALUES_INITIALIZER(kw_authby_values);
-
 static const struct keyword_enum_value kw_auth_lr_values[] = {
-       { "never",     AUTH_NEVER },
-       { "secret",    AUTH_PSK },
-       { "rsasig",    AUTH_RSASIG },
-       { "null",      AUTH_NULL },
+	{ "never",     AUTH_NEVER },
+	{ "secret",    AUTH_PSK },
+	{ "rsasig",    AUTH_RSASIG },
+	{ "null",      AUTH_NULL },
  };
+
 static const struct keyword_enum_values kw_auth_lr_list = VALUES_INITIALIZER(kw_auth_lr_values);
 
 /*
@@ -191,9 +185,9 @@ static const struct keyword_enum_value kw_auto_values[] = {
 static const struct keyword_enum_values kw_auto_list = VALUES_INITIALIZER(kw_auto_values);
 
 /*
- * Values for connaddrfamily={ipv4,ipv6}
+ * Values for addrfamily={ipv4,ipv6}
  */
-static const struct keyword_enum_value kw_connaddrfamily_values[] = {
+static const struct keyword_enum_value kw_addrfamily_values[] = {
 	{ "ipv4",  AF_INET },
 	{ "ipv6",  AF_INET6 },
 	/* aliases - undocumented on purpose */
@@ -203,7 +197,7 @@ static const struct keyword_enum_value kw_connaddrfamily_values[] = {
 	{ "inet6", AF_INET6 },
 };
 
-static const struct keyword_enum_values kw_connaddrfamily_list = VALUES_INITIALIZER(kw_connaddrfamily_values);
+static const struct keyword_enum_values kw_addrfamily_list = VALUES_INITIALIZER(kw_addrfamily_values);
 
 /*
  * Values for type={tunnel,transport,etc}
@@ -255,9 +249,9 @@ static const struct keyword_enum_values kw_proto_stack = VALUES_INITIALIZER(kw_p
  * Values for sareftrack={yes, no, conntrack }
  */
 static const struct keyword_enum_value kw_sareftrack_values[] = {
-	{ "yes",          sat_yes },
-	{ "no",           sat_no },
-	{ "conntrack",    sat_conntrack },
+	{ "yes",          SAT_YES },
+	{ "no",           SAT_NO },
+	{ "conntrack",    SAT_CONNTRACK },
 };
 
 static const struct keyword_enum_values kw_sareftrack_list = VALUES_INITIALIZER(kw_sareftrack_values);
@@ -292,6 +286,21 @@ static const struct keyword_enum_values kw_xauthfail = VALUES_INITIALIZER(kw_xau
 /*
  * Values for right= and left=
  */
+
+static struct keyword_enum_value kw_host_values[] = {
+	{ "%defaultroute",  KH_DEFAULTROUTE },
+	{ "%any",           KH_ANY },
+	{ "%",              KH_IFACE },
+	{ "%oppo",          KH_OPPO },
+	{ "%opportunistic", KH_OPPO },
+	{ "%opportunisticgroup", KH_OPPOGROUP },
+	{ "%oppogroup",     KH_OPPOGROUP },
+	{ "%group",         KH_GROUP },
+	{ "%hostname",      KH_IPHOSTNAME }, /* makes no sense on input */
+};
+
+static struct keyword_enum_values kw_host_list =
+	{ kw_host_values, elemsof(kw_host_values) };
 
 static const struct keyword_enum_value kw_klipsdebug_values[] = {
 	{ "all",      LRANGE(KDF_XMIT, KDF_COMP) },
@@ -331,10 +340,10 @@ static const struct keyword_enum_values kw_phase2types_list = VALUES_INITIALIZER
  * Values for {left/right}sendcert={never,sendifasked,always,forcedtype}
  */
 static const struct keyword_enum_value kw_sendcert_values[] = {
-	{ "never",        cert_neversend },
-	{ "sendifasked",  cert_sendifasked },
-	{ "alwayssend",   cert_alwayssend },
-	{ "always",       cert_alwayssend },
+	{ "never",        CERT_NEVERSEND},
+	{ "sendifasked",  CERT_SENDIFASKED },
+	{ "alwayssend",   CERT_ALWAYSSEND },
+	{ "always",       CERT_ALWAYSSEND },
 };
 
 static const struct keyword_enum_values kw_sendcert_list = VALUES_INITIALIZER(kw_sendcert_values);
@@ -343,10 +352,10 @@ static const struct keyword_enum_values kw_sendcert_list = VALUES_INITIALIZER(kw
  * Values for nat-ikev1-method={drafts,rfc,both,none}
  */
 static const struct keyword_enum_value kw_ikev1natt_values[] = {
-	{ "both",       natt_both },
-	{ "rfc",        natt_rfc },
-	{ "drafts",     natt_drafts },
-	{ "none",       natt_none },
+	{ "both",       NATT_BOTH },
+	{ "rfc",        NATT_RFC },
+	{ "drafts",     NATT_DRAFTS },
+	{ "none",       NATT_NONE },
 };
 
 static const struct keyword_enum_values kw_ikev1natt_list = VALUES_INITIALIZER(kw_ikev1natt_values);
@@ -365,16 +374,6 @@ static const struct keyword_enum_value kw_ocsp_method_values[] = {
 	{ "post",     OCSP_METHOD_POST },
 };
 static const struct keyword_enum_values kw_ocsp_method_list = VALUES_INITIALIZER(kw_ocsp_method_values);
-
-#ifdef USE_NIC_OFFLOAD
-static const struct keyword_enum_value kw_nic_offload_values[] = {
-	{ "no",   nic_offload_no  },
-	{ "yes",  nic_offload_yes },
-	{ "auto",    nic_offload_auto },
-};
-
-static const struct keyword_enum_values kw_nic_offload_list = VALUES_INITIALIZER(kw_nic_offload_values);
-#endif
 
 /* MASTER KEYWORD LIST
  * Note: this table is terminated by an entry with keyname == NULL.
@@ -523,9 +522,11 @@ const struct keyword_def ipsec_conf_keywords[] = {
   { "auto",  kv_conn | kv_duplicateok,  kt_enum,  KBF_AUTO,  &kw_auto_list, NULL, },
   { "also",  kv_conn,  kt_appendstring,  KSCF_ALSO, NULL, NULL, },
   { "alsoflip",  kv_conn,  kt_string,  KSCF_ALSOFLIP, NULL, NULL, },
-  { "connaddrfamily",  kv_conn,  kt_enum,  KBF_CONNADDRFAMILY,  &kw_connaddrfamily_list, NULL, },
+  { "hostaddrfamily",  kv_conn,  kt_enum,  KBF_HOSTADDRFAMILY,  &kw_addrfamily_list, NULL, },
+  { "clientaddrfamily",  kv_conn,  kt_enum,  KBF_CLIENTADDRFAMILY,  &kw_addrfamily_list, NULL, },
+  { "connaddrfamily",  kv_conn, kt_obsolete, KBF_WARNIGNORE, NULL, NULL, }, /* obsolete */
   { "type",  kv_conn,  kt_enum,  KBF_TYPE,  &kw_type_list, NULL, },
-  { "authby",  kv_conn,  kt_enum,  KBF_AUTHBY,  &kw_authby_list, NULL, },
+  { "authby",  kv_conn,  kt_string,  KSCF_AUTHBY, NULL, NULL, },
   { "keyexchange",  kv_conn,  kt_enum,  KBF_KEYEXCHANGE,  &kw_keyexchange_list, NULL, },
   { "ikev2",  kv_conn | kv_processed,  kt_enum,  KBF_IKEv2,  &kw_fourvalued_list, NULL, },
   { "ppk", kv_conn | kv_processed, kt_enum, KBF_PPK, &kw_fourvalued_list, NULL, },
@@ -554,6 +555,8 @@ const struct keyword_def ipsec_conf_keywords[] = {
   { "send-vendorid",  kv_conn,  kt_bool,  KBF_SEND_VENDORID, NULL, NULL, },
   { "sha2_truncbug",  kv_conn | kv_alias,  kt_bool,  KBF_SHA2_TRUNCBUG, NULL, NULL, },  /* obsolete _ */
   { "sha2-truncbug",  kv_conn,  kt_bool,  KBF_SHA2_TRUNCBUG, NULL, NULL, },
+  { "ms-dh-downgrade",  kv_conn,  kt_bool,  KBF_MSDH_DOWNGRADE, NULL, NULL, },
+  { "dns-match-id,",  kv_conn,  kt_bool,  KBF_DNS_MATCH_ID, NULL, NULL, },
   { "keylife",  kv_conn | kv_alias,  kt_time,  KBF_SALIFETIME, NULL, NULL, },
   { "lifetime",  kv_conn | kv_alias,  kt_time,  KBF_SALIFETIME, NULL, NULL, },
   { "salifetime",  kv_conn,  kt_time,  KBF_SALIFETIME, NULL, NULL, },
@@ -600,15 +603,16 @@ const struct keyword_def ipsec_conf_keywords[] = {
   { "modecfgwins2",  kv_conn,  kt_obsolete,  KBF_WARNIGNORE, NULL, NULL, },
 
 #ifdef USE_NIC_OFFLOAD
-  { "nic-offload",  kv_conn,  kt_enum,  KBF_NIC_OFFLOAD,  &kw_nic_offload_list, NULL, },
+  { "nic-offload",  kv_conn,  kt_enum,  KBF_NIC_OFFLOAD,  &kw_yna_list, NULL, },
 #endif
 
-  { "encapsulation",  kv_conn,  kt_enum,  KBF_ENCAPS,  &kw_encaps_list, NULL, },
+  { "encapsulation",  kv_conn,  kt_enum,  KBF_ENCAPS,  &kw_yna_list, NULL, },
   { "forceencaps",  kv_conn, kt_obsolete, KBF_WARNIGNORE, NULL, NULL, },
 
   { "cat",  kv_conn | kv_leftright,  kt_bool,  KNCF_CAT, NULL, NULL, },
 
   { "overlapip",  kv_conn,  kt_bool,  KBF_OVERLAPIP, NULL, NULL, },
+  { "reauth",  kv_conn,  kt_bool,  KBF_REAUTH, NULL, NULL, },
   { "rekey",  kv_conn,  kt_bool,  KBF_REKEY, NULL, NULL, },
   { "rekeymargin",  kv_conn,  kt_time,  KBF_REKEYMARGIN, NULL, NULL, },
   { "rekeyfuzz",  kv_conn,  kt_percent,  KBF_REKEYFUZZ, NULL, NULL, },

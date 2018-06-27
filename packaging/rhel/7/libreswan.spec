@@ -8,6 +8,7 @@
 # Libreswan config options
 %global libreswan_config \\\
     FINALLIBEXECDIR=%{_libexecdir}/ipsec \\\
+    FINALMANDIR=%{_mandir} \\\
     INC_RCDEFAULT=%{_initrddir} \\\
     INC_USRLOCAL=%{_prefix} \\\
     INITSYSTEM=systemd \\\
@@ -21,12 +22,11 @@
     USE_SECCOMP=true \\\
     USE_XAUTHPAM=true \\\
 %{nil}
-
-#global prever dr1
+#global prever rc1
 
 Name: libreswan
 Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
-Version: 3.23
+Version: 3.24
 Release: %{?prever:0.}1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Url: https://libreswan.org/
@@ -56,6 +56,7 @@ BuildRequires: libevent-devel
 %if 0%{with_dnssec}
 BuildRequires: ldns-devel
 BuildRequires: unbound-devel >= 1.6.0
+Requires: unbound-libs >= 1.6.0
 %global USE_DNSSEC true
 %else
 %global USE_DNSSEC false
@@ -166,7 +167,7 @@ export NSS_DISABLE_HW_GCM=1
 %{buildroot}%{_libexecdir}/ipsec/cavp -v2 ikev2.fax | \
     diff -u ikev2.fax - > /dev/null
 : starting CAVS test for IKEv1 RSASIG
-%{buildroot}%{_libexecdir}/ipsec/cavp -v1sig ikev1_dsa.fax | \
+%{buildroot}%{_libexecdir}/ipsec/cavp -v1dsa ikev1_dsa.fax | \
     diff -u ikev1_dsa.fax - > /dev/null
 : starting CAVS test for IKEv1 PSK
 %{buildroot}%{_libexecdir}/ipsec/cavp -v1psk ikev1_psk.fax | \
@@ -208,5 +209,5 @@ prelink -u %{_libexecdir}/ipsec/* 2>/dev/null || :
 %{_sysconfdir}/prelink.conf.d/libreswan-fips.conf
 
 %changelog
-* Thu Jan 25 2018 Team Libreswan <team@libreswan.org> - 3.23-1
+* Tue Jun 26 2018 Team Libreswan <team@libreswan.org> - 3.24-1
 - Automated build from release tar ball

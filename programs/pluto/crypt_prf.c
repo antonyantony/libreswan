@@ -98,7 +98,7 @@ struct crypt_prf *crypt_prf_init_chunk(const char *name, lset_t debug,
 			   name, prf_desc->common.name,
 			   chunk_name, chunk.ptr, chunk.len));
 	return wrap(prf_desc, debug, name,
-		    prf_desc->prf_ops->init_bytes(prf_desc, name, debug,
+		    prf_desc->prf_ops->init_bytes(prf_desc, name,
 						  chunk_name, chunk.ptr, chunk.len));
 }
 
@@ -110,7 +110,7 @@ struct crypt_prf *crypt_prf_init_symkey(const char *name, lset_t debug,
 			   name, prf_desc->common.name,
 			   key_name, key, sizeof_symkey(key)));
 	return wrap(prf_desc, debug, name,
-		    prf_desc->prf_ops->init_symkey(prf_desc, name, debug,
+		    prf_desc->prf_ops->init_symkey(prf_desc, name,
 						   key_name, key));
 }
 
@@ -180,4 +180,19 @@ void crypt_prf_final_bytes(struct crypt_prf **prfp,
 				bytes, sizeof_bytes));
 	pfree(*prfp);
 	*prfp = prf = NULL;
+}
+
+chunk_t crypt_prf_final_chunk(struct crypt_prf **prfp)
+{
+	struct crypt_prf *prf = *prfp;
+	DBG(prf->debug, DBG_log("%s PRF %s final-chunk ...",
+				prf->name, prf->desc->common.name));
+	chunk_t chunk = alloc_chunk(prf->desc->prf_output_size, prf->name);
+	prf->desc->prf_ops->final_bytes(&prf->context, chunk.ptr, chunk.len);
+	DBG(prf->debug, DBG_log("%s PRF %s final-chunk@%p (length %zu)",
+				(*prfp)->name, (*prfp)->desc->common.name,
+				chunk.ptr, chunk.len));
+	pfree(*prfp);
+	*prfp = prf = NULL;
+	return chunk;
 }

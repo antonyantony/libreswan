@@ -5,7 +5,7 @@ west #
  ../../pluto/bin/wait-until-alive -I 192.0.1.254 192.0.2.254
 destination -I 192.0.1.254 192.0.2.254 is alive
 west #
- # make sure that clear text does not get through
+ # ensure that clear text does not get through
 west #
  iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j LOGDROP
 west #
@@ -40,7 +40,7 @@ west #
 000 "westnet-eastnet-ikev2-fallback":   policy_label:unset;
 000 "westnet-eastnet-ikev2-fallback":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 12;
 000 "westnet-eastnet-ikev2-fallback":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
-000 "westnet-eastnet-ikev2-fallback":   sha2-truncbug:no; initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
+000 "westnet-eastnet-ikev2-fallback":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "westnet-eastnet-ikev2-fallback":   policy: RSASIG+ENCRYPT+TUNNEL+PFS+IKEV1_ALLOW+IKEV2_ALLOW+IKEV2_PROPOSE+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
 000 "westnet-eastnet-ikev2-fallback":   conn_prio: 24,24; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "westnet-eastnet-ikev2-fallback":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
@@ -116,16 +116,16 @@ west #
  echo done
 done
 west #
- ipsec look
+ ../../pluto/bin/ipsec-look.sh
 west NOW
 XFRM state:
 src 192.1.2.23 dst 192.1.2.45
-	proto esp spi 0xSPISPIXX reqid REQID mode tunnel
+	proto esp spi 0xSPISPI reqid REQID mode tunnel
 	replay-window 0 
 	sel src 192.1.2.23/32 dst 192.1.2.45/32 
 XFRM policy:
-src 192.0.1.0/24 dst 192.0.2.0/24 
-	dir out priority 2344 ptype main 
+src 192.0.1.0/24 dst 192.0.2.0/24
+	dir out priority 1042407 ptype main
 	tmpl src 0.0.0.0 dst 0.0.0.0
 		proto esp reqid REQID mode transport
 XFRM done

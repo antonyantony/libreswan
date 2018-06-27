@@ -24,8 +24,20 @@
 #define _WHACK_H
 
 #include "ietf_constants.h"
+#include "lset.h"
 #include "lmod.h"
 #include "deltatime.h"
+#include "chunk.h"
+#include "reqid.h"
+
+#ifndef DEFAULT_RUNDIR
+# define DEFAULT_RUNDIR "/run/pluto/"
+#endif
+
+#ifndef DEFAULT_CTL_SOCKET
+# define DEFAULT_CTL_SOCKET DEFAULT_RUNDIR "/pluto.ctl"
+#endif
+
 
 /* Since the message remains on one host, native representation is used.
  * Think of this as horizontal microcode: all selected operations are
@@ -56,7 +68,7 @@
  * version number.
  */
 enum whack_pubkey_type {
-	WHACK_PUBKEY_NONE,
+	WHACK_PUBKEY_NONE = 0,	/* must be zero (to make it default) */
 	WHACK_PUBKEY_CERTIFICATE_NICKNAME,
 	WHACK_PUBKEY_CKAID,
 };
@@ -157,7 +169,7 @@ struct whack_message {
 	unsigned long sa_replay_window;
 	deltatime_t r_timeout; /* in secs */
 	deltatime_t r_interval; /* in msec */
-	enum nic_offload_options nic_offload;
+	enum yna_options nic_offload;
 
 	/* For IKEv1 RFC 3706 - Dead Peer Detection */
 	deltatime_t dpd_delay;
@@ -169,7 +181,7 @@ struct whack_message {
 	enum keyword_remotepeertype remotepeertype;
 
 	/* Force the use of NAT-T on a connection */
-	enum encaps_options encaps;
+	enum yna_options encaps;
 
 	/* Option to allow per-conn setting of sending of NAT-T keepalives - default is enabled  */
 	bool nat_keepalive;
@@ -190,8 +202,6 @@ struct whack_message {
 
 	/* send our own libreswan vendorid or not */
 	bool send_vendorid;
-
-	bool sha2_truncbug;
 
 	/* Checking if this connection is configured by Network Manager */
 	bool nmconfigured;
@@ -252,6 +262,7 @@ struct whack_message {
 	/* for WHACK_OPINITIATE */
 	bool whack_oppo_initiate;
 	ip_address oppo_my_client, oppo_peer_client;
+	int oppo_proto, oppo_dport;
 
 	/* for WHACK_TERMINATE: */
 	bool whack_terminate;

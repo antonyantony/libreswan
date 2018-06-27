@@ -1,8 +1,11 @@
 #ifndef _IKE_ALG_H
 #define _IKE_ALG_H
 
+#include <stdbool.h>	/* for bool */
 #include <nss.h>
 #include <pk11pub.h>
+#include "shunk.h"
+#include "ietf_constants.h"
 
 struct ike_alg;
 enum ike_alg_key;
@@ -10,11 +13,11 @@ enum ike_alg_key;
 /*
  * More meaningful passert.
  *
- * Do not wrap ASSERTION in parenthesis as it will suppress the
+ * Do not wrap ASSERTION in parentheses as it will suppress the
  * warning for 'foo = bar'.
  */
 #define passert_ike_alg(ALG, ASSERTION) {				\
-		/* wrapping ASSERTION in paren suppresses -Wparen */	\
+		/* wrapping ASSERTION in parens suppresses -Wparen */	\
 		bool assertion__ = ASSERTION; /* no paren */		\
 		if (!assertion__) {					\
 			PASSERT_FAIL("IKE_ALG %s algorithm '%s' fails: %s", \
@@ -26,7 +29,7 @@ enum ike_alg_key;
 	}
 
 #define pexpect_ike_alg(ALG, ASSERTION) {				\
-		/* wrapping ASSERTION in paren suppresses -Wparen */	\
+		/* wrapping ASSERTION in parens suppresses -Wparen */	\
 		bool assertion__ = ASSERTION; /* no paren */		\
 		if (!assertion__) {					\
 			PEXPECT_LOG("IKE_ALG %s algorithm '%s' fails: %s", \
@@ -89,9 +92,10 @@ const char *ike_alg_key_name(enum ike_alg_key key);
  * intended as a way to identify algorithms defined by IETF but not
  * supported here.
  */
-const struct ike_alg *ike_alg_byname(const struct ike_alg_type *type, const char *name);
+const struct ike_alg *ike_alg_byname(const struct ike_alg_type *type,
+				     shunk_t name);
 int ike_alg_enum_match(const struct ike_alg_type *type, enum ike_alg_key key,
-		       const char *name);
+		       shunk_t name);
 
 /*
  * Common prefix for struct encrypt_desc and struct hash_desc (struct
@@ -155,7 +159,7 @@ int ike_alg_enum_match(const struct ike_alg_type *type, enum ike_alg_key key,
  * suspect) SADB/KLIPS, the've gone off the rails.  Over time they've
  * picked up IKEv2 values making for general confusion.  Worse, as
  * noted above, CAMELLIA had the IKEv2 value 23 (IKEv1 is 22)
- * resulting in code never being sure if which it is dealing with.
+ * resulting in code never being sure of which it is dealing with.
  *
  * These values are not included in this table.
  *
@@ -348,7 +352,7 @@ struct encrypt_desc {
 
 struct encrypt_ops {
 	/*
-	 * Delegate responsiblity for checking OPS specific fields.
+	 * Delegate responsibility for checking OPS specific fields.
 	 */
 	void (*const check)(const struct encrypt_desc *alg);
 
@@ -425,12 +429,12 @@ struct hash_context;
 
 struct hash_ops {
 	/*
-	 * Delegate responsiblity for checking OPS specific fields.
+	 * Delegate responsibility for checking OPS specific fields.
 	 */
 	void (*const check)(const struct hash_desc *alg);
 
 	struct hash_context *(*init)(const struct hash_desc *hash_desc,
-				     const char *name, lset_t debug);
+				     const char *name);
 	void (*digest_symkey)(struct hash_context *hash,
 			      const char *name, PK11SymKey *symkey);
 	void (*digest_bytes)(struct hash_context *hash,
@@ -440,7 +444,7 @@ struct hash_ops {
 			    u_int8_t *bytes, size_t sizeof_bytes);
 	/* FIPS short cuts */
 	PK11SymKey *(*symkey_to_symkey)(const struct hash_desc *hash_desc,
-					const char *name, lset_t debug,
+					const char *name,
 					const char *symkey_name, PK11SymKey *symkey);
 };
 
@@ -514,15 +518,15 @@ struct prf_desc {
 
 struct prf_ops {
 	/*
-	 * Delegate responsiblity for checking OPS specific fields.
+	 * Delegate responsibility for checking OPS specific fields.
 	 */
 	void (*const check)(const struct prf_desc *alg);
 
 	struct prf_context *(*init_symkey)(const struct prf_desc *prf_desc,
-					   const char *name, lset_t debug,
+					   const char *name,
 					   const char *key_name, PK11SymKey *key);
 	struct prf_context *(*init_bytes)(const struct prf_desc *prf_desc,
-					  const char *name, lset_t debug,
+					  const char *name,
 					  const char *key_name,
 					  const u_int8_t *bytes, size_t sizeof_bytes);
 	void (*digest_symkey)(struct prf_context *prf,
@@ -603,7 +607,8 @@ struct integ_desc {
 extern bool ike_alg_is_aead(const struct encrypt_desc *enc_desc);
 #define ike_alg_enc_requires_integ(ALG) (!ike_alg_is_aead(ALG))
 
-void ike_alg_init(void);
+void init_ike_alg(void);
+void test_ike_alg(void);
 
 /*
  * Iterate over all enabled algorithms.
@@ -660,12 +665,12 @@ struct oakley_group_desc {
 	 */
 	SECOidTag nss_oid;
 
-	const struct dhmke_ops *dhmke_ops;
+	const struct dh_ops *dh_ops;
 };
 
-struct dhmke_ops {
+struct dh_ops {
 	/*
-	 * Delegate responsiblity for checking OPS specific fields.
+	 * Delegate responsibility for checking OPS specific fields.
 	 */
 	void (*const check)(const struct oakley_group_desc *alg);
 

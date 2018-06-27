@@ -3,7 +3,7 @@
  * Copyright (C) 1998-2001,2013 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2004 Michael Richardson <mcr@xelerance.com>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2017 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2017-2018 Andrew Cagney
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -20,48 +20,14 @@
 #ifndef _LSWLOG_H_
 #define _LSWLOG_H_
 
-#include <libreswan.h>
 #include <stdarg.h>
-#include <stdio.h>
-#include <stddef.h>
+#include <stdio.h>		/* for FILE */
+#include <stddef.h>		/* for size_t */
 
-/* moved common code to library file */
+#include "lset.h"
+
 #include "libreswan/passert.h"
-
-#include "constants.h"
-
-/*
- * NOTE: DBG's action can be a { } block, but that block must not
- * contain commas that are outside quotes or parenthesis.
- * If it does, they will be interpreted by the C preprocesser
- * as macro argument separators.  This happens accidentally if
- * multiple variables are declared in one declaration.
- *
- * IMPAIR currently uses the same lset_t as DBG.  Define a separate
- * macro so that, one day, that can change.
- */
-
-extern lset_t cur_debugging;	/* current debugging level */
-
-#define DBGP(cond)	(cur_debugging & (cond))
-#define IMPAIR(BEHAVIOUR) (cur_debugging & (IMPAIR_##BEHAVIOUR))
-
-#define DEBUG_PREFIX "| "
-
-#define DBG(cond, action)	{ if (DBGP(cond)) { action; } }
-
-/* signature needs to match printf() */
-#define DBG_log libreswan_DBG_log
-int libreswan_DBG_log(const char *message, ...) PRINTF_LIKE(1);
-
-#define DBG_dump libreswan_DBG_dump
-extern void libreswan_DBG_dump(const char *label, const void *p, size_t len);
-
-#define DBG_dump_chunk(label, ch) DBG_dump(label, (ch).ptr, (ch).len)
-
-#define DBG_cond_dump(cond, label, p, len) DBG(cond, DBG_dump(label, p, len))
-#define DBG_cond_dump_chunk(cond, label, ch) DBG(cond, DBG_dump_chunk(label, \
-								      ch))
+#include "constants.h"		/* for DBG_... */
 
 /* Build up a diagnostic in a static buffer -- NOT RE-ENTRANT.
  * Although this would be a generally useful function, it is very
@@ -77,24 +43,26 @@ extern void libreswan_DBG_dump(const char *label, const void *p, size_t len);
 
 extern err_t builddiag(const char *fmt, ...) PRINTF_LIKE(1);	/* NOT RE-ENTRANT */
 
+/* sanitize a string */
+extern void sanitize_string(char *buf, size_t size);
+
 extern bool log_to_stderr;          /* should log go to stderr? */
 
-/*
- * For stand-alone tools.
- */
-extern const char *progname;
-extern void tool_init_log(const char *name);
 
-/* Codes for status messages returned to whack.
- * These are 3 digit decimal numerals.  The structure
- * is inspired by section 4.2 of RFC959 (FTP).
- * Since these will end up as the exit status of whack, they
- * must be less than 256.
- * NOTE: ipsec_auto(8) knows about some of these numbers -- change carefully.
+/*
+ * Codes for status messages returned to whack.
+ *
+ * These are 3 digit decimal numerals.  The structure is inspired by
+ * section 4.2 of RFC959 (FTP).  Since these will end up as the exit
+ * status of whack, they must be less than 256.
+ *
+ * NOTE: ipsec_auto(8) knows about some of these numbers -- change
+ * carefully.
  */
+
 enum rc_type {
 	RC_COMMENT,		/* non-commital utterance (does not affect exit status) */
-	RC_WHACK_PROBLEM,	/* whack-detected problem */
+	RC_UNUSED,		/* just to keep the numbering the same */
 	RC_LOG,			/* message aimed at log (does not affect exit status) */
 	RC_LOG_SERIOUS,		/* serious message aimed at log (does not affect exit status) */
 	RC_SUCCESS,		/* success (exit status 0) */
@@ -118,6 +86,7 @@ enum rc_type {
 	RC_INITSHUNT,		/* cannot initiate a shunt-oly connection */
 	RC_WILDCARD,		/* cannot initiate when ID has wildcards */
 	RC_CRLERROR,		/* CRL fetching disabled or obsolete reread cmd */
+	RC_WHACK_PROBLEM,	/* whack-detected problem */
 
 	/* permanent failure */
 	RC_BADWHACKMESSAGE = 30,
@@ -145,88 +114,17 @@ enum rc_type {
 	RC_NOTIFICATION = 200	/* as per IKE notification messages */
 };
 
-/*
- * Log to both main log and whack log at level RC.
- */
-#define loglog	libreswan_loglog
-extern void libreswan_loglog(enum rc_type, const char *fmt, ...) PRINTF_LIKE(2);
-
-/*
- * Log to both main log and whack log at level RC_LOG.
- */
-#define plog	libreswan_log
-/* signature needs to match printf() */
-extern int libreswan_log(const char *fmt, ...) PRINTF_LIKE(1);
-
-/*
- * Wrap <message> in a prefix and suffix where the suffix contains
- * errno and message.  Since __VA_ARGS__ may alter ERRNO, it needs to
- * be saved.
- */
-
-void libreswan_log_errno(int e, const char *prefix,
-			 const char *message, ...) PRINTF_LIKE(3);
-void libreswan_exit(enum rc_type rc) NEVER_RETURNS;
-
-#define LOG_ERRNO(ERRNO, ...)						\
-	{								\
-		int log_errno = ERRNO; /* save the value */		\
-		libreswan_log_errno(log_errno, "ERROR: ", __VA_ARGS__);	\
-	}
-
-#define EXIT_LOG_ERRNO(ERRNO, ...)					\
-	{								\
-		int exit_log_errno = ERRNO; /* save the value */	\
-		libreswan_log_errno(exit_log_errno, "FATAL ERROR: ", __VA_ARGS__); \
-		libreswan_exit(PLUTO_EXIT_FAIL);			\
-	}
-
-/*
- * general utilities
- */
-
-/* sanitize a string */
-extern void sanitize_string(char *buf, size_t size);
 
 /*
  * A generic buffer for accumulating unbounded output.
+ *
+ * The buffer's contents can be directed to various logging streams.
  */
 
 struct lswlog;
 
 /*
- * Standard routines for appending output to the log buffer.
- *
- * If there is insufficient space, the output is truncated and "..."
- * is appended.
- *
- * Similar to C99 snprintf() et.al., always return the untruncated
- * message length (the value can never be negative).
- *
- * These functions return the number of bytes that should have been
- * written to the buffer (i.e., ignore truncation).  While probably
- * not directly useful, it provides a sink for functions that insist
- * on their return value being consumed.
- */
-
-size_t lswlogvf(struct lswlog *log, const char *format, va_list ap);
-size_t lswlogf(struct lswlog *log, const char *format, ...) PRINTF_LIKE(2);
-size_t lswlogs(struct lswlog *log, const char *string);
-size_t lswlogl(struct lswlog *log, struct lswlog *buf);
-
-/* _(in FUNC() at FILE:LINE) */
-size_t lswlog_source_line(struct lswlog *log, const char *func,
-			  const char *file, unsigned long line);
-/* <string without binary characters> */
-size_t lswlog_sanitized(struct lswlog *log, const char *string);
-/* _Errno E: <strerror(E)> */
-size_t lswlog_errno(struct lswlog *log, int e);
-/* <hex-byte>:<hex-byte>... */
-size_t lswlog_bytes(struct lswlog *log, const uint8_t *bytes,
-		    size_t sizeof_bytes);
-
-/*
- * The logging output streams used by libreswan.
+ * The logging streams used by libreswan.
  *
  * So far three^D^D^D^D^D four^D^D^D^D five^D^D^D^D six have been
  * identified; and lets not forget that code writes to STDOUT and
@@ -263,52 +161,258 @@ void lswlog_to_log_whack_stream(struct lswlog *buf, enum rc_type rc);
 void lswlog_to_whack_stream(struct lswlog *buf);
 size_t lswlog_to_file_stream(struct lswlog *buf, FILE *file);
 
+
+/*
+ * Log to the main log and, at level RC, to the whack log.
+ */
+
+#define loglog	libreswan_loglog
+extern void libreswan_loglog(enum rc_type, const char *fmt, ...) PRINTF_LIKE(2);
+
+#define LSWLOG_LOG_WHACK(RC, BUF)					\
+	LSWLOG_(true, BUF,						\
+		lswlog_log_prefix(BUF),					\
+		lswlog_to_log_whack_stream(BUF, RC))
+
+
+/*
+ * Log to the main log, and at level RC_LOG, to the whack log.
+ */
+
+#define plog	libreswan_log
+/* signature needs to match printf() */
+extern int libreswan_log(const char *fmt, ...) PRINTF_LIKE(1);
+
+void lswlog_log_prefix(struct lswlog *buf);
+
+#define LSWLOG(BUF)				\
+	LSWLOG_LOG_WHACK(RC_LOG, BUF)
+
+
+/*
+ * Log to the main log stream, but _not_ the whack log stream.
+ */
+
+#define LSWLOG_LOG(BUF)							\
+	LSWLOG_(true, BUF,						\
+		lswlog_log_prefix(BUF),					\
+		lswlog_to_log_stream(BUF))
+
+
+/*
+ * Log, at level RC, to the whack log (if attached).
+ *
+ * XXX: See programs/pluto/log.h for interface; should only be used in
+ * pluto.  This code assumes that it is being called from the main
+ * thread.
+ */
+
+#define LSWLOG_WHACK(RC, BUF)						\
+	LSWLOG_(whack_log_p(), BUF,					\
+		whack_log_pre(RC, BUF),					\
+		lswlog_to_whack_stream(BUF))
+
+
+/*
+ * Log the message to the main log stream, and (at level RC_LOG) to
+ * the whack stream, but rate limit messages.
+ *
+ * But what does "rate limit" mean?  For the moment this simply means
+ * limit things to the first 1000 messages.  So what could it mean:
+ *
+ * - limit messages to N entries per M minutes
+ *
+ * - limit each message type to N entries per M minutes
+ *
+ * - suppress but count (sequences of?) identical messages
+ *
+ * - support within the config file and from whack
+ *
+ * If debugging is enabled, the messages are logged to the debug
+ * stream even after the rate limit is exceeded.
+ */
+
+extern void rate_log(const char *message, ...) PRINTF_LIKE(1);
+
+#define LSWLOG_RATE(BUF) ... TBD ...
+
+
+/*
+ * Wrap <message> in a prefix and suffix where the suffix contains
+ * errno and message.
+ *
+ * Notes:
+ *
+ * Because __VA_ARGS__ may contain function calls that modify ERRNO,
+ * errno's value is first saved.
+ *
+ * While these common-case macros could be implemented directly using
+ * LSWLOG_ERRNO_() et.al. they are not, instead they are implemented
+ * as wrapper functions.  This is so that a crash will include the
+ * below functions _including_ the with MESSAGE parameter - makes
+ * debugging much easier.
+ */
+
+void libreswan_exit(enum rc_type rc) NEVER_RETURNS;
+void libreswan_log_errno(int e, const char *message, ...) PRINTF_LIKE(2);
+void libreswan_exit_log_errno(int e, const char *message, ...) PRINTF_LIKE(2) NEVER_RETURNS;
+
+#define LOG_ERRNO(ERRNO, ...) {						\
+		int log_errno = ERRNO; /* save value across va args */	\
+		libreswan_log_errno(log_errno, __VA_ARGS__);		\
+	}
+
+#define EXIT_LOG_ERRNO(ERRNO, ...) {					\
+		int exit_log_errno = ERRNO; /* save value across va args */ \
+		libreswan_exit_log_errno(exit_log_errno, __VA_ARGS__);	\
+	}
+
+
+/*
+ * Log debug messages to the main log stream, but not the WHACK log
+ * stream.
+ *
+ * NOTE: DBG's action can be a { } block, but that block must not
+ * contain commas that are outside quotes or parenthesis.
+ * If it does, they will be interpreted by the C preprocesser
+ * as macro argument separators.  This happens accidentally if
+ * multiple variables are declared in one declaration.
+ */
+
+extern lset_t cur_debugging;	/* current debugging level */
+
+#define DBGP(cond)	(cur_debugging & (cond))
+
+#define DEBUG_PREFIX "| "
+
+#define DBG(cond, action)	{ if (DBGP(cond)) { action; } }
+#define DBGF(cond, ...) { if (DBGP(cond)) { DBG_log(__VA_ARGS__); } }
+
+/* signature needs to match printf() */
+#define DBG_log libreswan_DBG_log
+int libreswan_DBG_log(const char *message, ...) PRINTF_LIKE(1);
+
+#define DBG_dump libreswan_DBG_dump
+extern void libreswan_DBG_dump(const char *label, const void *p, size_t len);
+
+#define DBG_dump_chunk(label, ch) DBG_dump(label, (ch).ptr, (ch).len)
+
+#define DBG_cond_dump(cond, label, p, len) DBG(cond, DBG_dump(label, p, len))
+#define DBG_cond_dump_chunk(cond, label, ch) DBG(cond, DBG_dump_chunk(label, \
+								      ch))
+void lswlog_dbg_pre(struct lswlog *buf);
+
+#define LSWDBG_(PREDICATE, BUF)						\
+	LSWLOG_(PREDICATE, BUF,						\
+		lswlog_dbg_pre(BUF),					\
+		lswlog_to_debug_stream(BUF))
+
+#define LSWDBGP(DEBUG, BUF) LSWDBG_(DBGP(DEBUG), BUF)
+#define LSWLOG_DEBUG(BUF) LSWDBG_(true, BUF)
+
+
+/*
+ * Impair pluto's behaviour.
+ *
+ * IMPAIR currently uses the same lset_t as DBG.  Define a separate
+ * macro so that, one day, that can change.
+ */
+
+#define IMPAIR(BEHAVIOUR) (cur_debugging & (IMPAIR_##BEHAVIOUR))
+
+
+/*
+ * Routines for accumulating output in the lswlog buffer.
+ *
+ * If there is insufficient space, the output is truncated and "..."
+ * is appended.
+ *
+ * Similar to C99 snprintf() et.al., these functions return the
+ * untruncated size of output that the call would append (the value
+ * can never be negative).
+ *
+ * While probably not directly useful, it provides a sink for code
+ * that needs to consume an otherwise ignored return value (the
+ * compiler attribute warn_unused_result can't be suppressed using a
+ * (void) cast).
+ */
+
+size_t lswlogvf(struct lswlog *log, const char *format, va_list ap);
+size_t lswlogf(struct lswlog *log, const char *format, ...) PRINTF_LIKE(2);
+size_t lswlogs(struct lswlog *log, const char *string);
+size_t lswlogl(struct lswlog *log, struct lswlog *buf);
+
+/* _(in FUNC() at FILE:LINE) */
+size_t lswlog_source_line(struct lswlog *log, const char *func,
+			  const char *file, unsigned long line);
+/* <string without binary characters> */
+size_t lswlog_sanitized(struct lswlog *log, const char *string);
+/* _Errno E: <strerror(E)> */
+size_t lswlog_errno(struct lswlog *log, int e);
+/* <hex-byte>:<hex-byte>... */
+size_t lswlog_bytes(struct lswlog *log, const uint8_t *bytes,
+		    size_t sizeof_bytes);
+
+
 /*
  * Code wrappers that cover up the details of allocating,
  * initializing, de-allocating (and possibly logging) a 'struct
  * lswlog' buffer.
  *
- * BUF (a C variable name) is declared locally as a pointer to the
- * 'struct lswlog' buffer.
+ * BUF (a C variable name) is declared locally as a pointer to a
+ * per-thread 'struct lswlog' buffer.
  *
  * Implementation notes:
  *
- * This implementation puts the 'struct lswlog' on the stack.  Could
- * just as easily use the heap.  BUF is a pointer so that this
- * implementation detail is hidden.
+ * This implementation stores the output in an array on the thread's
+ * stack.  It could just as easily use the heap (but that would
+ * involve memory overheads) or even a per-thread static variable.
+ * Since the BUF variable is a pointer the specifics of the
+ * implementation are hidden.
  *
  * This implementation, unlike DBG(), does not have a code block
- * parameter.  Instead it uses for-loops to set things up for a code
- * block.  This avoids problems with "," within macro parameters
- * confusing the parser.  It also permits a simple consistent
- * indentation style.
+ * parameter.  Instead it uses a sequence of for-loops to set things
+ * up for a code block.  This avoids problems with "," within macro
+ * parameters confusing the parser.  It also permits a simple
+ * consistent indentation style.
+ *
+ * The stack array is left largely uninitialized (just a few strategic
+ * entries are set).  This avoids the need to zero LOG_WITH bytes.
  *
  * Apparently chaining void function calls using a comma is valid C?
  */
 
+/* primitive to point the LSWBUF at and initialize ARRAY.  */
 #define LSWBUF_ARRAY_(ARRAY, SIZEOF_ARRAY, BUF)				\
-	for (struct lswlog lswlog = { .array = ARRAY, .len = 0, .bound = SIZEOF_ARRAY - 2, .roof = SIZEOF_ARRAY - 1, .dots = "...", }; \
+	/* point BUF at LSWLOG at ARRAY */				\
+	for (struct lswlog lswlog = { .array = ARRAY,			\
+				.len = 0,				\
+				.bound = SIZEOF_ARRAY - 2,		\
+				.roof = SIZEOF_ARRAY - 1,		\
+				.dots = "...", },			\
+		     *BUF = &lswlog;					\
 	     lswlog_p; lswlog_p = false)				\
-		for (struct lswlog *BUF = &lswlog;			\
-		     lswlog_p; lswlog_p = false)			\
-			for (BUF->array[BUF->len] = BUF->array[BUF->bound] = '\0', \
-				     BUF->array[BUF->roof] = LSWBUF_CANARY; \
-			     lswlog_p; lswlog_p = false)
+		/* initialize ARRAY */					\
+		for (ARRAY[lswlog.len] = ARRAY[lswlog.bound] = '\0',	\
+			     ARRAY[lswlog.roof] = LSWBUF_CANARY;	\
+		     lswlog_p; lswlog_p = false)
 
+/* primitive to construct an LSWBUF on the stack.  */
 #define LSWBUF_(BUF)							\
 	for (char lswbuf[LOG_WIDTH]; lswlog_p; lswlog_p = false)	\
 		LSWBUF_ARRAY_(lswbuf, sizeof(lswbuf), BUF)
 
 /*
- * Wrap an existing array so lswlog*() routines can be called.
+ * Create an LSWLOG using an existing array.
  *
- * For instance:
+ * Useful when a function passed an array wants to use lswlog routines
+ * or wants to capture the output for later use.  For instance:
  */
 
 #if 0
-void lswbuf_array(char *b, size_t sizeof_b)
+void lswbuf_array(char *array, size_t sizeof_array)
 {
-	LSWBUF_ARRAY(b, sizeof_b, buf) {
+	LSWBUF_ARRAY(array, sizeof_array, buf) {
 		lswlogf(buf, "written to the array");
 	}
 }
@@ -318,11 +422,15 @@ void lswbuf_array(char *b, size_t sizeof_b)
 	for (bool lswlog_p = true; lswlog_p; lswlog_p = false)		\
 		LSWBUF_ARRAY_(ARRAY, SIZEOF_ARRAY, BUF)
 
+
 /*
  * Scratch buffer for accumulating extra output.
  *
  * XXX: case should be expanded to illustrate how to stuff a truncated
  * version of the output into the LOG buffer.
+ *
+ * XXX: Is this one redundant?  Code can use LSWLOG_ARRAY() or
+ * LSWLOG_STRING().
  *
  * For instance:
  */
@@ -341,8 +449,19 @@ void lswbuf(struct lswlog *log)
 	for (bool lswlog_p = true; lswlog_p; lswlog_p = false)		\
 		LSWBUF_(BUF)
 
+
 /*
- * Various logging constructs all based on this template.
+ * Template for constructing logging output intended for a logger
+ * stream.
+ *
+ * The code is equivlaent to:
+ *
+ *   if (PREDICATE) {
+ *     LSWBUF(BUF) {
+ *       PREFIX;
+ *          BLOCK;
+ *       SUFFIX;
+ *    }
  */
 
 #define LSWLOG_(PREDICATE, BUF, PREFIX, SUFFIX)				\
@@ -372,80 +491,59 @@ void lswlog_file(FILE f)
 		lswlog_to_file_stream(BUF, FILE))
 
 /*
- * Save the output in a string.
+ * Capture LSWLOG into a heap allocated string.
  */
-#define LSWLOG_STRING(STRING, BUF)		\
-	LSWLOG_(true, BUF,			\
-		,				\
+
+#if 0
+char *lswlog_string(void)
+{
+	char *string;
+	LSWLOG_STRING(string, buf) {
+		lswlogf(buf, "written to string");
+	}
+	return string;
+}
+#endif
+
+#define LSWLOG_STRING(STRING, BUF)					\
+	LSWLOG_(true, BUF,						\
+		,							\
 		STRING = clone_str(BUF->array, "lswlog string"))
 
+
 /*
- * Send output to WHACK (if attached).
+ * Log an expectation failure message to the error streams.  That is
+ * the main log (level LOG_ERR) and whack log (level RC_LOG_SERIOUS).
+ */
+
+#if 0
+void lswlog_pexpect(void *p)
+{
+	if (!pexpect(p != NULL)) {
+		return;
+	}
+}
+#endif
+
+void libreswan_pexpect_fail(const char *func,
+		       const char *file, unsigned long line,
+		       const char *assertion);
+
+/*
+ * Do not wrap ASSERTION in parentheses as it will suppress the
+ * warning for 'foo = bar'.
  *
- * XXX: See programs/pluto/log.h for interface; should only be used in
- * pluto.  This code assumes that it is being called from the main
- * thread.
+ * Because static analizer tools are easily confused, explicitly
+ * return the assertion result.
  */
-
-#define LSWLOG_WHACK(RC, BUF)						\
-	LSWLOG_(whack_log_p(), BUF,					\
-		whack_log_pre(RC, BUF),					\
-		lswlog_to_whack_stream(BUF))
-
-/*
- * Send debug output to the logging streams (but not WHACK).
- */
-
-void lswlog_dbg_pre(struct lswlog *buf);
-
-#define LSWDBG_(PREDICATE, BUF)						\
-	LSWLOG_(PREDICATE, BUF,						\
-		lswlog_dbg_pre(BUF),					\
-		lswlog_to_debug_stream(BUF))
-
-#define LSWDBGP(DEBUG, BUF) LSWDBG_(DBGP(DEBUG), BUF)
-#define LSWLOG_DEBUG(BUF) LSWDBG_(true, BUF)
-
-/*
- * Send log output the logging streams and WHACK (if connected).
- */
-
-void lswlog_log_prefix(struct lswlog *buf);
-
-#define LSWLOG_LOG_WHACK(RC, BUF)					\
-	LSWLOG_(true, BUF,						\
-		lswlog_log_prefix(BUF),					\
-		lswlog_to_log_whack_stream(BUF, RC))
-
-#define LSWLOG(BUF)  LSWLOG_LOG_WHACK(RC_LOG, BUF)
-
-/*
- * Send log output to the logging stream but not WHACK.
- */
-
-#define LSWLOG_LOG(BUF)							\
-	LSWLOG_(true, BUF,						\
-		lswlog_log_prefix(BUF),					\
-		lswlog_to_log_stream(BUF))
-
-/*
- * Send an expectation failure to everwhere.
- */
-
-
-/*
- * Check/log a pexpect failure to the "panic" channel.
- *
- * Notes:
- *
- * According to C99, the expansion of PEXPECT_LOG(FMT) will include a
- * stray comma vis: "pexpect_log(file, line, FMT,)".  Plenty of
- * workarounds.
- *
- * "pexpect()" does use the shorter statement "if (!(pred))" in the
- * below as it will suppresses -Wparen (i.e., assignment in if
- * statement).
- */
+#define pexpect(ASSERTION)						\
+	({								\
+		bool assertion__ = ASSERTION;				\
+		if (!assertion__)					\
+			libreswan_pexpect_fail(__func__,		\
+			      PASSERT_BASENAME, __LINE__, #ASSERTION);	\
+		assertion__; /* result */				\
+	})
 
 void lswlog_pexpect_prefix(struct lswlog *buf);
 void lswlog_pexpect_suffix(struct lswlog *buf, const char *func,
@@ -459,25 +557,28 @@ void lswlog_pexpect_suffix(struct lswlog *buf, const char *func,
 #define LSWLOG_PEXPECT(BUF)				   \
 	LSWLOG_PEXPECT_SOURCE(__func__, PASSERT_BASENAME, __LINE__, BUF)
 
-/* old style */
-
-#define PEXPECT_LOG(FMT, ...)						\
-	LSWLOG_PEXPECT(pexpect_buf) {					\
-		lswlogf(pexpect_buf, FMT, __VA_ARGS__);			\
-	}
-
-#define pexpect(ASSERTION) {						\
-		/* wrapping ASSERTION in paren suppresses -Wparen */	\
-		bool assertion__ = ASSERTION; /* no paren */		\
-		if (!assertion__) {					\
-			LSWLOG_PEXPECT(pexpect_buf) {			\
-				lswlogf(pexpect_buf, "%s", #ASSERTION);	\
-			}						\
-		}							\
-	}
 
 /*
- * Send an assertion failure to everwhere.
+ * Old style
+ *
+ * According to C99, the expansion of PEXPECT_LOG(FMT) will include a
+ * stray comma vis: "pexpect_log(file, line, FMT,)".  Plenty of
+ * workarounds.
+ */
+
+void libreswan_pexpect_log(const char *func,
+			   const char *file, unsigned long line,
+			   const char *message, ...) PRINTF_LIKE(4);
+
+#define PEXPECT_LOG(FMT, ...)						\
+	libreswan_pexpect_log(__func__,					\
+			      PASSERT_BASENAME, __LINE__,		\
+			      FMT, __VA_ARGS__)
+
+
+/*
+ * Log an assertion failure to the main log, and the whack log; and
+ * then call abort().
  */
 
 void lswlog_passert_prefix(struct lswlog *buf);
@@ -492,9 +593,30 @@ void lswlog_passert_suffix(struct lswlog *buf, const char *func,
 #define LSWLOG_PASSERT(BUF)			\
 	LSWLOG_PASSERT_SOURCE(__func__, PASSERT_BASENAME, __LINE__, BUF)
 
+/* for a switch statement */
+
+void libreswan_bad_case(const char *expression, long value,
+			const char *func, const char *file,
+			unsigned long line) NEVER_RETURNS;
+
+#define bad_case(N)	libreswan_bad_case(#N, (N), __func__, \
+					   PASSERT_BASENAME, __LINE__)
+
+#define impaired_passert(BEHAVIOUR, ASSERTION) {			\
+		if (IMPAIR(BEHAVIOUR)) {				\
+			bool assertion_ = ASSERTION;			\
+			if (!assertion_) {				\
+				libreswan_log("IMPAIR: assertion '%s' failed", #ASSERTION); \
+			}						\
+		} else {						\
+			passert(ASSERTION);				\
+		}							\
+	}
 
 /*
- * Both include ERRNO and send to ERROR stream.
+ * Wrap <message> in a prefix and suffix where the suffix contains
+ * errno and message.  Since calls may alter ERRNO, it needs to be
+ * saved.
  *
  * XXX: Is error stream really the right place for this?
  */

@@ -262,8 +262,8 @@ err_t RSA_signature_verify_nss(const struct RSA_public_key *k,
 	publicKey->pkcs11ID = CK_INVALID_HANDLE;
 
 	/* make a local copy.  */
-	chunk_t n = chunk_clone(k->n, "n");
-	chunk_t e = chunk_clone(k->e, "e");
+	chunk_t n = clone_chunk(k->n, "n");
+	chunk_t e = clone_chunk(k->e, "e");
 
 	/* Converting n and e to nss_n and nss_e */
 	nss_n.data = n.ptr;
@@ -460,8 +460,10 @@ stf_status RSA_check_signature_gen(struct state *st,
 					continue; /* continue with next public key */
 				}
 
-				if (take_a_crack(&s, key, "preloaded key"))
+				if (take_a_crack(&s, key, "preloaded key")) {
+					loglog(RC_LOG_SERIOUS, "Authenticated using RSA");
 					return STF_OK;
+				}
 			}
 			pp = &p->next;
 		}
@@ -640,16 +642,18 @@ struct secret *lsw_get_xauthsecret(const struct connection *c UNUSED,
 				   char *xauthname)
 {
 	struct secret *best = NULL;
-	struct id xa_id;
 
 	DBG(DBG_CONTROL,
 	    DBG_log("started looking for xauth secret for %s",
 		    xauthname));
 
-	zero(&xa_id);	/* redundant */
-	xa_id.kind = ID_FQDN;
-	xa_id.name.ptr = (unsigned char *)xauthname;
-	xa_id.name.len = strlen(xauthname);
+	struct id xa_id = {
+		.kind = ID_FQDN,
+		.name = {
+			.ptr = (unsigned char *)xauthname,
+			.len = strlen(xauthname)
+		}
+	};
 
 	best = lsw_find_secret_by_id(pluto_secrets,
 				     PKK_XAUTH,
@@ -697,11 +701,10 @@ const chunk_t *get_psk(const struct connection *c)
 
 /*
  * Return ppk, and store ppk_id in **ppk_id.
- * Store OTP filename in fn if the PPK is dynamic.
  *
- * ??? conditionally sets *ppk_id and *fn.  Should this be unconditional?
+ * ??? conditionally sets *ppk_id.  Should this be unconditional?
  */
-chunk_t *get_ppk(const struct connection *c, chunk_t **ppk_id, char **fn)
+chunk_t *get_ppk(const struct connection *c, chunk_t **ppk_id)
 {
 	struct secret *s = lsw_get_secret(c,
 					  &c->spd.this.id,
@@ -716,7 +719,6 @@ chunk_t *get_ppk(const struct connection *c, chunk_t **ppk_id, char **fn)
 			DBG_dump_chunk("PPK_ID:", **ppk_id);
 			DBG_dump_chunk("PPK:", pks->ppk);
 			});
-		*fn = pks->filename;
 		return &pks->ppk;
 	}
 
@@ -725,10 +727,9 @@ chunk_t *get_ppk(const struct connection *c, chunk_t **ppk_id, char **fn)
 
 /*
  * Find PPK, by its id (PPK_ID).
- * Store OTP filename in fn if the PPK is dynamic
  * Used by responder.
  */
-const chunk_t *get_ppk_by_id(const chunk_t *ppk_id, char **fn)
+const chunk_t *get_ppk_by_id(const chunk_t *ppk_id)
 {
 	struct secret *s = lsw_get_ppk_by_id(pluto_secrets, *ppk_id);
 
@@ -738,25 +739,12 @@ const chunk_t *get_ppk_by_id(const chunk_t *ppk_id, char **fn)
 			DBG_dump_chunk("Found PPK:", pks->ppk);
 			DBG_dump_chunk("with PPK_ID:", *ppk_id);
 		});
-		*fn = pks->filename;
-		DBG(DBG_CONTROL, DBG_log("In keys.c, checking OTP filename: %s", *fn));
 		return &pks->ppk;
 	}
 	DBG(DBG_CONTROL, {
 		DBG_log("No PPK found with given PPK_ID");
 	});
 	return NULL;
-}
-
-bool update_dynamic_ppk(char *fn)
-{
-	err_t ugh = lsw_update_dynamic_ppk_secret(fn);
-	if (ugh != NULL) {
-		DBG(DBG_CONTROL, DBG_log("ERROR: %s", ugh));
-		return FALSE;
-	} else {
-		return TRUE;
-	}
 }
 
 /*
@@ -785,29 +773,7 @@ const struct RSA_private_key *get_RSA_private_key(const struct connection *c)
 
 /*
  * public key machinery
- * Note: caller must set dns_auth_level.
  */
-
-struct pubkey *public_key_from_rsa(const struct RSA_public_key *k)
-{
-	struct pubkey *p = alloc_thing(struct pubkey, "pubkey");
-
-	p->id = empty_id; /* don't know, doesn't matter */
-	p->issuer = empty_chunk;
-	p->alg = PUBKEY_ALG_RSA;
-
-	memcpy(p->u.rsa.keyid, k->keyid, sizeof(p->u.rsa.keyid));
-	p->u.rsa.k = k->k;
-	p->u.rsa.e = chunk_clone(k->e, "e");
-	p->u.rsa.n = chunk_clone(k->n, "n");
-
-	/* note that we return a 1 reference count upon creation:
-	 * invariant: recount > 0.
-	 */
-	p->refcnt = 1;
-	p->installed_time = realnow();
-	return p;
-}
 
 /* root of chained public key list */
 

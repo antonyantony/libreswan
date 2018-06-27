@@ -56,7 +56,7 @@
 #include "whack.h"
 #include "fetch.h"
 #include "asn1.h"
-
+#include "ikev1_send.h"
 #include "crypto.h"
 
 #include "ike_alg.h"
@@ -94,8 +94,8 @@
  *	aggr_inI1_outR1_tail: aggr_inI1_outR1_continue2
  */
 
-static stf_status aggr_inI1_outR1_tail(struct msg_digest *md,
-				       struct pluto_crypto_req *r);
+static stf_status aggr_inI1_outR1_continue2_tail(struct msg_digest *md,
+						 struct pluto_crypto_req *r);
 
 /*
  * continuation from second calculation (the DH one)
@@ -103,17 +103,17 @@ static stf_status aggr_inI1_outR1_tail(struct msg_digest *md,
 
 static crypto_req_cont_func aggr_inI1_outR1_continue2;	/* type assertion */
 
-static void aggr_inI1_outR1_continue2(struct state *st, struct msg_digest *md,
+static void aggr_inI1_outR1_continue2(struct state *st,
+				      struct msg_digest **mdp,
 				      struct pluto_crypto_req *r)
 {
 	DBG(DBG_CONTROL,
 		DBG_log("aggr_inI1_outR1_continue2 for #%lu: calculated ke+nonce+DH, sending R1",
 			st->st_serialno));
 
-	passert(md != NULL);
-	stf_status e = aggr_inI1_outR1_tail(md, r);
-	complete_v1_state_transition(&md, e);
-	release_any_md(&md);
+	passert(*mdp != NULL);
+	stf_status e = aggr_inI1_outR1_continue2_tail(*mdp, r);
+	complete_v1_state_transition(mdp, e);
 }
 
 /*
@@ -124,7 +124,8 @@ static void aggr_inI1_outR1_continue2(struct state *st, struct msg_digest *md,
 
 static crypto_req_cont_func aggr_inI1_outR1_continue1;	/* type assertion */
 
-static void aggr_inI1_outR1_continue1(struct state *st, struct msg_digest *md,
+static void aggr_inI1_outR1_continue1(struct state *st,
+				      struct msg_digest **mdp,
 				      struct pluto_crypto_req *r)
 {
 	DBG(DBG_CONTROLMORE,
@@ -139,12 +140,14 @@ static void aggr_inI1_outR1_continue1(struct state *st, struct msg_digest *md,
 	/* NOTE: the "r" reply will get freed by our caller */
 
 	/* set up second calculation */
-	struct pluto_crypto_req_cont *dh = new_pcrc(aggr_inI1_outR1_continue2,
-						    "aggr outR1 DH",
-						    st, md);
-
-	start_dh_secretiv(dh, st, ORIGINAL_RESPONDER,
-			  st->st_oakley.ta_dh);
+	start_dh_v1_secretiv(aggr_inI1_outR1_continue2, "aggr outR1 DH",
+			     st, ORIGINAL_RESPONDER, st->st_oakley.ta_dh);
+	/*
+	 * XXX: Since more crypto has been requsted, MD needs to be re
+	 * suspended.  If the original crypto request did everything
+	 * this wouldn't be needed.
+	 */
+	suspend_md(st, mdp);
 }
 
 /* STATE_AGGR_R0:
@@ -298,14 +301,14 @@ stf_status aggr_inI1_outR1(struct state *st, struct msg_digest *md)
 	RETURN_STF_FAILURE(accept_v1_nonce(md, &st->st_ni, "Ni"));
 
 	/* calculate KE and Nonce */
-	request_ke_and_nonce("outI2 KE", st, md,
+	request_ke_and_nonce("outI2 KE", st,
 			     st->st_oakley.ta_dh,
 			     aggr_inI1_outR1_continue1);
 	return STF_SUSPEND;
 }
 
-static stf_status aggr_inI1_outR1_tail(struct msg_digest *md,
-				       struct pluto_crypto_req *r)
+static stf_status aggr_inI1_outR1_continue2_tail(struct msg_digest *md,
+						 struct pluto_crypto_req *r)
 {
 	struct state *st = md->st;
 	struct connection *c = st->st_connection;
@@ -342,9 +345,10 @@ static stf_status aggr_inI1_outR1_tail(struct msg_digest *md,
 	 */
 	send_cert = st->st_oakley.auth == OAKLEY_RSA_SIG &&
 		    mycert.ty != CERT_NONE && mycert.u.nss_cert != NULL &&
-		    ((c->spd.this.sendcert == cert_sendifasked &&
+		    ((c->spd.this.sendcert == CERT_SENDIFASKED &&
 		      st->hidden_variables.st_got_certrequest) ||
-		     c->spd.this.sendcert == cert_alwayssend);
+		     c->spd.this.sendcert == CERT_ALWAYSSEND
+		     );
 
 	send_authcerts = (send_cert && c->send_ca != CA_SEND_NONE);
 
@@ -445,7 +449,7 @@ static stf_status aggr_inI1_outR1_tail(struct msg_digest *md,
 		struct isakmp_ipsec_id id_hd;
 		chunk_t id_b;
 
-		build_id_payload(&id_hd, &id_b, &c->spd.this);
+		build_id_payload(&id_hd, &id_b, &c->spd.this, FALSE);
 		id_hd.isaiid_np =
 			(send_cert) ? ISAKMP_NEXT_CERT : auth_payload;
 
@@ -562,7 +566,7 @@ static stf_status aggr_inI1_outR1_tail(struct msg_digest *md,
 	}
 
 	/* finish message */
-	if (!close_message(&rbody, st))
+	if (!ikev1_close_message(&rbody, st))
 		return STF_INTERNAL_ERROR;
 
 	return STF_OK;
@@ -632,18 +636,15 @@ stf_status aggr_inR1_outI2(struct state *st, struct msg_digest *md)
 	ikev1_natd_init(st, md);
 
 	/* set up second calculation */
-	struct pluto_crypto_req_cont *dh = new_pcrc(aggr_inR1_outI2_crypto_continue,
-						    "aggr outR1 DH",
-						    st, md);
-
-	start_dh_secretiv(dh, st, ORIGINAL_INITIATOR,
-			  st->st_oakley.ta_dh);
+	start_dh_v1_secretiv(aggr_inR1_outI2_crypto_continue, "aggr outR1 DH",
+			     st, ORIGINAL_INITIATOR, st->st_oakley.ta_dh);
 	return STF_SUSPEND;
 }
 
 static stf_status aggr_inR1_outI2_tail(struct msg_digest *md); /* forward */
 
-static void aggr_inR1_outI2_crypto_continue(struct state *st, struct msg_digest *md,
+static void aggr_inR1_outI2_crypto_continue(struct state *st,
+					    struct msg_digest **mdp,
 					    struct pluto_crypto_req *r)
 {
 	stf_status e;
@@ -652,16 +653,15 @@ static void aggr_inR1_outI2_crypto_continue(struct state *st, struct msg_digest 
 	    DBG_log("aggr inR1_outI2: calculated DH, sending I2"));
 
 	passert(st != NULL);
-	passert(md != NULL);
+	passert(*mdp != NULL);
 
 	if (!finish_dh_secretiv(st, r)) {
 		e = STF_FAIL + INVALID_KEY_INFORMATION;
 	} else {
-		e = aggr_inR1_outI2_tail(md);
+		e = aggr_inR1_outI2_tail(*mdp);
 	}
 
-	complete_v1_state_transition(&md, e);
-	release_any_md(&md);
+	complete_v1_state_transition(mdp, e);
 }
 
 /* Note: this is only called once.  Not really a tail. */
@@ -703,9 +703,9 @@ static stf_status aggr_inR1_outI2_tail(struct msg_digest *md)
 	send_cert = st->st_oakley.auth == OAKLEY_RSA_SIG &&
 		    mycert.ty != CERT_NONE && mycert.u.nss_cert != NULL &&
 		    ((c->spd.this.sendcert ==
-			cert_sendifasked &&
+			CERT_SENDIFASKED &&
 		      st->hidden_variables.st_got_certrequest) ||
-		     c->spd.this.sendcert == cert_alwayssend);
+		     c->spd.this.sendcert == CERT_ALWAYSSEND);
 
 	send_authcerts = (send_cert && c->send_ca != CA_SEND_NONE);
 
@@ -799,7 +799,7 @@ static stf_status aggr_inR1_outI2_tail(struct msg_digest *md)
 		u_char hash_val[MAX_DIGEST_LEN];
 		size_t hash_len;
 
-		build_id_payload(&id_hd, &id_b, &c->spd.this);
+		build_id_payload(&id_hd, &id_b, &c->spd.this, FALSE);
 		init_out_pbs(&id_pbs, idbuf, sizeof(idbuf), "identity payload");
 		id_hd.isaiid_np = ISAKMP_NEXT_NONE;
 		if (!out_struct(&id_hd, &isakmp_ipsec_identification_desc,
@@ -842,7 +842,7 @@ static stf_status aggr_inR1_outI2_tail(struct msg_digest *md)
 	/* RFC2408 says we must encrypt at this point */
 
 	/* st_new_iv was computed by generate_skeyids_iv (??? DOESN'T EXIST) */
-	if (!encrypt_message(&rbody, st))
+	if (!ikev1_encrypt_message(&rbody, st))
 		return STF_INTERNAL_ERROR; /* ??? we may be partly committed */
 
 	/* It seems as per Cisco implementation, XAUTH and MODECFG
@@ -887,7 +887,7 @@ static stf_status aggr_inR1_outI2_tail(struct msg_digest *md)
 	set_ph1_iv_from_new(st);
 	DBG(DBG_CONTROL, DBG_log("phase 1 complete"));
 
-	ISAKMP_SA_established(c, st->st_serialno);
+	ISAKMP_SA_established(st);
 
 #ifdef USE_LINUX_AUDIT
 	linux_audit_conn(st, LAK_PARENT_START);
@@ -915,7 +915,7 @@ stf_status aggr_inI2(struct state *st, struct msg_digest *md)
 		pb_stream pbs;
 		pb_stream id_pbs;
 
-		build_id_payload(&id_hd, &id_b, &st->st_connection->spd.that);
+		build_id_payload(&id_hd, &id_b, &st->st_connection->spd.that, FALSE);
 		init_out_pbs(&pbs, idbuf, sizeof(idbuf), "identity payload");
 		id_hd.isaiid_np = ISAKMP_NEXT_NONE;
 
@@ -995,7 +995,7 @@ stf_status aggr_inI2(struct state *st, struct msg_digest *md)
 	set_ph1_iv_from_new(st);
 	DBG(DBG_CONTROL, DBG_log("phase 1 complete"));
 
-	ISAKMP_SA_established(st->st_connection, st->st_serialno);
+	ISAKMP_SA_established(st);
 
 #ifdef USE_LINUX_AUDIT
 	linux_audit_conn(st, LAK_PARENT_START);
@@ -1018,6 +1018,7 @@ static crypto_req_cont_func aggr_outI1_continue;	/* type assertion */
  * RFC 2409 5.2: --> HDR, SA, [ HASH(1),] KE, <IDii_b>Pubkey_r, <Ni_b>Pubkey_r
  * RFC 2409 5.3: --> HDR, SA, [ HASH(1),] <Ni_b>Pubkey_r, <KE_b>Ke_i, <IDii_b>Ke_i [, <Cert-I_b>Ke_i ]
  */
+/* extern initiator_function aggr_outI1; */	/* type assertion */
 void aggr_outI1(int whack_sock,
 		struct connection *c,
 		struct state *predecessor,
@@ -1104,7 +1105,7 @@ void aggr_outI1(int whack_sock,
 	/*
 	 * Calculate KE and Nonce.
 	 */
-	request_ke_and_nonce("aggr_outI1 KE + nonce", st, NULL,
+	request_ke_and_nonce("aggr_outI1 KE + nonce", st,
 			     st->st_oakley.ta_dh,
 			     aggr_outI1_continue);
 	reset_globals();
@@ -1112,13 +1113,15 @@ void aggr_outI1(int whack_sock,
 
 static stf_status aggr_outI1_tail(struct state *st, struct pluto_crypto_req *r);
 
-static void aggr_outI1_continue(struct state *st, struct msg_digest *md,
+static void aggr_outI1_continue(struct state *st,
+				struct msg_digest **mdp,
 				struct pluto_crypto_req *r)
 {
 	DBG(DBG_CONTROL,
 		DBG_log("aggr_outI1_continue for #%lu: calculated ke+nonce, sending I1",
 			st->st_serialno));
-	passert(md == NULL);
+
+	passert(*mdp == NULL); /* no packet */
 	stf_status e = aggr_outI1_tail(st, r); /* may return FAIL */
 
 	/*
@@ -1132,6 +1135,9 @@ static void aggr_outI1_continue(struct state *st, struct msg_digest *md,
 	fake_md->from_state = STATE_UNDEFINED;	/* ??? */
 
 	complete_v1_state_transition(&fake_md, e);
+	/*
+	 * XXX: If E==STF_FAIL, fake_md leaks?
+	 */
 }
 
 static stf_status aggr_outI1_tail(struct state *st,
@@ -1141,8 +1147,8 @@ static stf_status aggr_outI1_tail(struct state *st,
 	cert_t mycert = c->spd.this.cert;
 	bool send_cr = mycert.ty != CERT_NONE && mycert.u.nss_cert != NULL &&
 			!has_preloaded_public_key(st) &&
-		    (c->spd.this.sendcert == cert_sendifasked ||
-		     c->spd.this.sendcert == cert_alwayssend);
+		    (c->spd.this.sendcert == CERT_SENDIFASKED ||
+		     c->spd.this.sendcert == CERT_ALWAYSSEND);
 
 	DBG(DBG_CONTROL,
 		DBG_log("aggr_outI1_tail for #%lu",
@@ -1204,7 +1210,7 @@ static stf_status aggr_outI1_tail(struct state *st,
 		chunk_t id_b;
 		pb_stream id_pbs;
 
-		build_id_payload(&id_hd, &id_b, &c->spd.this);
+		build_id_payload(&id_hd, &id_b, &c->spd.this, FALSE);
 		id_hd.isaiid_np = send_cr ? ISAKMP_NEXT_CR : ISAKMP_NEXT_VID;
 		if (!out_struct(&id_hd, &isakmp_ipsec_identification_desc,
 				&rbody, &id_pbs) ||
@@ -1229,7 +1235,7 @@ static stf_status aggr_outI1_tail(struct state *st,
 	if (c->spd.this.xauth_client || c->spd.this.xauth_server)
 		numvidtosend++;
 
-	if (nat_traversal_enabled && c->ikev1_natt != natt_none)
+	if (nat_traversal_enabled && c->ikev1_natt != NATT_NONE)
 		numvidtosend++;
 
 	if (c->cisco_unity)
@@ -1251,7 +1257,7 @@ static stf_status aggr_outI1_tail(struct state *st,
 			return STF_INTERNAL_ERROR;
 	}
 
-	if (nat_traversal_enabled && c->ikev1_natt != natt_none) {
+	if (nat_traversal_enabled && c->ikev1_natt != NATT_NONE) {
 		int np = --numvidtosend > 0 ? ISAKMP_NEXT_VID : ISAKMP_NEXT_NONE;
 
 		if (!nat_traversal_insert_vid(np, &rbody, st)) {
@@ -1299,13 +1305,13 @@ static stf_status aggr_outI1_tail(struct state *st,
 
 	/* finish message */
 
-	if (!close_message(&rbody, st))
+	if (!ikev1_close_message(&rbody, st))
 		return STF_INTERNAL_ERROR;
 
 	close_output_pbs(&reply_stream);
 
 	/* Transmit */
-	record_and_send_ike_msg(st, &reply_stream, "aggr_outI1");
+	record_and_send_v1_ike_msg(st, &reply_stream, "aggr_outI1");
 
 	/* Set up a retransmission event, half a minute hence */
 	delete_event(st);

@@ -82,18 +82,17 @@ void cancelled_dh_v2(struct pcr_dh_v2 *dh)
 /*
  * invoke helper to do DH work.
  */
-void start_dh_v2(struct state *st, struct msg_digest *md,
+void start_dh_v2(struct state *st,
 		 const char *name, enum original_role role,
 		 PK11SymKey *skey_d_old, /* SKEYSEED IKE Rekey */
 		 const struct prf_desc *old_prf, /* IKE Rekey */
 		 crypto_req_cont_func pcrc_func)
 {
-	struct pluto_crypto_req_cont *dh = new_pcrc(pcrc_func, name,
-						    st, md);
+	struct pluto_crypto_req_cont *dh = new_pcrc(pcrc_func, name);
 	struct pcr_dh_v2 *const dhq = pcr_dh_v2_init(dh);
 
 	DBG(DBG_CONTROLMORE,
-	    DBG_log("calculating skeyseed using prf=%s integ=%s cipherkey=%s",
+	    DBG_log("offloading IKEv2 SKEYSEED using prf=%s integ=%s cipherkey=%s",
 		    st->st_oakley.ta_prf->common.fqn,
 		    st->st_oakley.ta_integ->common.fqn,
 		    st->st_oakley.ta_encrypt->common.fqn));
@@ -107,7 +106,7 @@ void start_dh_v2(struct state *st, struct msg_digest *md,
 	dhq->key_size = st->st_oakley.enckeylen / BITS_PER_BYTE;
 	dhq->salt_size = st->st_oakley.ta_encrypt->salt_size;
 
-	passert(dhq->dh != OAKLEY_GROUP_invalid);
+	passert(dhq->dh != NULL && dhq->dh != &unset_group);
 
 	dhq->old_prf = old_prf;
 	dhq->skey_d_old = reference_symkey(__func__, "skey_d_old", skey_d_old);
@@ -129,8 +128,6 @@ void start_dh_v2(struct state *st, struct msg_digest *md,
 	ALLOC_WIRE_CHUNK(*dhq, rcookie, COOKIE_SIZE);
 	memcpy(WIRE_CHUNK_PTR(*dhq, rcookie),
 	       st->st_rcookie, COOKIE_SIZE);
-
-	passert(dhq->dh != OAKLEY_GROUP_invalid);
 
 	send_crypto_helper_request(st, dh);
 }

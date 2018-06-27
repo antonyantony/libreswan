@@ -22,6 +22,9 @@
 #include <event2/event_struct.h>
 #include "timer.h"
 
+struct state;
+struct msg_digest;
+
 extern char *pluto_vendorid;
 
 extern int ctl_fd;                      /* file descriptor of control (whack) socket */
@@ -88,7 +91,6 @@ extern void show_debug_status(void);
 extern void show_fips_status(void);
 extern void call_server(void);
 extern void init_event_base(void);
-extern void pluto_event_now(const char *name, void (*cb)(void*), void *arg);
 typedef void event_callback_routine(evutil_socket_t, const short, void *);
 extern void timer_private_pluto_event_new(struct event **evp,
 					  evutil_socket_t ft,
@@ -109,17 +111,60 @@ extern void set_whack_pluto_ddos(enum ddos_mode mode);
 extern bool should_fragment_ike_msg(struct state *st, size_t len,
 				    bool resending);
 
-struct packet_byte_stream;	/* forward decl of tag */
-extern void record_outbound_ike_msg(struct state *st, struct packet_byte_stream *pbs, const char *what);
-extern bool send_ike_msg(struct state *st, const char *where);
-extern bool record_and_send_ike_msg(struct state *st, struct packet_byte_stream *pbs, const char *what);
-extern bool send_ike_msg_without_recording(struct state *st, struct packet_byte_stream *pbs, const char *where);
-extern bool resend_ike_v1_msg(struct state *st, const char *where);
-extern bool send_keepalive(struct state *st, const char *where);
 extern struct event_base *get_pluto_event_base(void);
 
-extern int pluto_fork(int op(void *context),
-		      void (*callback)(int status, void *context),
-		      void *context);
+/*
+ * Schedule an event with no timeout.
+ *
+ * Typically used to resume processing of a state on the main thread.
+ * For instance, by a worker thread to transfer control back to the
+ * main thread (this is why so_serial_t and not struct state is the
+ * parameter); and by the main thread when faking STF_SUSPEND by
+ * scheduling a new event.
+ *
+ * On callback:
+ *
+ * ST either points at the state matching SERIALNO, or NULL (SERIALNO
+ * is either SOS_NOBODY or the state doesn't exist).  A CB expecting a
+ * state back MUST check ST before processing.  Caller sets CUR_STATE
+ * so don't play with that.
+ *
+ * MDP either points at the unsuspended contents of .st_suspended_md,
+ * or NULL.  On return, if *MDP is non-NULL, then it will be released.
+ */
+
+typedef void pluto_event_now_cb(struct state *st, struct msg_digest **mdp,
+				void *context);
+extern void pluto_event_now(const char *name, so_serial_t serialno,
+			    pluto_event_now_cb *callback, void *context);
+
+/*
+ * Create a child process using fork()
+ *
+ * Typically used to perform a thread unfriendly operation, such as
+ * calling PAM.
+ *
+ * On callback:
+ *
+ * ST either points at the state matching SERIALNO, or NULL (SERIALNO
+ * is either SOS_NOBODY or the state doesn't exist).  A CB expecting a
+ * state back MUST check ST before processing.  Caller sets CUR_STATE
+ * so don't play with that.
+ *
+ * MDP either points at the unsuspended contents of .st_suspended_md,
+ * or NULL.  On return, if *MDP is non-NULL, then it will be released.
+ *
+ * STATUS is the child processes exit code as returned by things like
+ * waitpid().
+ */
+
+typedef void pluto_fork_cb(struct state *st, struct msg_digest **mdp,
+			   int status, void *context);
+extern int pluto_fork(const char *name, so_serial_t serialno,
+		      int op(void *context),
+		      pluto_fork_cb *callback, void *context);
+
+bool check_incoming_msg_errqueue(const struct iface_port *ifp, const char *before);
+void check_outgoing_msg_errqueue(const struct iface_port *ifp, const char *before);
 
 #endif /* _SERVER_H */

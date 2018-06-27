@@ -51,8 +51,14 @@
 #include <linux/if_addr.h>
 #include <linux/if_link.h>
 
-#include "libreswan.h" /* before xfrm.h otherwise break on F22 */
-#include "linux/xfrm.h" /* local (if configured) or system copy */
+/* work around weird combo's of glibc and kernel header conflicts */
+#ifndef GLIBC_KERN_FLIP_HEADERS
+# include "linux/xfrm.h" /* local (if configured) or system copy */
+# include "libreswan.h"
+#else
+# include "libreswan.h"
+# include "linux/xfrm.h" /* local (if configured) or system copy */
+#endif
 
 #include "libreswan/pfkeyv2.h"
 #include "libreswan/pfkey.h"
@@ -77,7 +83,7 @@
 #include "ike_alg.h"
 #include "ike_alg_aes.h"
 #include "ike_alg_md5.h"
-#include "ike_alg_null.h"
+#include "ike_alg_none.h"
 #include "ike_alg_sha1.h"
 #include "ike_alg_sha2.h"
 #include "ike_alg_ripemd.h"
@@ -92,9 +98,6 @@
 #ifndef XFRM_STATE_AF_UNSPEC
 #define XFRM_STATE_AF_UNSPEC 32
 #endif
-
-/* Minimum priority number in SPD used by pluto. */
-#define MIN_SPD_PRIORITY 1024
 
 static int nl_send_fd = NULL_FD; /* to send to NETLINK_XFRM */
 static int nl_xfrm_fd = NULL_FD; /* listen to NETLINK_XFRM broadcast */
@@ -130,7 +133,7 @@ static sparse_names xfrm_type_names = {
 	NE(XFRM_MSG_MAX),
 
 	{ 0, sparse_end }
-}; 
+};
 
 static sparse_names rtm_type_names = {
 	NE(RTM_BASE),
@@ -684,7 +687,6 @@ static bool netlink_raw_eroute(const ip_address *this_host,
 	req.n.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
 
 	const int family = addrtypeof(&that_client->addr);
-	const int shift = (family == AF_INET) ? 5 : 7;
 
 	req.u.p.sel.sport = portof(&this_client->addr);
 	req.u.p.sel.dport = portof(&that_client->addr);
@@ -729,32 +731,11 @@ static bool netlink_raw_eroute(const ip_address *this_host,
 		req.n.nlmsg_type = XFRM_MSG_DELPOLICY;
 		req.n.nlmsg_len = NLMSG_ALIGN(NLMSG_LENGTH(sizeof(req.u.id)));
 	} else {
-		int src, dst;
-
 		req.u.p.dir = dir;
 
-		src = req.u.p.sel.prefixlen_s;
-		dst = req.u.p.sel.prefixlen_d;
-		if (dir != XFRM_POLICY_OUT) {
-			src = req.u.p.sel.prefixlen_d;
-			dst = req.u.p.sel.prefixlen_s;
-		}
-
-		/*
-		 * if the user did not specify a priority, calculate one based
-		 * on 'more specific' getting a higher priority
-		 */
-		if (sa_priority != 0) {
-			req.u.p.priority = sa_priority;
-		} else {
-			req.u.p.priority = MIN_SPD_PRIORITY -
-				((policy == IPSEC_POLICY_NONE) ? 512 : 0) +
-				(((2 << shift) - src) << shift) +
-				(2 << shift) - dst - ((transport_proto) ? 64 :
-						0) -
-				((req.u.p.sel.sport) ? 32 : 0) -
-				((req.u.p.sel.sport) ? 32 : 0);
-		}
+		/* The caller should have set the proper priority by now */
+		req.u.p.priority = sa_priority;
+		DBG(DBG_KERNEL, DBG_log("IPsec Sa SPD priority set to %d", req.u.p.priority));
 
 		req.u.p.action = XFRM_POLICY_ALLOW;
 		if (policy == IPSEC_POLICY_DISCARD)
@@ -911,7 +892,7 @@ static bool netlink_get_sa_policy(const struct kernel_sa *sa,
 	req.n.nlmsg_type = XFRM_MSG_GETPOLICY;
 	req.n.nlmsg_len = NLMSG_ALIGN(NLMSG_LENGTH(sizeof(req.id)));
 
-	req.id.dir = sa->nk_dir;
+	req.id.dir = sa->nk_dir;	/* clang 6.0.0 thinks RHS is garbage or undefined */
 	req.id.sel.family = sa->src->u.v4.sin_family;
 
 	ip2xfrm(&sa->src_client->addr, &req.id.sel.saddr);
@@ -958,45 +939,38 @@ static void  set_migration_attr(const struct kernel_sa *sa,
 	m->old_family = m->new_family = sa->src->u.v4.sin_family;
 }
 
-static void create_xfrm_migrate_sa(struct state *st, const int dir,
+static bool create_xfrm_migrate_sa(struct state *st, const int dir,
 		struct kernel_sa *ret_sa, char *text_said)
 {
+	const struct connection *const c = st->st_connection;
 
-	struct kernel_sa sa;
-	char reqid_buf[ULTOT_BUF + 32];
-	u_int8_t natt_type = 0;
-	u_int16_t natt_sport = 0, natt_dport = 0;
-	const ip_address *src, *dst;
-	const ip_subnet *src_client, *dst_client;
-	struct ipsec_proto_info *p2;
-	ipstr_buf ra;
+	const u_int8_t natt_type = (st->hidden_variables.st_nat_traversal & NAT_T_DETECTED) ?
+		ESPINUDP_WITH_NON_ESP : 0;
+
 	u_int proto;
-	u_int16_t old_port;
-	u_int16_t new_port;
-	ip_address *new_addr;
-	const struct connection *c = st->st_connection;
-
-	if (st->hidden_variables.st_nat_traversal & NAT_T_DETECTED) {
-		natt_type = ESPINUDP_WITH_NON_ESP;
-	}
-
-	zero(&sa);
+	struct ipsec_proto_info *proto_info;
 
 	if (st->st_esp.present) {
 		proto = SA_ESP;
-		p2 = &st->st_esp;
+		proto_info = &st->st_esp;
 	} else if (st->st_ah.present) {
 		proto = SA_AH;
-		p2 = &st->st_ah;
+		proto_info = &st->st_ah;
 	} else {
-		return;
+		return FALSE;
 	}
 
-	char *n;
+	struct kernel_sa sa = empty_sa;
+	ip_address *new_addr;
+	u_int16_t old_port;
+	u_int16_t new_port;
+	u_int16_t natt_sport = 0;
+	u_int16_t natt_dport = 0;
+	const ip_address *src, *dst;
+	const ip_subnet *src_client, *dst_client;
 
 	if (st->st_mobike_localport > 0) {
-		jam_str(text_said, SAMIGTOT_BUF, "initiator migrate kernel SA ");
-		n = text_said + strlen(text_said);
+		char *n = jam_str(text_said, SAMIGTOT_BUF, "initiator migrate kernel SA ");
 		passert((SAMIGTOT_BUF - strlen(text_said)) > SATOT_BUF);
 		old_port = st->st_localport;
 		new_port = st->st_mobike_localport;
@@ -1009,7 +983,7 @@ static void create_xfrm_migrate_sa(struct state *st, const int dir,
 			dst_client = &c->spd.this.client;
 			sa.nsrc = src;
 			sa.ndst = &st->st_mobike_localaddr;
-			sa.spi = p2->our_spi;
+			sa.spi = proto_info->our_spi;
 			set_text_said(n, dst, sa.spi, proto);
 			if (natt_type != 0) {
 				natt_sport = st->st_remoteport;
@@ -1022,18 +996,15 @@ static void create_xfrm_migrate_sa(struct state *st, const int dir,
 			dst_client = &c->spd.that.client;
 			sa.nsrc = &st->st_mobike_localaddr;
 			sa.ndst = dst;
-			sa.spi = p2->attrs.spi;
+			sa.spi = proto_info->attrs.spi;
 			set_text_said(n, src, sa.spi, proto);
 			if (natt_type != 0) {
 				natt_sport = st->st_mobike_localport;
 				natt_dport = st->st_remoteport;
 			}
 		}
-
-
 	} else {
-		jam_str(text_said, SAMIGTOT_BUF, "responder migrate kernel SA ");
-		n = text_said + strlen(text_said);
+		char *n = jam_str(text_said, SAMIGTOT_BUF, "responder migrate kernel SA ");
 		passert((SAMIGTOT_BUF - strlen(text_said)) > SATOT_BUF);
 		old_port = st->st_remoteport;
 		new_port = st->st_mobike_remoteport;
@@ -1046,7 +1017,7 @@ static void create_xfrm_migrate_sa(struct state *st, const int dir,
 			dst_client = &c->spd.this.client;
 			sa.nsrc = &st->st_mobike_remoteaddr;
 			sa.ndst = &c->spd.this.host_addr;
-			sa.spi = p2->our_spi;
+			sa.spi = proto_info->our_spi;
 			set_text_said(n, src, sa.spi, proto);
 			if (natt_type != 0) {
 				natt_sport = st->st_mobike_remoteport;
@@ -1060,7 +1031,7 @@ static void create_xfrm_migrate_sa(struct state *st, const int dir,
 			dst_client = &c->spd.that.client;
 			sa.nsrc = &c->spd.this.host_addr;
 			sa.ndst = &st->st_mobike_remoteaddr;
-			sa.spi = p2->attrs.spi;
+			sa.spi = proto_info->attrs.spi;
 			set_text_said(n, dst, sa.spi, proto);
 
 			if (natt_type != 0) {
@@ -1084,6 +1055,8 @@ static void create_xfrm_migrate_sa(struct state *st, const int dir,
 	sa.natt_dport = natt_dport;
 	sa.natt_type = natt_type;
 
+	char reqid_buf[ULTOT_BUF + 32];
+	ipstr_buf ra;
 	snprintf(reqid_buf, sizeof(reqid_buf), ":%u to %s:%u reqid=%u %s",
 			old_port,
 			ipstr(new_addr, &ra), new_port,
@@ -1094,6 +1067,7 @@ static void create_xfrm_migrate_sa(struct state *st, const int dir,
 	DBG(DBG_KERNEL, DBG_log("%s", text_said));
 
 	*ret_sa = sa;
+	return TRUE;
 }
 
 static bool migrate_xfrm_sa(const struct kernel_sa *sa)
@@ -1168,20 +1142,15 @@ static bool netlink_migrate_sa(struct state *st)
 	struct kernel_sa sa;
 	char mig_said[SAMIGTOT_BUF];
 
-	create_xfrm_migrate_sa(st, XFRM_POLICY_OUT, &sa, mig_said);
-	if (!migrate_xfrm_sa(&sa))
-		return FALSE;
+	return
+		create_xfrm_migrate_sa(st, XFRM_POLICY_OUT, &sa, mig_said) &&
+		migrate_xfrm_sa(&sa) &&
 
-	create_xfrm_migrate_sa(st, XFRM_POLICY_IN, &sa, mig_said);
-	if (!migrate_xfrm_sa(&sa))
-		return FALSE;
+		create_xfrm_migrate_sa(st, XFRM_POLICY_IN, &sa, mig_said) &&
+		migrate_xfrm_sa(&sa) &&
 
-	create_xfrm_migrate_sa(st, XFRM_POLICY_FWD, &sa, mig_said);
-	if (!migrate_xfrm_sa(&sa))
-		return FALSE;
-
-	return TRUE;
-
+		create_xfrm_migrate_sa(st, XFRM_POLICY_FWD, &sa, mig_said) &&
+		migrate_xfrm_sa(&sa);
 }
 
 
@@ -1660,6 +1629,7 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 			sa->sec_ctx->sec_ctx_value, len);
 
 		req.n.nlmsg_len += attr->rta_len;
+
 		/* attr not subsequently used */
 		attr = (struct rtattr *)((char *)attr + attr->rta_len);
 	}
@@ -2272,7 +2242,7 @@ static bool netlink_sag_eroute(const struct state *st, const struct spd_route *s
 
 	return eroute_connection(sr, inner_spi, inner_spi, inner_proto,
 				inner_esatype, proto_info + i,
-				c->sa_priority, &c->sa_marks, op, opname
+				calculate_sa_prio(c), &c->sa_marks, op, opname
 #ifdef HAVE_LABELED_IPSEC
 				, st->st_connection->policy_label
 #endif
@@ -2311,6 +2281,10 @@ static bool netlink_shunt_eroute(const struct connection *c,
 	 * The SPI signifies the kind of shunt.
 	 */
 	spi = shunt_policy_spi(c, rt_kind == RT_ROUTED_PROSPECTIVE);
+
+	DBG(DBG_KERNEL, DBG_log("netlink_shunt_eroute for proto %d, and source port %d dest port %d",
+		sr->this.protocol, ntohs(portof(&sr->this.client.addr)),
+		ntohs(portof(&sr->that.client.addr))));
 
 	if (spi == 0) {
 		/*
@@ -2398,7 +2372,7 @@ static bool netlink_shunt_eroute(const struct connection *c,
 					ET_INT,
 					null_proto_info,
 					deltatime(0),
-					c->sa_priority,
+					calculate_sa_prio(c),
 					&c->sa_marks,
 					op, buf2
 #ifdef HAVE_LABELED_IPSEC
@@ -2434,7 +2408,7 @@ static bool netlink_shunt_eroute(const struct connection *c,
 					ET_INT,
 					null_proto_info,
 					deltatime(0),
-					c->sa_priority,
+					calculate_sa_prio(c),
 					&c->sa_marks,
 					op, buf2
 #ifdef HAVE_LABELED_IPSEC
@@ -2848,6 +2822,7 @@ static bool netlink_v6holes()
 			if (fgets(buf, sizeof(buf), f) !=  NULL) {
 				disable_ipv6 = atoi(buf);
 			}
+			(void) fclose(f);
 		} else {
 			LOG_ERRNO(errno, "\"%s\"", proc_f);
 		}

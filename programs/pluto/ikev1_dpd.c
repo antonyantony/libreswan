@@ -111,7 +111,7 @@
  * The phase 2 dpd_init() will attempt to kill the phase 1 DPD_EVENT, if it
  * can, to reduce the amount of work.
  *
- * The st_last_dpd member which is used is always the one from the phase 1.
+ * The st_last_dpd member that is used is always the one from the phase 1.
  * So, if there are multiple phase 2s, then if any of them receive DPD data
  * they will update the st_last_dpd, so the test in #2 will avoid the traffic
  * for all by one phase 2.
@@ -358,7 +358,7 @@ static void p2_dpd_outI1(struct state *p2st)
 		return;
 	}
 
-	if (st->st_connection->newest_ipsec_sa != st->st_serialno) {
+	if (st->st_connection->newest_ipsec_sa != p2st->st_serialno) {
 		DBG(DBG_DPD,
 		    DBG_log("DPD: no need to send or schedule DPD for replaced IPsec SA"));
 		return;
@@ -373,7 +373,7 @@ void dpd_event(struct state *st)
 
 	set_cur_state(st);
 
-	if (IS_PHASE1(st->st_state) || IS_PHASE15(st->st_state ))
+	if (IS_PHASE1(st->st_state) || IS_PHASE15(st->st_state))
 		p1_dpd_outI1(st);
 	else
 		p2_dpd_outI1(st);

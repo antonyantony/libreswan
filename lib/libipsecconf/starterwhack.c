@@ -377,7 +377,7 @@ static void set_whack_end(char *lr,
 		/* ??? is this a crude way of seting client to anyaddr? */
 		w->client.addr.u.v4.sin_family = l->addr_family;
 	}
-	w->updown = l->strings[KSCF_UPDOWN];
+
 	w->host_port = IKE_UDP_PORT; /* XXX starter should support (nat)-ike-port */
 	w->has_client_wildcard = l->has_client_wildcard;
 	w->has_port_wildcard = l->has_port_wildcard;
@@ -394,7 +394,7 @@ static void set_whack_end(char *lr,
 	if (l->options_set[KNCF_SENDCERT])
 		w->sendcert = l->options[KNCF_SENDCERT];
 	else
-		w->sendcert = cert_alwayssend;
+		w->sendcert = CERT_ALWAYSSEND;
 
 	if (l->options_set[KNCF_AUTH])
 		w->authby = l->options[KNCF_AUTH];
@@ -608,9 +608,9 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 
 
 	if (conn->options_set[KBF_ENCAPS])
-               msg.encaps = conn->options[KBF_ENCAPS];
+		msg.encaps = conn->options[KBF_ENCAPS];
 	else
-               msg.encaps = encaps_auto;
+		msg.encaps = yna_auto;
 
 	if (conn->options_set[KBF_NAT_KEEPALIVE])
 		msg.nat_keepalive = conn->options[KBF_NAT_KEEPALIVE];
@@ -620,7 +620,7 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	if (conn->options_set[KBF_IKEV1_NATT])
 		msg.ikev1_natt = conn->options[KBF_IKEV1_NATT];
 	else
-		msg.ikev1_natt = natt_both;
+		msg.ikev1_natt = NATT_BOTH;
 
 
 	/* Activate sending out own vendorid */
@@ -641,9 +641,6 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	/* Active our Cisco interop code if set */
 	if (conn->options_set[KBF_REMOTEPEERTYPE])
 		msg.remotepeertype = conn->options[KBF_REMOTEPEERTYPE];
-
-	if (conn->options_set[KBF_SHA2_TRUNCBUG])
-		msg.sha2_truncbug = conn->options[KBF_SHA2_TRUNCBUG];
 
 #ifdef HAVE_NM
 	/* Network Manager support */

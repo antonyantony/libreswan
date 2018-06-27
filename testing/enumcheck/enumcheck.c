@@ -5,6 +5,7 @@
 #include "constants.h"
 #include "lswlog.h"
 #include "lswalloc.h"
+#include "lswtool.h"
 
 #define PREFIX "         "
 
@@ -41,7 +42,7 @@ static void test_enum(enum_names *enum_test, int i,
 
 	/*
 	 * So that it is easy to see what was tested, print something
-	 * for every comparision.
+	 * for every comparison.
 	 */
 
 	if (i < 0) {
@@ -71,7 +72,7 @@ static void test_enum(enum_names *enum_test, int i,
 
 	{
 		printf(PREFIX "match %s: ", name);
-		int e = enum_match(enum_test, name);
+		int e = enum_match(enum_test, shunk1(name));
 		if (e != i) {
 			printf("%d ERROR\n", e);
 		} else {
@@ -80,11 +81,14 @@ static void test_enum(enum_names *enum_test, int i,
 	}
 
 	if (strchr(name, '(') != NULL) {
-		char *trunc_name = clone_str(name, "trunc_name");
-		*strchr(trunc_name, '(') = '\0';
-		printf(PREFIX "match %s [trunc]: ", trunc_name);
+		char *clone = clone_str(name, "trunc_name");
+		shunk_t trunc_name = shunk2(clone, strcspn(clone, "("));
+		passert(clone[trunc_name.len] == '(');
+		clone[trunc_name.len] = '*';
+		printf(PREFIX "match "PRISHUNK" [trunc]: ",
+		       SHUNKF(trunc_name));
 		int e = enum_match(enum_test, trunc_name);
-		pfree(trunc_name);
+		pfree(clone);
 		if (e != i) {
 			printf("%d ERROR\n", e);
 		} else {
@@ -118,7 +122,7 @@ static void test_enum(enum_names *enum_test, int i,
 
 	{
 		printf(PREFIX "match %s [short]: ", short_name);
-		int e = enum_match(enum_test, short_name);
+		int e = enum_match(enum_test, shunk1(short_name));
 		if (e != i) {
 			printf("%d ERROR\n", e);
 		} else {
@@ -130,7 +134,7 @@ static void test_enum(enum_names *enum_test, int i,
 		char *trunc_short_name = clone_str(short_name, "trunc_short_name");
 		*strchr(trunc_short_name, '(') = '\0';
 		printf(PREFIX "match %s [short+trunc]: ", trunc_short_name);
-		int e = enum_match(enum_test, trunc_short_name);
+		int e = enum_match(enum_test, shunk1(trunc_short_name));
 		pfree(trunc_short_name);
 		if (e != i) {
 			printf("%d ERROR\n", e);
@@ -207,7 +211,9 @@ static void test_enum_enum(const char *title, enum_enum_names *een,
 		printf(PREFIX "lswlog_enum_enum %lu %lu: ", table, val);
 		lswlog_enum_enum(buf, een, table, val);
 		/* ??? clang says that name might be NULL */
-		if (val_ok && streq(buf->array, name)) {
+		if (val_ok && name == NULL) {
+			printf("name == NULL\n");
+		} else if (val_ok && streq(buf->array, name)) {
 			printf("OK\n");
 		} else if (strlen(buf->array) > 0) {
 			printf("OK\n");
@@ -302,8 +308,6 @@ int main(int argc UNUSED, char *argv[])
 	test_enums("ike_idtype_names", &ike_idtype_names);
 	test_enums("ikev2_idtype_names", &ikev2_idtype_names);
 
-	test_enums("debug_and_impair_names", &debug_and_impair_names);
-
 	/*
 	 * Some hard-wired checks of enum_enum_name.  If a lookup
 	 * should fail, pass NULL for the enum table.
@@ -320,13 +324,8 @@ int main(int argc UNUSED, char *argv[])
 	printf("\n");
 
 	printf("lswlog_enum_lset_short:\n\n");
-	test_enum_lset("debug", &debug_names, DBG_MASK);
-	test_enum_lset("impair", &impair_names, IMPAIR_MASK);
-	test_enum_lset("debug+impair", &debug_and_impair_names,
-		       LELEM(0) |
-		       LELEM(DBG_roof_IX-1) |
-		       LELEM(DBG_roof_IX) |
-		       LELEM(IMPAIR_roof_IX-1));
+	test_enum_lset("debug", &debug_names, DBG_CRYPT|DBG_CRYPT_LOW);
+	test_enum_lset("impair", &impair_names, IMPAIR_PROPOSAL_PARSER);
 	printf("\n");
 
 	report_leaks();

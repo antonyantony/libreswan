@@ -3,7 +3,8 @@ d.ipsec.conf/connsections.xml
 d.ipsec.conf/exampleleftright.xml
 d.ipsec.conf/conngeneral.xml
 d.ipsec.conf/keyexchange.xml
-d.ipsec.conf/connaddrfamily.xml
+d.ipsec.conf/hostaddrfamily.xml
+d.ipsec.conf/clientaddrfamily.xml
 d.ipsec.conf/type.xml
 d.ipsec.conf/left.xml
 d.ipsec.conf/leftsubnet.xml
@@ -23,6 +24,8 @@ d.ipsec.conf/ike.xml
 d.ipsec.conf/phase2.xml
 d.ipsec.conf/phase2alg.xml
 d.ipsec.conf/sha2-truncbug.xml
+d.ipsec.conf/msdh-downgrade.xml
+d.ipsec.conf/dns-match-id.xml
 d.ipsec.conf/ppk.xml
 d.ipsec.conf/nat-ikev1-method.xml
 d.ipsec.conf/esp.xml
@@ -138,6 +141,7 @@ d.ipsec.conf/xfrmlifetime.xml
 d.ipsec.conf/dumpdir.xml
 d.ipsec.conf/statsbin.xml
 d.ipsec.conf/ipsecdir.xml
+d.ipsec.conf/nssdir.xml
 d.ipsec.conf/secretsfile.xml
 d.ipsec.conf/perpeerlog.xml
 d.ipsec.conf/perpeerlogdir.xml

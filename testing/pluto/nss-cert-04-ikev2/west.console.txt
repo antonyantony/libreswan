@@ -8,7 +8,7 @@ Redirecting to: systemctl start ipsec.service
 west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
- ipsec whack --debug-all --impair retransmits
+ ipsec whack --impair suppress-retransmits
 west #
  ipsec auto --add nss-cert
 002 added connection description "nss-cert"
@@ -24,7 +24,7 @@ west #
 000 "nss-cert":   CAs: 'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=Libreswan test CA for otherca, E=testing@libreswan.org'...'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=Libreswan test CA for mainca, E=testing@libreswan.org'
 000 "nss-cert":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "nss-cert":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
-000 "nss-cert":   sha2-truncbug:no; initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
+000 "nss-cert":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "nss-cert":   policy: RSASIG+ENCRYPT+TUNNEL+PFS+IKEV2_ALLOW+IKEV2_PROPOSE+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
 000 "nss-cert":   conn_prio: 32,32; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "nss-cert":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
@@ -39,9 +39,11 @@ west #
 002 "nss-cert" #1: initiating v2 parent SA
 133 "nss-cert" #1: STATE_PARENT_I1: initiate
 133 "nss-cert" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
-002 "nss-cert" #1: suppressing retransmit because IMPAIR_RETRANSMITS is set.
+002 "nss-cert" #1: IMPAIR: suppressing retransmits; scheduling timeout in 60 seconds
 134 "nss-cert" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=aes_gcm_16_256 integ=n/a prf=sha2_512 group=MODP2048}
-002 "nss-cert" #2: suppressing retransmit because IMPAIR_RETRANSMITS is set.
+002 "nss-cert" #2: IMPAIR: suppressing retransmits; scheduling timeout in 60 seconds
+002 "nss-cert" #2: IKE SA authentication request rejected: AUTHENTICATION_FAILED
+000 "nss-cert" #2: scheduling retry attempt 1 of an unlimited number, but releasing whack
 west #
  echo done
 done

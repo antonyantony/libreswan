@@ -16,7 +16,6 @@
 
 #include <stdio.h>
 #include <stdarg.h>
-#include <stdbool.h>
 
 #include "constants.h"
 #include "lmod.h"
@@ -86,7 +85,7 @@ bool lmod_arg(lmod_t *mod, const struct lmod_info *info,
 			/* non-empty */
 			const char *arg = elem;
 			bool no = eat(arg, "no-");
-			int ix = enum_match(info->names, arg);
+			int ix = enum_match(info->names, shunk1(arg));
 			lset_t bit = LEMPTY;
 			if (ix >= 0) {
 				bit = LELEM(ix);

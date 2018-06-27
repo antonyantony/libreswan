@@ -1,4 +1,4 @@
-Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: libreswan
 Upstream-Contact: The Libreswan Project <swan-dev@lists.libreswan.org>
 Source: https://download.libreswan.org/
@@ -25,7 +25,6 @@ Files:
  lib/libswan/keyblobtoid.c
  lib/libswan/pfkey_error.c
  lib/libswan/pfkey_sock.c
- lib/libswan/portof.c
  lib/libswan/rangetosubnet.c
  lib/libswan/sameaddr.c
  lib/libswan/sanitizestring.c

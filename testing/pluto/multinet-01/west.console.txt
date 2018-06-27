@@ -5,7 +5,7 @@ west #
  ../../pluto/bin/wait-until-alive -I 192.0.1.254 192.0.2.254
 destination -I 192.0.1.254 192.0.2.254 is alive
 west #
- # make sure that clear text does not get through
+ # ensure that clear text does not get through
 west #
  iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j LOGDROP
 west #
@@ -43,7 +43,7 @@ west #
 000 "westnet-eastnet-subnets/1x1":   policy_label:unset;
 000 "westnet-eastnet-subnets/1x1":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "westnet-eastnet-subnets/1x1":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
-000 "westnet-eastnet-subnets/1x1":   sha2-truncbug:no; initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
+000 "westnet-eastnet-subnets/1x1":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "westnet-eastnet-subnets/1x1":   policy: RSASIG+ENCRYPT+TUNNEL+PFS+IKEV1_ALLOW+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
 000 "westnet-eastnet-subnets/1x1":   conn_prio: 28,28; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "westnet-eastnet-subnets/1x1":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
@@ -60,7 +60,7 @@ west #
 000 "westnet-eastnet-subnets/1x2":   policy_label:unset;
 000 "westnet-eastnet-subnets/1x2":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "westnet-eastnet-subnets/1x2":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
-000 "westnet-eastnet-subnets/1x2":   sha2-truncbug:no; initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
+000 "westnet-eastnet-subnets/1x2":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "westnet-eastnet-subnets/1x2":   policy: RSASIG+ENCRYPT+TUNNEL+PFS+IKEV1_ALLOW+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
 000 "westnet-eastnet-subnets/1x2":   conn_prio: 28,30; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "westnet-eastnet-subnets/1x2":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
@@ -77,7 +77,7 @@ west #
 000 "westnet-eastnet-subnets/2x1":   policy_label:unset;
 000 "westnet-eastnet-subnets/2x1":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "westnet-eastnet-subnets/2x1":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
-000 "westnet-eastnet-subnets/2x1":   sha2-truncbug:no; initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
+000 "westnet-eastnet-subnets/2x1":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "westnet-eastnet-subnets/2x1":   policy: RSASIG+ENCRYPT+TUNNEL+PFS+IKEV1_ALLOW+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
 000 "westnet-eastnet-subnets/2x1":   conn_prio: 28,28; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "westnet-eastnet-subnets/2x1":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
@@ -94,7 +94,7 @@ west #
 000 "westnet-eastnet-subnets/2x2":   policy_label:unset;
 000 "westnet-eastnet-subnets/2x2":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "westnet-eastnet-subnets/2x2":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
-000 "westnet-eastnet-subnets/2x2":   sha2-truncbug:no; initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
+000 "westnet-eastnet-subnets/2x2":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "westnet-eastnet-subnets/2x2":   policy: RSASIG+ENCRYPT+TUNNEL+PFS+IKEV1_ALLOW+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
 000 "westnet-eastnet-subnets/2x2":   conn_prio: 28,30; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "westnet-eastnet-subnets/2x2":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
@@ -113,19 +113,20 @@ west #
 106 "westnet-eastnet-subnets/2x2" #1: STATE_MAIN_I2: sent MI2, expecting MR2
 108 "westnet-eastnet-subnets/2x2" #1: STATE_MAIN_I3: sent MI3, expecting MR3
 002 "westnet-eastnet-subnets/2x2" #1: Peer ID is ID_FQDN: '@east'
+003 "westnet-eastnet-subnets/2x2" #1: Authenticated using RSA
 004 "westnet-eastnet-subnets/2x2" #1: STATE_MAIN_I4: ISAKMP SA established {auth=RSA_SIG cipher=aes_256 integ=sha2_256 group=MODP2048}
 002 "westnet-eastnet-subnets/1x1" #2: initiating Quick Mode RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKEV1_ALLOW+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO
 002 "westnet-eastnet-subnets/1x2" #3: initiating Quick Mode RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKEV1_ALLOW+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO
 002 "westnet-eastnet-subnets/2x1" #4: initiating Quick Mode RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKEV1_ALLOW+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO
 002 "westnet-eastnet-subnets/2x2" #5: initiating Quick Mode RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKEV1_ALLOW+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO
 117 "westnet-eastnet-subnets/1x1" #2: STATE_QUICK_I1: initiate
-117 "westnet-eastnet-subnets/1x2" #3: STATE_QUICK_I1: initiate
 117 "westnet-eastnet-subnets/2x1" #4: STATE_QUICK_I1: initiate
 117 "westnet-eastnet-subnets/2x2" #5: STATE_QUICK_I1: initiate
+117 "westnet-eastnet-subnets/1x2" #3: STATE_QUICK_I1: initiate
 004 "westnet-eastnet-subnets/1x1" #2: STATE_QUICK_I2: sent QI2, IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive}
-004 "westnet-eastnet-subnets/1x2" #3: STATE_QUICK_I2: sent QI2, IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive}
 004 "westnet-eastnet-subnets/2x1" #4: STATE_QUICK_I2: sent QI2, IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive}
 004 "westnet-eastnet-subnets/2x2" #5: STATE_QUICK_I2: sent QI2, IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive}
+004 "westnet-eastnet-subnets/1x2" #3: STATE_QUICK_I2: sent QI2, IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive}
 west #
  ipsec whack --trafficstatus
 006 #2: "westnet-eastnet-subnets/1x1", type=ESP, add_time=1234567890, inBytes=0, outBytes=0, id='@east'
@@ -161,7 +162,7 @@ west #
 000 "westnet-eastnet-subnets/1x1":   policy_label:unset;
 000 "westnet-eastnet-subnets/1x1":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "westnet-eastnet-subnets/1x1":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
-000 "westnet-eastnet-subnets/1x1":   sha2-truncbug:no; initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
+000 "westnet-eastnet-subnets/1x1":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "westnet-eastnet-subnets/1x1":   policy: RSASIG+ENCRYPT+TUNNEL+PFS+IKEV1_ALLOW+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
 000 "westnet-eastnet-subnets/1x1":   conn_prio: 28,28; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "westnet-eastnet-subnets/1x1":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
@@ -178,7 +179,7 @@ west #
 000 "westnet-eastnet-subnets/1x2":   policy_label:unset;
 000 "westnet-eastnet-subnets/1x2":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "westnet-eastnet-subnets/1x2":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
-000 "westnet-eastnet-subnets/1x2":   sha2-truncbug:no; initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
+000 "westnet-eastnet-subnets/1x2":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "westnet-eastnet-subnets/1x2":   policy: RSASIG+ENCRYPT+TUNNEL+PFS+IKEV1_ALLOW+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
 000 "westnet-eastnet-subnets/1x2":   conn_prio: 28,30; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "westnet-eastnet-subnets/1x2":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
@@ -195,7 +196,7 @@ west #
 000 "westnet-eastnet-subnets/2x1":   policy_label:unset;
 000 "westnet-eastnet-subnets/2x1":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "westnet-eastnet-subnets/2x1":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
-000 "westnet-eastnet-subnets/2x1":   sha2-truncbug:no; initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
+000 "westnet-eastnet-subnets/2x1":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "westnet-eastnet-subnets/2x1":   policy: RSASIG+ENCRYPT+TUNNEL+PFS+IKEV1_ALLOW+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
 000 "westnet-eastnet-subnets/2x1":   conn_prio: 28,28; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "westnet-eastnet-subnets/2x1":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
@@ -212,7 +213,7 @@ west #
 000 "westnet-eastnet-subnets/2x2":   policy_label:unset;
 000 "westnet-eastnet-subnets/2x2":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "westnet-eastnet-subnets/2x2":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
-000 "westnet-eastnet-subnets/2x2":   sha2-truncbug:no; initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
+000 "westnet-eastnet-subnets/2x2":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "westnet-eastnet-subnets/2x2":   policy: RSASIG+ENCRYPT+TUNNEL+PFS+IKEV1_ALLOW+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
 000 "westnet-eastnet-subnets/2x2":   conn_prio: 28,30; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "westnet-eastnet-subnets/2x2":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
@@ -226,24 +227,24 @@ west #
  echo done
 done
 west #
- ipsec look
+ ../../pluto/bin/ipsec-look.sh
 west NOW
 XFRM state:
 XFRM policy:
-src 192.0.1.0/28 dst 192.0.2.16/28 
-	dir out priority 2212 ptype main 
+src 192.0.1.0/28 dst 192.0.2.64/30
+	dir out priority 1041377 ptype main
 	tmpl src 0.0.0.0 dst 0.0.0.0
 		proto esp reqid REQID mode transport
-src 192.0.1.0/28 dst 192.0.2.64/30 
-	dir out priority 2210 ptype main 
+src 192.0.1.128/28 dst 192.0.2.64/30
+	dir out priority 1041377 ptype main
 	tmpl src 0.0.0.0 dst 0.0.0.0
 		proto esp reqid REQID mode transport
-src 192.0.1.128/28 dst 192.0.2.16/28 
-	dir out priority 2212 ptype main 
+src 192.0.1.0/28 dst 192.0.2.16/28
+	dir out priority 1041379 ptype main
 	tmpl src 0.0.0.0 dst 0.0.0.0
 		proto esp reqid REQID mode transport
-src 192.0.1.128/28 dst 192.0.2.64/30 
-	dir out priority 2210 ptype main 
+src 192.0.1.128/28 dst 192.0.2.16/28
+	dir out priority 1041379 ptype main
 	tmpl src 0.0.0.0 dst 0.0.0.0
 		proto esp reqid REQID mode transport
 XFRM done

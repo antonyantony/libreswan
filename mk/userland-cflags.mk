@@ -44,6 +44,17 @@ USERCOMPILE= -fstack-protector-all -fno-strict-aliasing -fPIE -DPIE
 endif
 USERLAND_CFLAGS+=$(USERCOMPILE)
 
+# Build/link against the more pedantic ElectricFence memory allocator;
+# used when testing.
+USE_EFENCE ?= false
+ifeq ($(USE_EFENCE),true)
+USERLAND_CFLAGS+=-DUSE_EFENCE
+EFENCE_LDFLAGS ?= -lefence
+endif
+ifneq ($(EFENCE),)
+$(warning EFENCE=$(EFENCE) replaced by USE_EFENCE=true)
+endif
+
 ifeq ($(USE_DNSSEC),true)
 USERLAND_CFLAGS+=-DUSE_DNSSEC
 UNBOUND_LDFLAGS ?= -lunbound -lldns
@@ -79,8 +90,11 @@ USERLAND_CFLAGS+=-DLIBCURL
 CURL_LDFLAGS ?= -lcurl
 endif
 
+# Build support for the Linux Audit system
+
+USE_LINUX_AUDIT ?= false
 ifeq ($(USE_LINUX_AUDIT),true)
-USERLAND_CFLAGS+=-DUSE_LINUX_AUDIT
+USERLAND_CFLAGS += -DUSE_LINUX_AUDIT
 LINUX_AUDIT_LDFLAGS ?= -laudit
 endif
 
@@ -98,14 +112,12 @@ ifeq ($(USE_NM),true)
 USERLAND_CFLAGS+=-DHAVE_NM
 endif
 
-# if we use pam for password checking then add it too
+# include PAM support for XAUTH when available on the platform
+
+USE_XAUTHPAM?=true
 ifeq ($(USE_XAUTHPAM),true)
 USERLAND_CFLAGS += -DXAUTH_HAVE_PAM
 XAUTHPAM_LDFLAGS ?= -lpam
-endif
-
-ifeq ($(USE_SAREF_KERNEL),true)
-USERLAND_CFLAGS+=-DSAREF_SUPPORTED
 endif
 
 USERLAND_CFLAGS+=-DUSE_MD5
@@ -134,6 +146,13 @@ USERLAND_CFLAGS+=-DUSE_CAST
 endif
 ifeq ($(USE_RIPEMD),true)
 USERLAND_CFLAGS+=-DUSE_RIPEMD
+endif
+ifeq ($(USE_DH31),true)
+USERLAND_CFLAGS+=-DUSE_DH31
+endif
+USE_XCBC?=true
+ifeq ($(USE_XCBC),true)
+USERLAND_CFLAGS+=-DUSE_XCBC
 endif
 
 ifeq ($(USE_SINGLE_CONF_DIR),true)

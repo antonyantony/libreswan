@@ -13,11 +13,8 @@
  * for more details.
  */
 
-#ifdef XAUTH_HAVE_PAM
-
-#include <pthread.h> /* Must be the first include file */
-
 #include <stdlib.h>
+#include <sys/wait.h>		/* for WIFEXITED() et.al. */
 
 #include "constants.h"
 #include "lswlog.h"
@@ -33,15 +30,17 @@
 #include "pluto_stats.h"
 #include "log.h"
 #include "ip_address.h"
+#include "demux.h"
+#include "deltatime.h"
+#include "monotime.h"
 
 /* information for tracking xauth PAM work in flight */
 
 struct xauth {
 	so_serial_t serialno;
 	struct pam_thread_arg ptarg;
-	struct timeval tv0;
+	monotime_t start_time;
 	xauth_callback_t *callback;
-	bool abort;
 	pid_t child;
 };
 
@@ -62,21 +61,19 @@ static void pfree_xauth(struct xauth *x)
  * the xauth request has already been deleted.  Need to pass in
  * st_callback, but only when it needs to notify an abort.
  */
-void xauth_pam_abort(struct state *st, bool call_callback)
+void xauth_pam_abort(struct state *st)
 {
 	struct xauth *xauth = st->st_xauth;
 
 	if (xauth == NULL) {
-		PEXPECT_LOG("XAUTH: #%lu: main-process: no thread to abort (already aborted?)",
+		PEXPECT_LOG("PAM: #%lu: main-process: no process to abort (already aborted?)",
 			    st->st_serialno);
 	} else {
-		st->st_xauth = NULL;
+		st->st_xauth = NULL; /* aborted */
 		pstats_xauth_aborted++;
-		passert(!xauth->abort);
 		passert(xauth->serialno == st->st_serialno);
-		libreswan_log("XAUTH: #%lu: main-process: aborting authentication PAM-process for '%s'",
+		libreswan_log("PAM: #%lu: main-process: aborting authentication PAM-process for '%s'",
 			      st->st_serialno, xauth->ptarg.name);
-		xauth->abort = true;
 		/*
 		 * Don't hold back.
 		 *
@@ -85,14 +82,10 @@ void xauth_pam_abort(struct state *st, bool call_callback)
 		 * has it blocked by libvent.
 		 */
 		kill(xauth->child, SIGKILL);
-		if (call_callback) {
-			DBG(DBG_XAUTH,
-			    DBG_log("XAUTH: #%lu: main-process: notifying callback for user '%s'",
-				    st->st_serialno, xauth->ptarg.name));
-			xauth->callback(st, xauth->ptarg.name, false);
-		} else {
-			pfree_xauth(xauth);
-		}
+		/*
+		 * xauth is deleted by xauth_pam_callback() _after_
+		 * the process exits and the callback has been called.
+		 */
 	}
 }
 
@@ -101,28 +94,30 @@ void xauth_pam_abort(struct state *st, bool call_callback)
  * On the main thread; notify the state (if it is present) of the
  * xauth result, and then release everything.
  */
-static void xauth_pam_child_cleanup(int status, void *arg)
+
+static pluto_fork_cb pam_callback; /* type assertion */
+
+static void pam_callback(struct state *st,
+			 struct msg_digest **mdp,
+			 int status, void *arg)
 {
 	struct xauth *xauth = arg;
 
 	pstats_xauth_stopped++;
 
 	bool success = WIFEXITED(status) && WEXITSTATUS(status) == 0;
-
-	DBG(DBG_XAUTH, {
-			struct timeval tv1;
-			unsigned long tv_diff;
-
-			gettimeofday(&tv1, NULL);
-			tv_diff = (tv1.tv_sec  - xauth->tv0.tv_sec) * 1000000 +
-				  (tv1.tv_usec - xauth->tv0.tv_usec);
-			DBG_log("XAUTH: #%lu: main-process cleaning up PAM-process for user '%s' result %s time elapsed %ld usec%s.",
-				xauth->serialno,
-				xauth->ptarg.name,
-				success ? "SUCCESS" : "FAILURE",
-				tv_diff,
-				xauth->abort ? " ABORTED" : "");
-			});
+	LSWDBGP(DBG_XAUTH, buf) {
+		lswlogf(buf, "PAM: #%lu: main-process cleaning up PAM-process for user '%s' result %s time elapsed ",
+			xauth->serialno,
+			xauth->ptarg.name,
+			success ? "SUCCESS" : "FAILURE");
+		lswlog_deltatime(buf, monotimediff(mononow(), xauth->start_time));
+		if (st == NULL) {
+			lswlogs(buf, " (state deleted)");
+		} else if (st->st_xauth == NULL) {
+			lswlogs(buf, " (aborted)");
+		}
+	}
 
 	/*
 	 * Try to find the corresponding state.
@@ -130,49 +125,33 @@ static void xauth_pam_child_cleanup(int status, void *arg)
 	 * Since this is running on the main thread, it and
 	 * Xauth_abort() can't get into a race.
 	 */
-	if (xauth->abort) {
-		/* ST may or may not exist, don't try */
-		libreswan_log("XAUTH: #%lu: aborted for user '%s'",
-			      xauth->serialno, xauth->ptarg.name);
-	} else {
-		struct state *st = state_with_serialno(xauth->serialno);
-		passert(st != NULL);
+	if (st != NULL) {
 		st->st_xauth = NULL; /* all done */
-		so_serial_t old_state = push_cur_state(st);
-		libreswan_log("XAUTH: #%lu: completed for user '%s' with status %s",
+		libreswan_log("PAM: #%lu: completed for user '%s' with status %s",
 			      xauth->serialno, xauth->ptarg.name,
 			      success ? "SUCCESSS" : "FAILURE");
-		xauth->callback(st, xauth->ptarg.name, success);
-		pop_cur_state(old_state);
+		xauth->callback(st, mdp, xauth->ptarg.name, success);
 	}
 
 	pfree_xauth(xauth);
 }
 
-static bool xauth_pam_thread(void *arg)
-{
-	return do_pam_authentication((struct pam_thread_arg*)arg);
-}
-
 /*
- * First create a cleanup (it will transfer control to the main thread
- * and that will do the real cleanup); and then perform the
- * authorization.
+ * Perform the authentication in the child process.
  */
-static int xauth_child(void *arg)
+static int pam_child(void *arg)
 {
 	struct xauth *xauth = arg;
 
 	DBG(DBG_XAUTH,
-	    DBG_log("XAUTH: #%lu: PAM-process authenticating user '%s'",
+	    DBG_log("PAM: #%lu: PAM-process authenticating user '%s'",
 		    xauth->serialno,
 		    xauth->ptarg.name));
-	bool success = xauth_pam_thread(&xauth->ptarg);
+	bool success = do_pam_authentication(&xauth->ptarg);
 	DBG(DBG_XAUTH,
-	    DBG_log("XAUTH: #%lu: PAM-process completed for user '%s' with result %s%s",
+	    DBG_log("PAM: #%lu: PAM-process completed for user '%s' with result %s",
 		    xauth->serialno, xauth->ptarg.name,
-		    success ? "SUCCESS" : "FAILURE",
-		    xauth->abort ? " ABORTED" : ""));
+		    success ? "SUCCESS" : "FAILURE"));
 	return success ? 0 : 1;
 }
 
@@ -186,13 +165,11 @@ void xauth_start_pam_thread(struct state *st,
 
 	/* now start the xauth child process */
 
-	passert(pthread_equal(main_thread, pthread_self()));
-
 	struct xauth *xauth = alloc_thing(struct xauth, "xauth arg");
 
 	xauth->callback = callback;
 	xauth->serialno = serialno;
-	gettimeofday(&xauth->tv0, NULL);
+	xauth->start_time = mononow();
 
 	/* fill in pam_thread_arg with info for the child process */
 
@@ -208,11 +185,12 @@ void xauth_start_pam_thread(struct state *st,
 	xauth->ptarg.atype = atype;
 
 	DBG(DBG_XAUTH,
-	    DBG_log("XAUTH: #%lu: main-process starting PAM-process for authenticating user '%s'",
+	    DBG_log("PAM: #%lu: main-process starting PAM-process for authenticating user '%s'",
 		    xauth->serialno, xauth->ptarg.name));
-	xauth->child = pluto_fork(xauth_child, xauth_pam_child_cleanup, xauth);
+	xauth->child = pluto_fork("xauth", xauth->serialno,
+				  pam_child, pam_callback, xauth);
 	if (xauth->child < 0) {
-		libreswan_log("XAUTH: #%lu: creation of PAM-process for user '%s' failed",
+		libreswan_log("PAM: #%lu: creation of PAM-process for user '%s' failed",
 			      xauth->serialno, xauth->ptarg.name);
 		pfree_xauth(xauth);
 		return;
@@ -221,5 +199,3 @@ void xauth_start_pam_thread(struct state *st,
 	st->st_xauth = xauth;
 	pstats_xauth_started++;
 }
-
-#endif

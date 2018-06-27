@@ -134,30 +134,18 @@ static int backlog_queue_len = 0;
  * Create the pluto crypto request object.
  */
 
-static void handle_helper_answer(void *arg);
+static pluto_event_now_cb handle_helper_answer;	/* type assertion */
 
-struct pluto_crypto_req_cont *new_pcrc(
-	crypto_req_cont_func fn,
-	const char *name,
-	struct state *st,
-	struct msg_digest *md)
+struct pluto_crypto_req_cont *new_pcrc(crypto_req_cont_func fn,
+				       const char *name)
 {
+	passert(fn != NULL);
 	struct pluto_crypto_req_cont *r = alloc_thing(struct pluto_crypto_req_cont, name);
-
 	r->pcrc_func = fn;
-	r->pcrc_serialno = st->st_serialno;
 	r->pcrc_cancelled = false;
 	r->pcrc_name = name;
 	r->pcrc_backlog = list_entry(&backlog_info, r);
-
-	/*
-	 * There is almost always a non-NULL md.
-	 * Exception: main_inI2_outR2_tail initiates DH calculation
-	 * in parallel with normal processing that needs the md exclusively.
-	 */
-	if (md != NULL) {
-		set_suspended(st, md);
-	}
+	r->pcrc_serialno = SOS_NOBODY;
 	return r;
 }
 
@@ -346,6 +334,7 @@ static void pluto_do_crypto_op(struct pluto_crypto_req_cont *cn, int helpernum)
 static void *pluto_crypto_helper_thread(void *arg)
 {
 	struct pluto_crypto_worker *w = arg;
+	DBGF(DBG_CONTROL, "starting up helper thread %d", w->pcw_helpernum);
 
 #ifdef HAVE_SECCOMP
 	switch (pluto_seccomp_mode) {
@@ -361,7 +350,7 @@ static void *pluto_crypto_helper_thread(void *arg)
 		bad_case(pluto_seccomp_mode);
 	}
 #else
-        libreswan_log("seccomp security for crypto helper not supported");
+	libreswan_log("seccomp security for crypto helper not supported");
 #endif
 
 	/* OS X does not have pthread_setschedprio */
@@ -372,7 +361,7 @@ static void *pluto_crypto_helper_thread(void *arg)
 		    w->pcw_helpernum, status));
 #endif
 
-	for (;;) {
+	while(!exiting_pluto) {
 		w->pcw_pcrc_id = 0;
 		w->pcw_pcrc_serialno = SOS_NOBODY;
 		struct pluto_crypto_req_cont *cn = NULL;
@@ -416,8 +405,10 @@ static void *pluto_crypto_helper_thread(void *arg)
 		    DBG_log("crypto helper %d sending results from work-order %u for state #%lu to event queue",
 			    w->pcw_helpernum, w->pcw_pcrc_id,
 			    w->pcw_pcrc_serialno));
-		pluto_event_now("sending helper answer", handle_helper_answer, cn);
+		pluto_event_now("sending helper answer", w->pcw_pcrc_serialno,
+				handle_helper_answer, cn);
 	}
+	DBGF(DBG_CONTROL, "shutting down helper thread %d", w->pcw_helpernum);
 	return NULL;
 }
 
@@ -425,13 +416,18 @@ static void *pluto_crypto_helper_thread(void *arg)
  * Do the work 'inline' which really means on the event queue.
  */
 
-static void inline_worker(void *arg)
+static pluto_event_now_cb inline_worker; /* type assertion */
+
+static void inline_worker(struct state *st,
+			  struct msg_digest **mdp,
+			  void *arg)
 {
 	struct pluto_crypto_req_cont *cn = arg;
 	if (!cn->pcrc_cancelled) {
+		pexpect(st != NULL);
 		pluto_do_crypto_op(cn, -1);
 	}
-	handle_helper_answer(arg);
+	handle_helper_answer(st, mdp, arg);
 }
 
 /*
@@ -473,13 +469,9 @@ static void inline_worker(void *arg)
 void send_crypto_helper_request(struct state *st,
 				struct pluto_crypto_req_cont *cn)
 {
-	/*
-	 * transitional: caller must have set pcrc_serialno.
-	 * It ought to match cur_state->st_serialno.
-	 */
-	passert(cn->pcrc_serialno == st->st_serialno);
 	passert(st->st_serialno != SOS_NOBODY);
-	passert(cn->pcrc_func != NULL);
+	passert(cn->pcrc_serialno == SOS_NOBODY);
+	cn->pcrc_serialno = st->st_serialno;
 
 	/* set up the id */
 	static pcr_req_id pcw_id;	/* counter for generating unique request IDs */
@@ -496,7 +488,8 @@ void send_crypto_helper_request(struct state *st,
 	 * do it all ourselves?
 	 */
 	if (pc_workers == NULL) {
-		pluto_event_now("inline crypto", inline_worker, cn);
+		pluto_event_now("inline crypto", st->st_serialno,
+				inline_worker, cn);
 	} else {
 		DBG(DBG_CONTROLMORE,
 		    DBG_log("adding %s work-order %u for state #%lu",
@@ -551,7 +544,9 @@ void delete_cryptographic_continuation(struct state *st)
  * thread using the event loop.
  *
  */
-static void handle_helper_answer(void *arg)
+static void handle_helper_answer(struct state *st,
+				 struct msg_digest **mdp,
+				 void *arg)
 {
 	struct pluto_crypto_req_cont *cn = arg;
 
@@ -568,8 +563,6 @@ static void handle_helper_answer(void *arg)
 	/*
 	 * call the continuation (skip if suppressed)
 	 */
-	struct state *st = state_by_serialno(cn->pcrc_serialno);
-
 	if (cn->pcrc_cancelled) {
 		/* suppressed */
 		DBG(DBG_CONTROL, DBG_log("work-order %u state #%lu crypto result suppressed",
@@ -586,10 +579,7 @@ static void handle_helper_answer(void *arg)
 	} else {
 		st->st_offloaded_task = NULL;
 		st->st_v1_offloaded_task_in_background = false;
-		so_serial_t old_state = push_cur_state(st);
-		struct msg_digest *md = unsuspend_md(st);
-		(*cn->pcrc_func)(st, md, &cn->pcrc_pcr);
-		pop_cur_state(old_state);
+		(*cn->pcrc_func)(st, mdp, &cn->pcrc_pcr);
 	}
 
 	/* now free up the continuation */

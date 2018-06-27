@@ -22,11 +22,15 @@ OBJS += $(PROGRAM).o
 # XXX: For the moment build things by pulling in chunks of pluto.
 # What, if anything, should be moved to libswan or another library?
 #
-PLUTOOBJS += $(patsubst %.c,%.o,$(notdir $(wildcard $(top_srcdir)/programs/pluto/ike_alg*.c)))
-PLUTOOBJS += ike_info.o
+PLUTOOBJS += $(filter-out ike_alg_test.o, $(patsubst %.c,%.o,$(notdir $(wildcard $(top_srcdir)/programs/pluto/ike_alg*.c))))
 PLUTOOBJS += crypt_symkey.o
 PLUTOOBJS += crypt_hash.o
+PLUTOOBJS += crypt_prf.o
 PLUTOOBJS += test_buffer.o
+PLUTOOBJS += cbc_test_vectors.o
+PLUTOOBJS += ctr_test_vectors.o
+PLUTOOBJS += gcm_test_vectors.o
+PLUTOOBJS += prf_test_vectors.o
 # Need absolute path as 'make' (check dependencies) and 'ld' (do link)
 # are run from different directories.
 OBJS += $(addprefix $(abs_top_builddir)/programs/pluto/, $(PLUTOOBJS))
@@ -41,6 +45,7 @@ OBJS += $(LIBSERPENT)
 OBJS += $(LIBTWOFISH)
 
 LDFLAGS += $(NSS_LDFLAGS)
+LDFLAGS += $(NSPR_LDFLAGS)
 
 ifdef top_srcdir
 include $(top_srcdir)/mk/program.mk

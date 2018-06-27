@@ -7,8 +7,8 @@
  * Copyright (C) 2012 Kim B. Heino <b@bbbs.net>
  * Copyright (C) 2012 Philippe Vouters <philippe.vouters@laposte.net>
  * Copyright (C) 2013 David McCullough <ucdevel@gmail.com>
- * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
- * Copyright (C) 2013-2017 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2013-2018 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2013-2018 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013-2016 Antony Antony <antony@phenome.org>
  * Copyright (C) 2016, Andrew Cagney <cagney@gnu.org>
  *
@@ -26,6 +26,8 @@
 
 #ifndef _KEYWORDS_H_
 #define _KEYWORDS_H_
+
+#include "lset.h"
 
 #ifndef _LIBRESWAN_H
 #include "libreswan.h"
@@ -109,13 +111,15 @@ enum keyword_numeric_config_field {
 	KBF_DPDTIMEOUT,
 	KBF_METRIC,
 	KBF_PHASE2,
-	KBF_AUTHBY,
 	KBF_KEYEXCHANGE,
 	KBF_AUTO,
 	KBF_PFS,
 	KBF_SHA2_TRUNCBUG,
+	KBF_MSDH_DOWNGRADE,
+	KBF_DNS_MATCH_ID,
 	KBF_SALIFETIME,
 	KBF_REKEY,
+	KBF_REAUTH,
 	KBF_REKEYMARGIN,
 	KBF_REKEYFUZZ,
 	KBF_COMPRESS,
@@ -136,7 +140,8 @@ enum keyword_numeric_config_field {
 	KBF_NOPMTUDISC,
 	KBF_IKEv2_ALLOW_NARROWING,
 	KBF_IKEv2_PAM_AUTHORIZE,
-	KBF_CONNADDRFAMILY,
+	KBF_HOSTADDRFAMILY,
+	KBF_CLIENTADDRFAMILY,
 	KBF_FORCEBUSY, /* obsoleted for KBF_DDOS_MODE */
 	KBF_DDOS_IKE_THRESHOLD,
 	KBF_MAX_HALFOPEN_IKE,
@@ -185,6 +190,7 @@ enum keyword_string_conn_field {
 	KSCF_NEXTHOP, /* loose_enum */
 	KSCF_UPDOWN,
 	KSCF_ID,
+	KSCF_AUTHBY, /* formerly enum */
 	KSCF_RSAKEY1, /* loose_enum */
 	KSCF_RSAKEY2, /* loose_enum */
 	KSCF_CERT,
@@ -321,7 +327,7 @@ enum keyword_type {
 	kt_subnet,              /* an IP address subnet */
 	kt_idtype,              /* an ID type */
 	kt_bitstring,           /* an encryption/authentication key */
-	kt_comment,             /* a value which is a cooked comment */
+	kt_comment,             /* a value that is a cooked comment */
 	kt_obsolete,            /* option that is obsoleted, allow keyword but warn and ignore */
 	kt_obsolete_quiet,      /* option that is obsoleted, allow keyword but don't bother warning */
 };

@@ -38,19 +38,18 @@ LIB = libswan.a
 
 OBJS += x509dn.o asn1.o oid.o
 
-OBJS += addrtoa.o addrtot.o addrtypeof.o alg_info.o esp_info.o anyaddr.o \
-	constants.o datatot.o \
+OBJS += constants.o \
 	alloc.o diag.o \
-	goodmask.o id.o initaddr.o initsaid.o initsubnet.o \
+	id.o initaddr.o initsaid.o initsubnet.o \
 	iprange.o \
         keyblobtoid.o \
 	kernel_alg.o lex.o \
 	lswconf.o \
 	lswfips.o \
 	rangetosubnet.o sameaddr.o \
-	satot.o secrets.o subnetof.o subnettoa.o subnettot.o \
+	secrets.o subnettot.o \
 	subnettypeof.o ttoaddr.o ttodata.o ttoprotoport.o \
-	ttorange.o ttosa.o ttosubnet.o ttoul.o ultot.o \
+	ttorange.o ttosa.o ttosubnet.o ttoul.o \
 	secitem_chunk.o \
 	base64_rsa_pubkey.o \
 	lswnss.o \
@@ -59,6 +58,21 @@ OBJS += addrtoa.o addrtot.o addrtypeof.o alg_info.o esp_info.o anyaddr.o \
 	libreswan_loglog.o \
 	alg_byname.o
 
+# These get pulled in from the klips kernel code.
+VPATH += ${KLIPSSRCDIR}
+OBJS += addrtot.o
+OBJS += addrtypeof.o
+OBJS += anyaddr.o
+OBJS += datatot.o
+OBJS += goodmask.o
+OBJS += satot.o
+OBJS += ultot.o
+
+OBJS += alg_info.o esp_info.o ike_info.o ah_info.o
+
+OBJS += chunk.o
+OBJS += shunk.o
+
 OBJS += ip_address.o
 
 OBJS += lmod.o
@@ -66,9 +80,18 @@ OBJS += deltatime.o
 OBJS += realtime.o
 OBJS += monotime.o
 
-OBJS += debug_enum_names.o
+OBJS += debug.o
+OBJS += impair.o
+
 OBJS += libreswan_DBG_dump.o
 OBJS += libreswan_DBG_log.o
+OBJS += libreswan_exit_log_errno.o
+OBJS += libreswan_log_errno.o
+OBJS += libreswan_pexpect.o
+OBJS += libreswan_pexpect_log.o
+OBJS += libreswan_bad_case.o
+
+OBJS += rate_log.o
 
 OBJS += lswlog.o
 OBJS += lswlog_dbg.o
@@ -92,12 +115,15 @@ OBJS += lswlog_passert.o
 
 # Crypto code:
 #
-# XXX: More is comming as it gets cleaned up and made more library
+# XXX: More is coming as it gets cleaned up and made more library
 # like.
 
 # not much left using this
 CFLAGS += -I$(top_srcdir)/lib/libcrypto
 
+OBJS += ike_alg_test.o
+OBJS += ike_alg_encrypt_nss_cbc_ops.o
+OBJS += ike_alg_encrypt_nss_ctr_ops.o
 OBJS += ike_alg_desc.o
 ifeq ($(USE_3DES),true)
 OBJS += ike_alg_3des.o
@@ -109,7 +135,7 @@ OBJS += ike_alg_cast.o
 endif
 OBJS += ike_alg_dh.o
 OBJS += ike_alg_md5.o
-OBJS += ike_alg_null.o
+OBJS += ike_alg_none.o
 ifeq ($(USE_RIPEMD),true)
 OBJS += ike_alg_ripemd.o
 endif
@@ -146,15 +172,8 @@ OBJS += pfkey_v2_build.o pfkey_v2_ext_bits.o pfkey_v2_parse.o
 OBJS += pfkey_v2_debug.o
 endif
 
-CFLAGS+=-I${LIBRESWANSRCDIR}/lib/libcrypto/libsha2
-CFLAGS+=-I${LIBRESWANSRCDIR}/lib/libcrypto/libaes_xcbc
-
-KLIPSSRCDIR?=${LIBRESWANSRCDIR}/linux/net/ipsec
-
-VPATH+= ${KLIPSSRCDIR}
-
 # Original flags; this is a mess.
-CFLAGS+=${PORTINCLUDE} -I. -I${KLIPSSRCDIR} -I${KLIPSINC}
+CFLAGS+=${PORTINCLUDE} -I. -I${KLIPSINC}
 CFLAGS+=-I${LIBRESWANSRCDIR}
 CFLAGS+= $(NSSFLAGS)
 CFLAGS+=-I${LIBRESWANSRCDIR}/include ${PORTINCLUDE}
@@ -178,29 +197,3 @@ $(abs_builddir)/version.c: ${KLIPSSRCDIR}/version.in.c $(top_srcdir)/Makefile.ve
 	    ${KLIPSSRCDIR}/version.in.c \
 	    > $@.tmp
 	mv $@.tmp $@
-
-# developer-only stuff
-
-test-%: %.c
-	${CC} ${CFLAGS} -D`echo $* | tr 'a-z' 'A-Z'`_MAIN $*.c -o test-$*
-
-l:
-	$(MAKE) $(LIB) ARFLAGS=crv CFLAGS=-O
-	$(RANLIB) $(LIB)
-
-t:	$(LIB)
-	ln -f -s ${KLIPSSRCDIR}/ttosubnet.c try1a.c
-	${CC} ${CFLAGS} -DTTOSUBNET_MAIN try1a.c $(LIB) -o try1a
-	./try1a -r
-	ln -f -s ${KLIPSSRCDIR}/ttodata.c try2.c
-	${CC} ${CFLAGS} -DTTODATA_MAIN try2.c $(LIB) -o try2
-	./try2 -r
-	ln -f -s ${KLIPSSRCDIR}/ttosa.c try4a.c
-	${CC} ${CFLAGS} -DTTOSA_MAIN try4a.c $(LIB) -o try4a
-	./try4a -r
-	ln -f -s ${KLIPSSRCDIR}/rangetosubnet.c try6.c
-	${CC} ${CFLAGS} -DRANGETOSUBNET_MAIN try6.c $(LIB) -o try6
-	./try6 -r
-	ln -f -s ${KLIPSSRCDIR}/addrtot.c try7.c
-	${CC} ${CFLAGS} -DADDRTOT_MAIN try7.c $(LIB) -o try7
-	./try7 -r

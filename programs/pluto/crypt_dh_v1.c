@@ -73,16 +73,14 @@ void cancelled_v1_dh(struct pcr_v1_dh *dh)
 
 /*
  * invoke helper to do DH work (IKEv1)
- *
- * Note: dh must be heap-allocated.
  */
-void start_dh_secretiv(struct pluto_crypto_req_cont *dh,
-		       struct state *st,
-		       enum original_role role,
-		       const struct oakley_group_desc *oakley_group2)
+void start_dh_v1_secretiv(crypto_req_cont_func fn, const char *name,
+			  struct state *st, enum original_role role,
+			  const struct oakley_group_desc *oakley_group2)
 {
 	const chunk_t *pss = get_psk(st->st_connection);
 
+	struct pluto_crypto_req_cont *dh = new_pcrc(fn, name);
 	struct pcr_v1_dh *const dhq = pcr_v1_dh_init(dh, pcr_compute_dh_iv);
 
 	/* convert appropriate data to dhq */
@@ -94,7 +92,8 @@ void start_dh_secretiv(struct pluto_crypto_req_cont *dh,
 	dhq->key_size = st->st_oakley.enckeylen / BITS_PER_BYTE;
 	dhq->salt_size = st->st_oakley.ta_encrypt->salt_size;
 
-	passert(dhq->oakley_group != OAKLEY_GROUP_invalid);
+	passert(dhq->oakley_group != NULL && dhq->oakley_group != &unset_group);
+
 	if (pss != NULL)
 		WIRE_CLONE_CHUNK(*dhq, pss, *pss);
 	WIRE_CLONE_CHUNK(*dhq, ni, st->st_ni);
@@ -112,7 +111,6 @@ void start_dh_secretiv(struct pluto_crypto_req_cont *dh,
 	memcpy(WIRE_CHUNK_PTR(*dhq, rcookie),
 	       st->st_rcookie, COOKIE_SIZE);
 
-	passert(dhq->oakley_group != OAKLEY_GROUP_invalid);
 	send_crypto_helper_request(st, dh);
 }
 
@@ -144,13 +142,12 @@ bool finish_dh_secretiv(struct state *st,
 	}
 }
 
-void start_dh_secret(struct pluto_crypto_req_cont *cn,
-		     struct state *st,
-		     enum original_role role,
-		     const struct oakley_group_desc *oakley_group2)
+void start_dh_v1_secret(crypto_req_cont_func fn, const char *name,
+			struct state *st, enum original_role role,
+			const struct oakley_group_desc *oakley_group2)
 {
 	const chunk_t *pss = get_psk(st->st_connection);
-
+	struct pluto_crypto_req_cont *cn = new_pcrc(fn, name);
 	struct pcr_v1_dh *const dhq = pcr_v1_dh_init(cn, pcr_compute_dh);
 
 	/* convert appropriate data to dhq */

@@ -23,6 +23,7 @@
 #include <net/if.h>
 
 #include "monotime.h"
+#include "reqid.h"
 
 extern bool can_do_IPcomp;  /* can system actually perform IPCOMP? */
 extern reqid_t global_reqids;
@@ -146,6 +147,8 @@ struct kernel_sa {
 	 * struct sa_marks *sa_marks;
 	 */
 };
+
+extern const struct kernel_sa empty_sa;	/* zero or null in all the right places */
 
 struct raw_iface {
 	ip_address addr;
@@ -358,6 +361,8 @@ extern void init_kernel(void);
 struct connection;      /* forward declaration of tag */
 extern bool trap_connection(struct connection *c);
 extern void unroute_connection(struct connection *c);
+extern void migration_up(struct connection *c,  struct state *st);
+extern void migration_down(struct connection *c,  struct state *st);
 
 extern bool has_bare_hold(const ip_address *src, const ip_address *dst,
 			  int transport_proto);
@@ -447,14 +452,6 @@ extern void expire_bare_shunts(void);
 extern void add_bare_shunt(const ip_subnet *ours, const ip_subnet *his,
 		int transport_proto, ipsec_spi_t shunt_spi,
 		const char *why);
-
-/*
- * Used to pass default priority from kernel_ops-> functions.
- * Our priority is based on an unsigned long int, with the
- * lower number being the highest priority, but this
- * might need to be translated depending on the IPsec stack.
- */
-#define DEFAULT_IPSEC_SA_PRIORITY 0
 
 // TEMPORARY
 extern bool raw_eroute(const ip_address *this_host,

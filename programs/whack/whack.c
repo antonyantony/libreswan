@@ -13,7 +13,7 @@
  * Copyright (C) 2012 Philippe Vouters <philippe.vouters@laposte.net>
  * Copyright (C) 2013 David McCullough <ucdevel@gmail.com>
  * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
- * Copyright (C) 2013-2017 Antony Antony <antony@phenome.org>
+ * Copyright (C) 2013-2018 Antony Antony <antony@phenome.org>
  * Copyright (C) 2017 Sahana Prasad <sahana.prasad07@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -73,8 +73,9 @@ static void help(void)
 		"	[--ca <distinguished name>] \\\n"
 		"	[--nexthop <ip-address>] \\\n"
 		"	[--client <subnet>] \\\n"
-		"	[--ikeport <port-number>] [--srcip <ip-address>] [--vtiip <ip-address>/mask]\\\n"
 		"	[--clientprotoport <protocol>/<port>] [--dnskeyondemand] \\\n"
+		"	[--ikeport <port-number>] [--srcip <ip-address>] \\\n"
+		"	[--vtiip <ip-address>/mask] \\\n"
 		"	[--updown <updown>] \\\n"
 		"	[--authby <psk | rsasig | null>] \\\n"
 		"	[--groups <access control groups>] \\\n"
@@ -82,12 +83,15 @@ static void help(void)
 		"	[--ca <distinguished name>] \\\n"
 		"	[--sendca no|issuer|all] [--sendcert] \\\n"
 		"	[--nexthop <ip-address>] \\\n"
-		"	[--client <subnet> | --clientwithin <address range>] \\\n"
+		"	[--client <subnet> \\\n"
 		"	[--clientprotoport <protocol>/<port>] \\\n"
 		"	[--dnskeyondemand] [--updown <updown>] \\\n"
-		"	[--psk] | [--rsasig] | [--rsa-sha2] | [--rsa-sha2_256] | [--rsa-sha2_384 ] | [--rsa-sha2_512 ] | [ --auth-null] | [--auth-never] \\\n"
-		"	[--encrypt] [--authenticate] [--compress] \\\n"
-		"	[--overlapip] [--tunnel] [--pfs] \\\n"
+		"	[--psk] | [--rsasig] | [--rsa-sha2] | [--rsa-sha2_256] | \\\n"
+		"		[--rsa-sha2_384 ] | [--rsa-sha2_512 ] | [ --auth-null] | \\\n"
+		"		[--auth-never] \\\n"
+		"	[--encrypt] [--authenticate] [--compress] [--sha2-truncbug] \\\n"
+		"	[--msdh-downgrade] \\\n"
+		"	[--overlapip] [--tunnel] [--pfs] [--dns-match-id] \\\n"
 		"	[--pfsgroup modp1024 | modp1536 | modp2048 | \\\n"
 		"		modp3072 | modp4096 | modp6144 | modp8192 \\\n"
 		"		dh22 | dh23 | dh24] \\\n"
@@ -116,7 +120,7 @@ static void help(void)
 		"	[--dontrekey] [--aggressive] \\\n"
 		"	[--initialcontact] [--cisco-unity] [--fake-strongswan] \\\n"
 		"	[--encaps <auto|yes|no>] [--no-nat-keepalive] \\\n"
-		"	[--ikev1natt <both|rfc|drafts> \\\n"
+		"	[--ikev1-natt <both|rfc|drafts> \\\n"
 		"	[--dpddelay <seconds> --dpdtimeout <seconds>] \\\n"
 		"	[--dpdaction (clear|hold|restart)] \\\n"
 		"	[--xauthserver | --xauthclient] \\\n"
@@ -127,8 +131,9 @@ static void help(void)
 		"	[--modecfgbanner <login banner>] \\\n"
 		"	[--metric <metric>] \\\n"
 		"	[--nflog-group <groupnum>] \\\n"
-		"       [--conn-mark <mark/mask>] [--conn-mark-in <mark/mask>] [--conn-mark-out <mark/mask>] \\\n"
-		"       [--vti-iface <iface> ] [--vti-routing] [--vti-shared]\\\n"
+		"	[--conn-mark <mark/mask>] [--conn-mark-in <mark/mask>] \\\n"
+		"	[--conn-mark-out <mark/mask>] \\\n"
+		"	[--vti-iface <iface> ] [--vti-routing] [--vti-shared] \\\n"
 		"	[--initiateontraffic | --pass | --drop | --reject] \\\n"
 		"	[--failnone | --failpass | --faildrop | --failreject] \\\n"
 		"	[--negopass ] \\\n"
@@ -142,7 +147,8 @@ static void help(void)
 		"	[--username <name>] [--xauthpass <pass>]\n"
 		"\n"
 		"opportunistic initiation: whack [--tunnelipv4 | --tunnelipv6] \\\n"
-		"	--oppohere <ip-address> --oppothere <ip-address>\n"
+		"	--oppohere <ip-address> --oppothere <ip-address> \\\n"
+		"	[-oppotproto <protocol>]\n"
 		"\n"
 		"delete: whack --delete --name <connection_name>\n"
 		"\n"
@@ -175,9 +181,10 @@ static void help(void)
 		"\n"
 		"purge: whack --purgeocsp\n"
 		"\n"
-		"reread: whack [--rereadsecrets] [--fetchcrls] [--rereadall] \\\n"
+		"reread: whack [--rereadsecrets] [--fetchcrls] [--rereadall]\n"
 		"\n"
-		"status: whack --status --trafficstatus --globalstatus --clearstats --shuntstatus --fipsstatus\n"
+		"status: whack [--status] | [--trafficstatus] | [--globalstatus] | \\\n"
+		"	[--clearstats] | [--shuntstatus] | [--fipsstatus]\n"
 		"\n"
 #ifdef HAVE_SECCOMP
 		"status: whack --seccomp-crashtest (CAREFUL!)\n"
@@ -304,8 +311,10 @@ enum option_enums {
 
 	OPT_OPPO_HERE,
 	OPT_OPPO_THERE,
+	OPT_OPPO_PROTO,
+	OPT_OPPO_DPORT,
 
-#   define OPT_LAST1 OPT_OPPO_THERE	/* last "normal" option, range 1 */
+#   define OPT_LAST1 OPT_OPPO_DPORT	/* last "normal" option, range 1 */
 
 #define OPT_FIRST2  OPT_ASYNC	/* first normal option, range 2 */
 
@@ -535,6 +544,8 @@ static const struct option long_opts[] = {
 
 	{ "oppohere", required_argument, NULL, OPT_OPPO_HERE + OO },
 	{ "oppothere", required_argument, NULL, OPT_OPPO_THERE + OO },
+	{ "oppoproto", required_argument, NULL, OPT_OPPO_PROTO + OO },
+	{ "oppodport", required_argument, NULL, OPT_OPPO_DPORT + OO },
 
 	{ "asynchronous", no_argument, NULL, OPT_ASYNC + OO },
 
@@ -589,7 +600,10 @@ static const struct option long_opts[] = {
 	{ "tunnelipv4", no_argument, NULL, CD_TUNNELIPV4 + OO },
 	{ "tunnelipv6", no_argument, NULL, CD_TUNNELIPV6 + OO },
 	PS("pfs", PFS),
-	{ "sha2_truncbug", no_argument, NULL, CD_SHA2_TRUNCBUG + OO },
+	PS("msdh-downgrade", MSDH_DOWNGRADE),
+	PS("dns-match-id", DNS_MATCH_ID),
+	PS("sha2-truncbug", SHA2_TRUNCBUG),
+	PS("sha2_truncbug", SHA2_TRUNCBUG), /* backwards compatibility */
 	PS("aggressive", AGGRESSIVE),
 	PS("aggrmode", AGGRESSIVE), /*  backwards compatibility */
 
@@ -618,7 +632,8 @@ static const struct option long_opts[] = {
 	{ "forceencaps", no_argument, NULL, CD_FORCEENCAPS + OO }, /* backwards compatibility */
 	{ "encaps", required_argument, NULL, CD_ENCAPS + OO },
 	{ "no-nat_keepalive", no_argument, NULL,  CD_NO_NAT_KEEPALIVE },
-	{ "ikev1_natt", required_argument, NULL, CD_IKEV1_NATT + OO },
+	{ "ikev1_natt", required_argument, NULL, CD_IKEV1_NATT + OO },	/* obsolete _ */
+	{ "ikev1-natt", required_argument, NULL, CD_IKEV1_NATT + OO },
 	{ "initialcontact", no_argument, NULL,  CD_INITIAL_CONTACT },
 	{ "cisco_unity", no_argument, NULL, CD_CISCO_UNITY },	/* obsolete _ */
 	{ "cisco-unity", no_argument, NULL, CD_CISCO_UNITY },
@@ -700,6 +715,8 @@ static const struct option long_opts[] = {
 	PS("esn", ESN_YES),
 	PS("decap-dscp", DECAP_DSCP),
 	PS("nopmtudisc", NOPMTUDISC),
+	PS("msdh-downgrade", MSDH_DOWNGRADE),
+	PS("dns-match-id", DNS_MATCH_ID),
 #undef PS
 
 
@@ -780,20 +797,10 @@ static void update_ports(struct whack_message *m)
 }
 
 static void check_end(struct whack_end *this, struct whack_end *that,
-		      bool default_nexthop, sa_family_t caf, sa_family_t taf)
+		      bool default_nexthop UNUSED, sa_family_t caf, sa_family_t taf)
 {
 	if (caf != addrtypeof(&this->host_addr))
 		diag("address family of host inconsistent");
-
-	if (default_nexthop) {
-		if (isanyaddr(&that->host_addr))
-			diag("our nexthop must be specified when other host is a %any or %opportunistic");
-
-		this->host_nexthop = that->host_addr;
-	}
-
-	if (caf != addrtypeof(&this->host_nexthop))
-		diag("address family of nexthop inconsistent");
 
 	if (this->has_client) {
 		if (taf != subnettypeof(&this->client))
@@ -852,6 +859,8 @@ int main(int argc, char **argv)
 	int xauthpasslen = 0;
 	bool gotusername = FALSE, gotxauthpass = FALSE;
 	const char *ugh;
+	int oppo_dport = 0;
+	bool ignore_errors = FALSE;
 
 	/* check division of numbering space */
 	assert(OPTION_OFFSET + OPTION_ENUMS_LAST < NUMERIC_ARG);
@@ -879,8 +888,6 @@ int main(int argc, char **argv)
 
 	msg.remotepeertype = NON_CISCO;
 
-	msg.sha2_truncbug = FALSE;
-
 	/* Network Manager support */
 #ifdef HAVE_NM
 	msg.nmconfigured = FALSE;
@@ -897,7 +904,7 @@ int main(int argc, char **argv)
 	msg.modecfg_dns = NULL;
 	msg.modecfg_banner = NULL;
 
-	msg.nic_offload = nic_offload_auto;
+	msg.nic_offload = yna_auto;
 	msg.sa_ike_life_seconds = deltatime(IKE_SA_LIFETIME_DEFAULT);
 	msg.sa_ipsec_life_seconds = deltatime(IPSEC_SA_LIFETIME_DEFAULT);
 	msg.sa_rekey_margin = deltatime(SA_REPLACEMENT_MARGIN_DEFAULT);
@@ -1224,10 +1231,12 @@ int main(int argc, char **argv)
 
 		case OPT_STATUS:	/* --status */
 			msg.whack_status = TRUE;
+			ignore_errors = TRUE;
 			continue;
 
 		case OPT_GLOBAL_STATUS:	/* --global-status */
 			msg.whack_global_status = TRUE;
+			ignore_errors = TRUE;
 			continue;
 
 		case OPT_CLEAR_STATS:	/* --clearstats */
@@ -1236,14 +1245,17 @@ int main(int argc, char **argv)
 
 		case OPT_TRAFFIC_STATUS:	/* --trafficstatus */
 			msg.whack_traffic_status = TRUE;
+			ignore_errors = TRUE;
 			continue;
 
 		case OPT_SHUNT_STATUS:	/* --shuntstatus */
 			msg.whack_shunt_status = TRUE;
+			ignore_errors = TRUE;
 			continue;
 
 		case OPT_FIPS_STATUS:	/* --fipsstatus */
 			msg.whack_fips_status = TRUE;
+			ignore_errors = TRUE;
 			continue;
 
 #ifdef HAVE_SECCOMP
@@ -1266,7 +1278,7 @@ int main(int argc, char **argv)
 			}
 			continue;
 
-		case OPT_OPPO_THERE:	/* --oppohere <ip-address> */
+		case OPT_OPPO_THERE:	/* --oppothere <ip-address> */
 			tunnel_af_used_by = long_opts[long_index].name;
 			diagq(ttoaddr(optarg, 0, msg.tunnel_addr_family,
 				      &msg.oppo_peer_client), optarg);
@@ -1274,6 +1286,14 @@ int main(int argc, char **argv)
 				diagq("0.0.0.0 or 0::0 isn't a valid client address",
 					optarg);
 			}
+			continue;
+
+		case OPT_OPPO_PROTO:	/* --oppoproto <protocol> */
+			msg.oppo_proto = strtol(optarg, NULL, 0);
+			continue;
+
+		case OPT_OPPO_DPORT:	/* --oppodport <port> */
+			oppo_dport = strtol(optarg, NULL, 0);
 			continue;
 
 		case OPT_ASYNC:
@@ -1293,15 +1313,18 @@ int main(int argc, char **argv)
 		case LST_PSKS:	/* --listpsks */
 		case LST_EVENTS:	/* --listevents */
 			msg.whack_list |= LELEM(c - LST_PUBKEYS);
+			ignore_errors = TRUE;
 			continue;
 
 		case LST_CHECKPUBKEYS:	/* --checkpubkeys */
 			msg.whack_list |= LELEM(LST_PUBKEYS - LST_PUBKEYS);
 			msg.whack_check_pub_keys = TRUE;
+			ignore_errors = TRUE;
 			continue;
 
 		case LST_ALL:	/* --listall */
 			msg.whack_list = LIST_ALL;
+			ignore_errors = TRUE;
 			continue;
 
 		/* Connection Description options */
@@ -1392,12 +1415,12 @@ int main(int argc, char **argv)
 
 		case END_SENDCERT:
 			if (streq(optarg, "yes") || streq(optarg, "always")) {
-				msg.right.sendcert = cert_alwayssend;
+				msg.right.sendcert = CERT_ALWAYSSEND;
 			} else if (streq(optarg,
 					 "no") || streq(optarg, "never")) {
-				msg.right.sendcert = cert_neversend;
+				msg.right.sendcert = CERT_NEVERSEND;
 			} else if (streq(optarg, "ifasked")) {
-				msg.right.sendcert = cert_sendifasked;
+				msg.right.sendcert = CERT_SENDIFASKED;
 			} else {
 				diagq("whack sendcert value is not legal",
 				      optarg);
@@ -1548,6 +1571,9 @@ int main(int argc, char **argv)
 		/* --donotrekey */
 		case CDP_SINGLETON + POLICY_DONT_REKEY_IX:
 
+		/* --reauth */
+		case CDP_SINGLETON + POLICY_REAUTH_IX:
+
 		/* --modecfgpull */
 		case CDP_SINGLETON + POLICY_MODECFG_PULL_IX:
 		/* --aggrmode */
@@ -1587,6 +1613,10 @@ int main(int argc, char **argv)
 		case CDP_SINGLETON + POLICY_DECAP_DSCP_IX:
 		/* --nopmtudisc */
 		case CDP_SINGLETON + POLICY_NOPMTUDISC_IX:
+		/* --msdh-downgrade */
+		case CDP_SINGLETON + POLICY_MSDH_DOWNGRADE_IX:
+		/* --dns-match-id */
+		case CDP_SINGLETON + POLICY_DNS_MATCH_ID_IX:
 
 			msg.policy |= LELEM(c - CDP_SINGLETON);
 			continue;
@@ -1662,27 +1692,27 @@ int main(int argc, char **argv)
 
 		/* backwards compatibility */
 		case CD_FORCEENCAPS:
-			msg.encaps = encaps_yes;
+			msg.encaps = yna_yes;
 			continue;
 
 		case CD_ENCAPS:
 			if (streq(optarg, "auto"))
-				msg.encaps = encaps_auto;
+				msg.encaps = yna_auto;
 			else if (streq(optarg, "yes"))
-				msg.encaps = encaps_yes;
+				msg.encaps = yna_yes;
 			else if (streq(optarg, "no"))
-				msg.encaps = encaps_no;
+				msg.encaps = yna_no;
 			else
 				diag("--encaps options are 'auto', 'yes' or 'no'");
 			continue;
 
 		case CD_NIC_OFFLOAD:  /* --nic-offload */
 			if (streq(optarg, "no"))
-				msg.nic_offload = nic_offload_no;
+				msg.nic_offload = yna_no;
 			else if (streq(optarg, "yes"))
-				msg.nic_offload = nic_offload_yes;
+				msg.nic_offload = yna_yes;
 			else if (streq(optarg, "auto"))
-				msg.nic_offload = nic_offload_auto;
+				msg.nic_offload = yna_auto;
 			else
 				diag("--nic-offload options are 'no', 'yes' or 'auto'");
 			continue;
@@ -1693,11 +1723,13 @@ int main(int argc, char **argv)
 
 		case CD_IKEV1_NATT:	/* --ikev1_natt */
 			if (streq(optarg, "both"))
-				msg.ikev1_natt = natt_both;
+				msg.ikev1_natt = NATT_BOTH;
 			else if (streq(optarg, "rfc"))
-				msg.ikev1_natt = natt_rfc;
+				msg.ikev1_natt = NATT_RFC;
 			else if (streq(optarg, "drafts"))
-				msg.ikev1_natt = natt_drafts;
+				msg.ikev1_natt = NATT_DRAFTS;
+			else if (streq(optarg, "none"))
+				msg.ikev1_natt = NATT_NONE;
 			else
 				diag("--ikev1-natt options are 'both', 'rfc' or 'drafts'");
 			continue;
@@ -1755,10 +1787,6 @@ int main(int argc, char **argv)
 				msg.remotepeertype = CISCO;
 			else
 				msg.remotepeertype = NON_CISCO;
-			continue;
-
-		case CD_SHA2_TRUNCBUG:	/* --sha2_truncbug */
-			msg.sha2_truncbug = TRUE;
 			continue;
 
 #ifdef HAVE_NM
@@ -2088,6 +2116,10 @@ int main(int argc, char **argv)
 		break;
 	}
 
+
+	if (oppo_dport != 0)
+		setportof(htons(oppo_dport), &msg.oppo_peer_client);
+
 	if (optind != argc) {
 		/*
 		 * If you see this message unexpectedly, perhaps the
@@ -2125,10 +2157,6 @@ int main(int argc, char **argv)
 
 		if (!LHAS(end_seen, END_HOST - END_FIRST))
 			diag("connection missing --host after --to");
-
-		if (isanyaddr(&msg.left.host_addr) &&
-		    isanyaddr(&msg.right.host_addr))
-			diag("hosts cannot both be 0.0.0.0 or 0::0");
 
 		if (msg.policy & POLICY_OPPORTUNISTIC) {
 			if ((msg.policy & (POLICY_PSK | POLICY_RSASIG)) !=
@@ -2192,7 +2220,7 @@ int main(int argc, char **argv)
 		if (!LHAS(opts1_seen, OPT_NAME))
 			diag("missing --name <connection_name>");
 	} else if (msg.whack_options == LEMPTY) {
-		if (LHAS(opts1_seen, OPT_NAME))
+		if (LHAS(opts1_seen, OPT_NAME)  && !LELEM(OPT_TRAFFIC_STATUS))
 			diag("no reason for --name");
 	}
 
@@ -2441,6 +2469,9 @@ int main(int argc, char **argv)
 				break;
 
 			default:
+				/* Only RC_ codes between RC_DUPNAME and RC_NEW_STATE are errors */
+				if (s > 0 && (s < RC_DUPNAME || s >= RC_NEW_STATE))
+					s = 0;
 				exit_status = msg.whack_async ?
 					0 : s;
 				break;
@@ -2449,6 +2480,9 @@ int main(int argc, char **argv)
 			ls = le;
 		}
 	}
+
+	if (ignore_errors)
+		return 0;
 
 	return exit_status;
 }

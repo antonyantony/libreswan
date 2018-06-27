@@ -8,6 +8,8 @@
 
 extern void init_ikev1(void);
 
+const struct oakley_group_desc *ikev1_quick_pfs(struct alg_info_esp *aie);
+
 void ikev1_init_out_pbs_echo_hdr(struct msg_digest *md, bool enc, u_int8_t np,
 				 pb_stream *output_stream, uint8_t *output_buffer,
 				 size_t sizeof_output_buffer,
@@ -48,6 +50,8 @@ extern bool ikev1_ship_KE(struct state *st,
 		    pb_stream *outs, u_int8_t np);
 
 /* **MAIN MODE FUNCTIONS** in ikev1_main.c */
+
+/* extern initiator_function main_outI1; */
 extern void main_outI1(int whack_sock,
 		       struct connection *c,
 		       struct state *predecessor,
@@ -59,6 +63,7 @@ extern void main_outI1(int whack_sock,
 #endif
 		       );
 
+/* extern initiator_function aggr_outI1; */
 extern void aggr_outI1(int whack_sock,
 		       struct connection *c,
 		       struct state *predecessor,
@@ -70,15 +75,11 @@ extern void aggr_outI1(int whack_sock,
 #endif
 		       );
 
-extern bool ikev1_delete_out(struct state *st);
+extern void send_v1_delete(struct state *st);
 
 extern bool ikev1_decode_peer_id(struct msg_digest *md, bool initiator,
 			   bool aggrmode);
 
-extern bool ikev1_ship_ca_chain(cert_t chain, cert_t ee,
-					      pb_stream *outs,
-					      u_int8_t setnp,
-					      bool send_full_chain);
 extern size_t RSA_sign_hash(struct connection *c,
 			    u_char sig_val[RSA_MAX_OCTETS],
 			    const u_char *hash_val, size_t hash_len);
@@ -88,16 +89,6 @@ main_mode_hash(struct state *st,
 	       u_char *hash_val,        /* resulting bytes */
 	       bool hashi,              /* Initiator? */
 	       const pb_stream *idpl);  /* ID payload, as PBS; cur must be at end */
-
-enum key_oppo_step {
-	kos_null,
-	kos_his_txt
-#ifdef USE_KEYRR
-	, kos_his_key
-#endif
-};
-
-typedef stf_status key_tail_fn(struct msg_digest *md);
 
 extern stf_status oakley_id_and_auth(struct msg_digest *md,
 				     bool initiator,                    /* are we the Initiator? */
@@ -122,11 +113,14 @@ void doi_log_cert_thinking(u_int16_t auth,
 
 #if 0	/* not yet disentangled from spdb.h */
 extern bool ikev1_out_sa(pb_stream *outs,
-		struct db_sa *sadb,
+		const struct db_sa *sadb,
 		struct state *st,
 		bool oakley_mode,
 		bool aggressive_mode,
 		enum next_payload_types_ikev1 np);
 #endif
+
+bool ikev1_encrypt_message(pb_stream *pbs, struct state *st);
+bool ikev1_close_message(pb_stream *pbs, struct state *st);
 
 #endif

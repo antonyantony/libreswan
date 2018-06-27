@@ -184,23 +184,6 @@ static int keyidtoa(char *dst, size_t dstlen, chunk_t keyid)
 	return ((n < (int)dstlen) ? n : (int)dstlen) - 1;
 }
 
-void iptoid(const ip_address *ip, struct id *id)
-{
-	*id = empty_id;
-
-	switch (addrtypeof(ip)) {
-	case AF_INET:
-		id->kind = ID_IPV4_ADDR;
-		break;
-	case AF_INET6:
-		id->kind = ID_IPV6_ADDR;
-		break;
-	default:
-		bad_case(addrtypeof(ip));
-	}
-	id->ip_addr = *ip;
-}
-
 int idtoa(const struct id *id, char *dst, size_t dstlen)
 {
 	int n;
@@ -291,35 +274,6 @@ void escape_metachar(const char *src, char *dst, size_t dstlen)
 	}
 	passert(1 <= dstlen);	/* no truncation! */
 	*dst = '\0';
-}
-
-/*
- * Remove all shell metacharacters ', \, ", `, and $ in a character string
- */
-void remove_metachar(const char *src, char *dst, size_t dstlen)
-{
-	bool changed = FALSE;
-
-	passert(dstlen >= 1);
-	while (*src != '\0' && dstlen > 1) {
-		if ((*src >= '0' && *src <= '9') ||
-			(*src >= 'a' && *src <= 'z') ||
-			(*src >= 'A' && *src <= 'Z') ||
-			*src == '_' || *src == '-' ||
-			*src == '.') {
-			*dst++ = *src;
-			dstlen--;
-		} else {
-			changed = TRUE;
-		}
-		src++;
-	}
-	*dst = '\0';
-	if (changed) {
-		libreswan_log(
-			"Warning: XAUTH username changed from '%s' to '%s'",
-			src, dst);
-	}
 }
 
 /*
@@ -460,6 +414,9 @@ bool same_id(const struct id *a, const struct id *b)
 }
 
 /* compare two struct id values, DNs can contain wildcards */
+
+static bool match_dn_any_order_wild(chunk_t a, chunk_t b, int *wildcards);	/* forward */
+
 bool match_id(const struct id *a, const struct id *b, int *wildcards)
 {
 	bool match;
@@ -641,7 +598,7 @@ bool same_dn_any_order(chunk_t a, chunk_t b)
 	return ret;
 }
 
-bool match_dn_any_order_wild(chunk_t a, chunk_t b, int *wildcards)
+static bool match_dn_any_order_wild(chunk_t a, chunk_t b, int *wildcards)
 {
 	bool ret = match_dn(a, b, wildcards);
 

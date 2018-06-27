@@ -195,7 +195,6 @@ static err_t add_rsa_pubkey_to_pluto(struct p_dns_req *dnsr, ldns_rdf *rdf,
 	struct id keyid = st->st_connection->spd.that.id;
 	chunk_t keyval = empty_chunk;
 	err_t ugh = NULL;
-	enum dns_auth_level al;
 	char thatidbuf[IDTOA_BUF];
 	char ttl_buf[ULTOT_BUF + 32]; /* 32 is aribitary */
 	u_int32_t ttl_used;
@@ -227,11 +226,8 @@ static err_t add_rsa_pubkey_to_pluto(struct p_dns_req *dnsr, ldns_rdf *rdf,
 		dnsr->delete_exisiting_keys = FALSE;
 	}
 
-	if (dnsr->secure == UB_EVNET_SECURE) {
-		al = DNSSEC_SECURE;
-	} else {
-		al = DNSSEC_INSECURE;
-	}
+	enum dns_auth_level al = dnsr->secure == UB_EVNET_SECURE ?
+		DNSSEC_SECURE : DNSSEC_INSECURE;
 
 	if (keyid.kind == ID_FQDN) {
 		DBG(DBG_DNS, DBG_log("add IPSECKEY pluto as publickey %s %s %s",
@@ -418,16 +414,21 @@ static err_t process_dns_resp(struct p_dns_req *dnsr)
 		return "DNS response contains no answer";
 	}
 
-	if (dnsr->secure == UB_EVENT_BOGUS) {
+	switch (dnsr->secure) {
+	default:	/* treat as bogus */
+	case UB_EVENT_BOGUS:
 		return "unbound returned BOGUS response - ignored";
-	}
 
-	if (dnsr->secure == UB_EVENT_INSECURE) {
-		/* PAUL add impair here */
+	case UB_EVENT_INSECURE:
+		if (IMPAIR(ALLOW_DNS_INSECURE)) {
+			DBG(DBG_DNS, DBG_log("Allowing insecure DNS response due to impair"));
+			return parse_rr(dnsr, ldnspkt);
+		}
 		return "unbound returned INSECURE response - ignored";
-	}
 
-	return parse_rr(dnsr, ldnspkt);
+	case UB_EVNET_SECURE:
+		return parse_rr(dnsr, ldnspkt);
+	}
 }
 
 void  free_ipseckey_dns(struct p_dns_req *d)
@@ -500,13 +501,18 @@ static void ipseckey_dbg_dns_resp(struct p_dns_req *dnsr)
 			(unsigned long)served_delta.tv_sec,
 			(unsigned long)(served_delta.tv_usec * 1000000)));
 
-	DBG(DBG_DNS, DBG_log("DNSSEC=%s %s MSG SIZE %d bytes",
-				(dnsr->secure == UB_EVNET_SECURE) ? "SECURE" :
-					(dnsr->secure == UB_EVENT_INSECURE) ?
-						"INSECURE" : "BOGUS",
-				(dnsr->secure == UB_EVENT_BOGUS) ?
-				dnsr->why_bogus : "",
-				dnsr->wire_len));
+	DBG(DBG_DNS, {
+		const enum lswub_resolve_event_secure_kind k = dnsr->secure;
+
+		DBG_log("DNSSEC=%s %s MSG SIZE %d bytes",
+			k == UB_EVNET_SECURE ? "SECURE"
+			: k == UB_EVENT_INSECURE ? "INSECURE"
+			: k == UB_EVENT_BOGUS ? "BOGUS"
+			: "invalid lswub_resolve_event_secure_kind",
+
+			k == UB_EVENT_BOGUS ? dnsr->why_bogus : "",
+			dnsr->wire_len);
+	});
 }
 
 static void idr_ipseckey_fetch_continue(struct p_dns_req *dnsr)
@@ -565,7 +571,7 @@ static void idi_ipseckey_fetch_tail(struct state *st, bool err)
 	release_any_md(&md);
 	reset_globals();
 }
-#ifdef NOT_YET
+
 static void idi_a_fetch_continue(struct p_dns_req *dnsr)
 {
 	struct state *st = state_with_serialno(dnsr->so_serial_t);
@@ -629,7 +635,6 @@ static void idi_a_fetch_continue(struct p_dns_req *dnsr)
 
 	idi_ipseckey_fetch_tail(st, err);
 }
-#endif /* NOT_YET */
 
 static void idi_ipseckey_fetch_continue(struct p_dns_req *dnsr)
 {
@@ -910,19 +915,19 @@ stf_status idi_ipseckey_fetch(struct msg_digest *md)
 		return ret_idi;
 	}
 
-#ifdef NOT_YET /* this is the forward extra check */
-	/* struct id id = st->st_connection->spd.that.id; move this line up */
-	if (id.kind == ID_FQDN) { /* PAUL add extra option for this check */
-		dnsr_a = qry_st_init(st, LDNS_RR_TYPE_A, "A", idi_a_fetch_continue);
+	if (LIN(st->st_connection->policy, POLICY_DNS_MATCH_ID)) {
+		struct id id = st->st_connection->spd.that.id;
+		if (id.kind == ID_FQDN) {
+			dnsr_a = qry_st_init(st, LDNS_RR_TYPE_A, "A", idi_a_fetch_continue);
 
-		if (dnsr_a == NULL) {
-			free_ipseckey_dns(dnsr_idi);
-			return ret;
+			if (dnsr_a == NULL) {
+				free_ipseckey_dns(dnsr_idi);
+				return ret;
+			}
+
+			ret_a = dns_qry_start(dnsr_a);
 		}
-
-		ret_a = dns_qry_start(dnsr_a);
 	}
-#endif  /* this is the forward extra check */
 
 	if (ret_a != STF_SUSPEND && ret_a != STF_OK) {
 		free_ipseckey_dns(dnsr_idi);
@@ -930,7 +935,6 @@ stf_status idi_ipseckey_fetch(struct msg_digest *md)
 		/* all success */
 		st->ipseckey_dnsr = dnsr_idi;
 		st->ipseckey_fwd_dnsr = dnsr_a;
-		set_suspended(st, md);
 		ret = STF_SUSPEND;
 	}
 

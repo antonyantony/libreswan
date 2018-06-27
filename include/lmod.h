@@ -16,7 +16,7 @@
 #ifndef _LMOD_H_
 #define _LMOD_H_
 
-/* #include "lset.h" */
+#include "lset.h"
 
 /*
  * lmod_t is for modifying an lset_t.
@@ -46,7 +46,7 @@ struct lmod_compat {
 };
 
 struct lmod_info {
-	const struct enum_names *names;
+	const enum_names *names;
 	lset_t all;
 	lset_t mask;
 	struct lmod_compat *compat;
@@ -55,7 +55,7 @@ struct lmod_info {
 bool lmod_arg(lmod_t *mod, const struct lmod_info *info,
 	      const char *optarg);
 
-void lswlog_lmod(struct lswlog *buf, const struct enum_names *names,
+void lswlog_lmod(struct lswlog *buf, const enum_names *names,
 		 const char *separator, lmod_t mod);
 
 #endif

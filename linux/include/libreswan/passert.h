@@ -45,15 +45,9 @@ extern void lsw_passert_fail(const char *file_str,
 	lsw_passert_fail(PASSERT_BASENAME, __LINE__,		\
 			 __func__, FMT, __VA_ARGS__)
 
-#define bad_case(N) {						\
-		long _n = (N);				\
-		PASSERT_FAIL("case %ld/%lu/%lx unexpected",	\
-			     _n, _n, _n);			\
-	}
-
 #define passert(ASSERTION) {						\
-		/* wrapping ASSERTION in paren suppresses -Wparen */	\
-		bool assertion__ = ASSERTION; /* no paren */		\
+		/* wrapping ASSERTION in parens suppresses -Wparen */	\
+		bool assertion__ = ASSERTION; /* no parens */		\
 		if (!assertion__) {					\
 			PASSERT_FAIL("%s", #ASSERTION);			\
 		}							\

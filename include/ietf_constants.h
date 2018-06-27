@@ -572,6 +572,21 @@ enum next_payload_types_ikev2 {
 #define ISAKMP_v2PAYLOAD_TYPE_BASE	ISAKMP_NEXT_v2SA	/* lowest value of a v2 payload type */
 
 /*
+ * Value to use when emitting a payload that the other end won't
+ * recognize forcing it down the unknown (and not just unsupported)
+ * payload code path:
+ *
+ * - fills the entire 8-bit field (so signed vs unsigned overflows)
+ *
+ * - too big to fit in an lset_t (so would overflow that code)
+ *
+ * - not "known" by pluto (so enum name lookups fail)
+ *
+ * - since it isn't known, it is also, by definition unsupported
+ */
+#define ISAKMP_NEXT_v2UNKNOWN		255
+
+/*
  * These values are to be used within the Type field of an Attribute (14)
  * ISAKMP payload.
  */
@@ -636,7 +651,7 @@ enum next_payload_types_ikev2 {
 #define HYBRID_AUTH_INIT_DSS 64223
 #define HYBRID_AUTH_RESP_DSS 64224
 
-/* XAUTH attribute values */
+/* XAUTH attribute values (draft-ietf-ipsec-isakmp-xauth-06 4.2) */
 #define XAUTH_TYPE 16520
 #define XAUTH_USER_NAME 16521
 #define XAUTH_USER_PASSWORD 16522
@@ -784,21 +799,27 @@ extern const char *const critical_names[];
 #define PROTO_IPSEC_ESP 3
 #define PROTO_IPCOMP 4 /* only in IKEv1 */
 
-/* ??? Are these really the same as enum ikev2_sec_proto_id? */
-#define PROTO_v2_RESERVED 0
-#define PROTO_v2_ISAKMP 1
-#define PROTO_v2_AH 2
-#define PROTO_v2_ESP 3
-
 /*
  * IKEv2 Security Protocol Identifiers - RFC 5996
+ *
  * http://www.iana.org/assignments/ikev2-parameters/ikev2-parameters.xhtml#ikev2-parameters-18
+ *
+ * According to the IKEv2 RFC, these values are stored in 'Protocol
+ * ID' field of a payload (see: 3.3.1.  Proposal Substructure; 3.10.
+ * Notify Payload; 3.11.  Delete Payload).
+ *
+ * The value '0' is a little odd.  While IANA lists it as Reserved, a
+ * notify payload must use that value for notifications that do not
+ * include an SPI.  Hence 'NONE' is used.
  */
 enum ikev2_sec_proto_id {
-	/* 0 - Reserved */
+	IKEv2_SEC_PROTO_NONE = 0,
+#define PROTO_v2_RESERVED IKEv2_SEC_PROTO_NONE
 	IKEv2_SEC_PROTO_IKE = 1,
 	IKEv2_SEC_PROTO_AH = 2,
+#define PROTO_v2_AH IKEv2_SEC_PROTO_AH
 	IKEv2_SEC_PROTO_ESP = 3,
+#define PROTO_v2_ESP IKEv2_SEC_PROTO_ESP
 	IKEv2_SEC_FC_ESP_HEADER = 4, /* RFC 4595 */
 	IKEv2_SEC_FC_CT_AUTHENTICATION = 5, /* RFC 4595 */
 	/* 6 - 200 Unassigned */
@@ -1209,7 +1230,7 @@ enum ikev2_cp_attribute_type {
 	IKEv2_EXTERNAL_SOURCE_IP4_NAT_INFO = 23,
 	IKEv2_TIMEOUT_PERIOD_FOR_LIVENESS_CHECK = 24,
 	IKEv2_INTERNAL_DNS_DOMAIN = 25,
-	/* IKEv2_INTERNAL_DNSSEC_TA = 26 expected */
+	IKEv2_INTERNAL_DNSSEC_TA = 26
 };
 
 
@@ -1253,7 +1274,7 @@ typedef enum ike_trans_type_dh oakley_group_t;
 /* https://www.iana.org/assignments/ipsec-registry/ipsec-registry.xhtml#ipsec-registry-10 */
 /* http://www.iana.org/assignments/ikev2-parameters/ikev2-parameters.xhtml#ikev2-parameters-8 */
 enum ike_trans_type_dh {
-	OAKLEY_GROUP_invalid = 0,	/* not in standard */
+	OAKLEY_GROUP_NONE = 0,	/* RFC 7296 */
 	OAKLEY_GROUP_MODP768 = 1,
 	OAKLEY_GROUP_MODP1024 = 2,
 	OAKLEY_GROUP_GP155 = 3, /* IKEv2 reserved */
@@ -1393,6 +1414,11 @@ typedef enum {
 	/* IKEv2 */
 	/* 0-8191 Reserved, ExpertReview */
 	v2N_NOTHING_WRONG = 0, /* Unofficial! Must be zero to match default C initial value. */
+
+	/*
+	 * Error notifications.
+	 */
+	v2N_ERROR_FLOOR = 1,
 	v2N_UNSUPPORTED_CRITICAL_PAYLOAD = 1,
 	/* Reserved = 2, */
 	/* Reserved = 3, */
@@ -1427,7 +1453,12 @@ typedef enum {
 	v2N_INVALID_GROUP_ID = 45, /* draft-yeung-g-ikev2 */
 	v2N_AUTHORIZATION_FAILED = 46, /* draft-yeung-g-ikev2 */
 
-	v2N_ERROR_ROOF, /* used to cap statistics array */
+	v2N_STATISTICS_ERROR_ROOF, /* used to cap error statistics array */
+
+	/*
+	 * Status notifications.
+	 */
+	v2N_STATUS_FLOOR = 16384,
 
 	/* old IKEv1 entries - might be in private use for IKEv2N */
 	v2N_INITIAL_CONTACT = 16384,
@@ -1480,13 +1511,20 @@ typedef enum {
 	v2N_SENDER_REQUEST_ID = 16429, /* draft-yeung-g-ikev2 */
 	v2N_IKEV2_FRAGMENTATION_SUPPORTED = 16430, /* RFC-7383 */
 	v2N_SIGNATURE_HASH_ALGORITHMS = 16431, /* RFC-7427 */
+	v2N_CLONE_IKE_SA_SUPPORTED = 16432, /* RFC-7791 */
+	v2N_CLONE_IKE_SA = 16433, /* RFC-7791 */
+	v2N_PUZZLE = 16434, /* RFC-8019 */
+	v2N_USE_PPK = 16435, /* draft-ietf-ipsecme-qr-ikev2 */
+	v2N_PPK_IDENTITY = 16436, /* draft-ietf-ipsecme-qr-ikev2 */
+	v2N_NO_PPK_AUTH = 16437, /* draft-ietf-ipsecme-qr-ikev2 */
 
-	v2N_USE_PPK = 40960,            /* draft-ietf-ipsecme-qr-ikev2-01 */
-	v2N_PPK_IDENTITY = 40961,       /* draft-ietf-ipsecme-qr-ikev2-01 */
-	v2N_NO_PPK_AUTH = 40962,        /* draft-ietf-ipsecme-qr-ikev2-01 */
+	v2N_STATISTICS_STATUS_ROOF, /* used to cap status statistics array */
 
-	/* 16432 - 40969 Unassigned */
-	/* 40960 - 65535 Private Use */
+	/* 16438 - 40969 Unassigned */
+
+	v2N_NULL_AUTH = 40960,
+
+	/* 40961 - 65535 Private Use */
 } v2_notification_t;
 
 /* draft-ietf-ipsecme-qr-ikev2-01 created registry */

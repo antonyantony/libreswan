@@ -34,6 +34,10 @@ SUBDIRS+=_import_crl
 SUBDIRS+=algparse
 SUBDIRS+=cavp
 
+ifeq ($(USE_PORTEXCLUDES),true)
+SUBDIRS+=portexcludes
+endif
+
 ifeq ($(USE_KLIPS),true)
 SUBDIRS+= _updown.klips eroute klipsdebug pf_key spi spigrp tncfg
 endif

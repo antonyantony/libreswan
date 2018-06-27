@@ -49,7 +49,7 @@
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <sys/resource.h>
-#include <sys/wait.h>
+#include <sys/wait.h>		/* for wait() and WIFEXITED() et.al. */
 #include <resolv.h>
 
 #include <event2/event.h>
@@ -201,7 +201,7 @@ enum seccomp_mode pluto_seccomp_mode = SECCOMP_DISABLED;
 #endif
 unsigned int pluto_max_halfopen = DEFAULT_MAXIMUM_HALFOPEN_IKE_SA;
 unsigned int pluto_ddos_threshold = DEFAULT_IKE_SA_DDOS_THRESHOLD;
-deltatime_t pluto_shunt_lifetime = DELTATIME(PLUTO_SHUNT_LIFE_DURATION_DEFAULT);
+deltatime_t pluto_shunt_lifetime = DELTATIME_INIT(PLUTO_SHUNT_LIFE_DURATION_DEFAULT);
 
 unsigned int pluto_sock_bufsize = IKE_BUF_AUTO; /* use system values */
 bool pluto_sock_errqueue = TRUE; /* Enable MSG_ERRQUEUE on IKE socket */
@@ -330,7 +330,7 @@ int create_socket(struct raw_iface *ifp, const char *v_name, int port)
 
 	if (setsockopt(fd, SOL_SOCKET, SO_PRIORITY,
 			(const void *)&so_prio, sizeof(so_prio)) < 0) {
-                LOG_ERRNO(errno, "setsockopt(SO_PRIORITY) in find_raw_ifaces4()");
+		LOG_ERRNO(errno, "setsockopt(SO_PRIORITY) in find_raw_ifaces4()");
 		/* non-fatal */
 	}
 
@@ -509,10 +509,10 @@ void link_pluto_event_list(struct pluto_event *e) {
 
 void delete_pluto_event(struct pluto_event **evp)
 {
-        if (*evp == NULL) {
-                DBG(DBG_CONTROLMORE, DBG_log("%s cannot delete NULL event", __func__));
-                return;
-        }
+	if (*evp == NULL) {
+		DBG(DBG_CONTROLMORE, DBG_log("%s cannot delete NULL event", __func__));
+		return;
+	}
 
 	unlink_pluto_event_list(evp);
 }
@@ -562,10 +562,11 @@ static void fire_event_photon_torpedo(struct event **evp,
  */
 
 struct now_event {
-	void (*ne_cb)(void*);
-	void *ne_arg;
+	pluto_event_now_cb *ne_callback;
+	void *ne_context;
 	const char *ne_name;
 	struct event *ne_event;
+	so_serial_t ne_serialno;
 };
 
 static void schedule_event_now_cb(evutil_socket_t fd UNUSED,
@@ -574,7 +575,8 @@ static void schedule_event_now_cb(evutil_socket_t fd UNUSED,
 {
 	struct now_event *ne = (struct now_event *)arg;
 	DBG(DBG_CONTROLMORE,
-	    DBG_log("executing now-event %s", ne->ne_name));
+	    DBG_log("executing now-event %s for %lu",
+		    ne->ne_name, ne->ne_serialno));
 
 	/*
 	 * At one point, .ne_event was was being set after the event
@@ -584,26 +586,38 @@ static void schedule_event_now_cb(evutil_socket_t fd UNUSED,
 	 * pexpect() failed yet the passert() passed.
 	 */
 	pexpect(ne->ne_event != NULL);
-	ne->ne_cb(ne->ne_arg);
+	struct state *st = state_with_serialno(ne->ne_serialno);
+	if (st == NULL) {
+		ne->ne_callback(NULL, NULL, ne->ne_context);
+	} else {
+		struct msg_digest *md = unsuspend_md(st);
+		so_serial_t old_state = push_cur_state(st);
+		ne->ne_callback(st, &md, ne->ne_context);
+		release_any_md(&md);
+		pop_cur_state(old_state);
+	}
 	passert(ne->ne_event != NULL);
-
 	event_del(ne->ne_event);
 	pfree(ne);
 }
 
-void pluto_event_now(const char *name, void (*cb)(void*), void*arg)
+void pluto_event_now(const char *name, so_serial_t serialno,
+		     pluto_event_now_cb *callback, void *context)
 {
-	DBG(DBG_CONTROLMORE,
-	    DBG_log("scheduling now-event %s", name));
 	struct now_event *ne = alloc_thing(struct now_event, name);
-	ne->ne_cb = cb;
-	ne->ne_arg = arg;
+	ne->ne_callback = callback;
+	ne->ne_context = context;
 	ne->ne_name = name;
-	static const deltatime_t no_delay = DELTATIME(0);
+	ne->ne_serialno = serialno;
+	DBG(DBG_CONTROLMORE,
+	    DBG_log("scheduling now-event %s for #%lu",
+		    ne->ne_name, ne->ne_serialno));
+
 	/*
 	 * Everything set up; arm and fire torpedo.  Event may have
 	 * even run before the below function returns.
 	 */
+	static const deltatime_t no_delay = DELTATIME_INIT(0);
 	fire_event_photon_torpedo(&ne->ne_event,
 				  NULL_FD, EV_TIMEOUT,
 				  schedule_event_now_cb, ne,
@@ -757,9 +771,17 @@ void show_ifaces_status(void)
 void show_debug_status(void)
 {
 	LSWLOG_WHACK(RC_COMMENT, buf) {
-		lswlogs(buf, "debug ");
-		lswlog_enum_lset_short(buf, &debug_and_impair_names,
-				       "+", cur_debugging);
+		lswlogs(buf, "debug:");
+		if (cur_debugging & DBG_MASK) {
+			lswlogs(buf, " ");
+			lswlog_enum_lset_short(buf, &debug_names,
+					       "+", cur_debugging & DBG_MASK);
+		}
+		if (cur_debugging & IMPAIR_MASK) {
+			lswlogs(buf, " impair: ");
+			lswlog_enum_lset_short(buf, &impair_names,
+					       "+", cur_debugging & IMPAIR_MASK);
+		}
 	}
 }
 
@@ -808,7 +830,9 @@ struct pid_entry {
 	struct list_entry hash_entry;
 	pid_t pid;
 	void *context;
-	void (*callback)(int status, void *context);
+	pluto_fork_cb *callback;
+	so_serial_t serialno;
+	const char *name;
 };
 
 static size_t log_pid_entry(struct lswlog *buf, void *data)
@@ -818,7 +842,12 @@ static size_t log_pid_entry(struct lswlog *buf, void *data)
 	} else {
 		struct pid_entry *entry = (struct pid_entry*)data;
 		passert(entry->magic == PID_MAGIC);
-		return lswlogf(buf, "pid %d", entry->pid);
+		size_t size = 0;
+		if (entry->serialno != SOS_NOBODY) {
+			size += lswlogf(buf, "#%lu ", entry->serialno);
+		}
+		size += lswlogf(buf, "%s pid %d", entry->name, entry->pid);
+		return size;
 	}
 }
 
@@ -842,9 +871,8 @@ static struct hash_table pids_hash_table = {
 	.slots = pid_entry_slots,
 };
 
-static void add_pid(pid_t pid,
-		    void (*callback)(int status, void *context),
-		    void *context)
+static void add_pid(const char *name, so_serial_t serialno, pid_t pid,
+		    pluto_fork_cb *callback, void *context)
 {
 	DBG(DBG_CONTROL,
 	    DBG_log("forked child %d", pid));
@@ -853,13 +881,15 @@ static void add_pid(pid_t pid,
 	new_pid->pid = pid;
 	new_pid->callback = callback;
 	new_pid->context = context;
+	new_pid->serialno = serialno;
+	new_pid->name = name;
 	add_hash_table_entry(&pids_hash_table,
 			     new_pid, &new_pid->hash_entry);
 }
 
-int pluto_fork(int op(void *context),
-	       void (*callback)(int status, void *context),
-	       void *context)
+int pluto_fork(const char *name, so_serial_t serialno,
+	       int op(void *context),
+	       pluto_fork_cb *callback, void *context)
 {
 	pid_t pid = fork();
 	switch (pid) {
@@ -871,16 +901,20 @@ int pluto_fork(int op(void *context),
 		exit(op(context));
 		break;
 	default: /* parent */
-		add_pid(pid, callback, context);
+		add_pid(name, serialno, pid, callback, context);
 		return pid;
 	}
 }
 
-static void addconn_exited(int status, void *context UNUSED)
+static pluto_fork_cb addconn_exited; /* type assertion */
+
+static void addconn_exited(struct state *null_st UNUSED,
+			   struct msg_digest **null_mdp UNUSED,
+			   int status, void *context UNUSED)
 {
-       DBG(DBG_CONTROLMORE,
-           DBG_log("reaped addconn helper child (status %d)", status));
-       addconn_child_pid = 0;
+	DBG(DBG_CONTROLMORE,
+	   DBG_log("reaped addconn helper child (status %d)", status));
+	addconn_child_pid = 0;
 }
 
 static void log_status(struct lswlog *buf, int status)
@@ -951,8 +985,27 @@ static void childhandler_cb(int unused UNUSED, const short event UNUSED, void *a
 					log_status(buf, status);
 				}
 			} else {
-				pid_entry->callback(status, pid_entry->context);
-				del_hash_table_entry(&pids_hash_table, &pid_entry->hash_entry);
+				struct state *st = state_with_serialno(pid_entry->serialno);
+				if (pid_entry->serialno == SOS_NOBODY) {
+					pid_entry->callback(NULL, NULL,
+							    status, pid_entry->context);
+				} else if (st == NULL) {
+					LSWDBGP(DBG_CONTROLMORE, buf) {
+						log_pid_entry(buf, pid_entry);
+						lswlogs(buf, " disappeared");
+					}
+					pid_entry->callback(NULL, NULL,
+							    status, pid_entry->context);
+				} else {
+					so_serial_t old_state = push_cur_state(st);
+					struct msg_digest *md = unsuspend_md(st);
+					pid_entry->callback(st, &md, status,
+							    pid_entry->context);
+					release_any_md(&md);
+					pop_cur_state(old_state);
+				}
+				del_hash_table_entry(&pids_hash_table,
+						     &pid_entry->hash_entry);
 				pfree(pid_entry);
 			}
 			break;
@@ -1078,15 +1131,7 @@ void call_server(void)
 		if (addconn_child_pid == 0) {
 			/*
 			 * Child
-			 *
-			 * Note: when vfork() is used, calls
-			 * like sleep() and DBG_log() are not valid
-			 * before the exec* call.
 			 */
-#if USE_FORK
-			/* XXX: Why the sleep?  See 1987ac98f8.  Hack! */
-			sleep(1);
-#endif
 			execve(addconn_path_space, newargv, newenv);
 			_exit(42);
 		}
@@ -1096,7 +1141,8 @@ void call_server(void)
 		DBG(DBG_CONTROLMORE,
 		    DBG_log("created addconn helper (pid:%d) using %s+execve",
 			    addconn_child_pid, USE_VFORK ? "vfork" : "fork"));
-		add_pid(addconn_child_pid, addconn_exited, NULL);
+		add_pid("addconn", SOS_NOBODY, addconn_child_pid,
+			addconn_exited, NULL);
 	}
 
 	/* parent continues */
@@ -1168,7 +1214,7 @@ void call_server(void)
  */
 
 #if defined(IP_RECVERR) && defined(MSG_ERRQUEUE)
-bool check_msg_errqueue(const struct iface_port *ifp, short interest, const char *before)
+static bool check_msg_errqueue(const struct iface_port *ifp, short interest, const char *before)
 {
 	struct pollfd pfd;
 	int again_count = 0;
@@ -1395,7 +1441,7 @@ bool check_msg_errqueue(const struct iface_port *ifp, short interest, const char
 					 * behaviour can be restored?
 					 *
 					 * HACK: So that the logging
-					 * system doesn't accidently
+					 * system doesn't accidentally
 					 * include a prefix for the
 					 * wrong state et.al., switch
 					 * out everything but SENDER.
@@ -1443,258 +1489,22 @@ bool check_msg_errqueue(const struct iface_port *ifp, short interest, const char
 }
 #endif /* defined(IP_RECVERR) && defined(MSG_ERRQUEUE) */
 
-/* send_ike_msg logic is broken into layers.
- * The rest of the system thinks it is simple.
- * We have three entrypoints that control options
- * for reporting write failure and actions on resending (fragment?):
- * send_ike_msg(), resend_ike_v1_msg(), and send_keepalive().
- *
- * The first two call send_or_resend_ike_msg().
- * That handles an IKE message.
- * It calls send_v1_frags() if the message needs to be fragmented.
- * Otherwise it calls send_packet() to send it in one gulp.
- *
- * send_v1_frags() breaks an IKE message into fragments and sends
- * them by send_packet().
- *
- * send_keepalive() calls send_packet() directly: uses a special
- * tiny packet; non-ESP marker does not apply; logging on write error
- * is suppressed.
- *
- * send_packet() sends a UDP packet, possibly prefixed by a non-ESP Marker
- * for NATT.  It accepts two chunks because this avoids double-copying.
- */
-
-static bool send_packet(struct state *st, const char *where,
-			bool just_a_keepalive,
-			const u_int8_t *aptr, size_t alen,
-			const u_int8_t *bptr, size_t blen)
+bool check_incoming_msg_errqueue(const struct iface_port *ifp UNUSED,
+				 const char *before UNUSED)
 {
-	/* NOTE: on system with limited stack, buf could be made static */
-	u_int8_t buf[MAX_OUTPUT_UDP_SIZE];
-
-	/* Each fragment, if we are doing NATT, needs a non-ESP_Marker prefix.
-	 * natt_bonus is the size of the addition (0 if not needed).
-	 */
-	size_t natt_bonus;
-
-	if (st->st_interface == NULL) {
-		libreswan_log("Cannot send packet - interface vanished!");
-		return FALSE;
-	}
-
-	/* bandaid */
-	if (aptr == NULL) {
-		libreswan_log("Cannot send packet - aptr is NULL");
-		return FALSE;
-	}
-
-	if (isanyaddr(&st->st_remoteaddr)) {
-		/* not asserting, who knows what nonsense a user can generate */
-		libreswan_log("Will not send packet to bogus address 0.0.0.0");
-		return FALSE;
-	}
-
-	natt_bonus = !just_a_keepalive &&
-				  st->st_interface->ike_float ?
-				  NON_ESP_MARKER_SIZE : 0;
-
-	const u_int8_t *ptr;
-	size_t len = natt_bonus + alen + blen;
-	ssize_t wlen;
-
-	if (len > MAX_OUTPUT_UDP_SIZE) {
-		loglog(RC_LOG_SERIOUS, "send_ike_msg(): really too big %zu bytes", len);
-		return FALSE;
-	}
-
-	if (len != alen) {
-		/* copying required */
-
-		/* 1. non-ESP Marker (0x00 octets) */
-		memset(buf, 0x00, natt_bonus);
-
-		/* 2. chunk a */
-		memcpy(buf + natt_bonus, aptr, alen);
-
-		/* 3. chunk b */
-		memcpy(buf + natt_bonus + alen, bptr, blen);
-
-		ptr = buf;
-	} else {
-		ptr = aptr;
-	}
-
-	DBG(DBG_CONTROL | DBG_RAW, {
-		ipstr_buf b;
-		DBG_log("sending %zu bytes for %s through %s:%d to %s:%u (using #%lu)",
-			len,
-			where,
-			st->st_interface->ip_dev->id_rname,
-			st->st_interface->port,
-			sensitive_ipstr(&st->st_remoteaddr, &b),
-			st->st_remoteport,
-			st->st_serialno);
-	});
-	DBG(DBG_RAW, DBG_dump(NULL, ptr, len));
-
-	setportof(htons(st->st_remoteport), &st->st_remoteaddr);
-
 #if defined(IP_RECVERR) && defined(MSG_ERRQUEUE)
-	(void) check_msg_errqueue(st->st_interface, POLLOUT, "sending a packet");
-#endif  /* defined(IP_RECVERR) && defined(MSG_ERRQUEUE) */
-
-	wlen = sendto(st->st_interface->fd,
-		      ptr,
-		      len, 0,
-		      sockaddrof(&st->st_remoteaddr),
-		      sockaddrlenof(&st->st_remoteaddr));
-
-	if (wlen != (ssize_t)len) {
-		if (!just_a_keepalive) {
-			ipstr_buf b;
-			LOG_ERRNO(errno, "sendto on %s to %s:%u failed in %s",
-				  st->st_interface->ip_dev->id_rname,
-				  sensitive_ipstr(&st->st_remoteaddr, &b),
-				  st->st_remoteport,
-				  where);
-		}
-		return FALSE;
-	}
-
-	pstats_ike_out_bytes += len;
-
-	/* Send a duplicate packet when this impair is enabled - used for testing */
-	if (DBGP(IMPAIR_JACOB_TWO_TWO)) {
-		/* sleep for half a second, and second another packet */
-		usleep(500000);
-		ipstr_buf b;
-
-		DBG_log("JACOB 2-2: resending %zu bytes for %s through %s:%d to %s:%u:",
-			len,
-			where,
-			st->st_interface->ip_dev->id_rname,
-			st->st_interface->port,
-			ipstr(&st->st_remoteaddr, &b),
-			st->st_remoteport);
-
-		wlen = sendto(st->st_interface->fd,
-			      ptr,
-			      len, 0,
-			      sockaddrof(&st->st_remoteaddr),
-			      sockaddrlenof(&st->st_remoteaddr));
-		if (wlen != (ssize_t)len) {
-			if (!just_a_keepalive) {
-				LOG_ERRNO(errno,
-					  "sendto on %s to %s:%u failed in %s",
-					  st->st_interface->ip_dev->id_rname,
-					  ipstr(&st->st_remoteaddr, &b),
-					  st->st_remoteport,
-					  where);
-			}
-			return FALSE;
-		}
-	}
-	return TRUE;
+	return check_msg_errqueue(ifp, POLLIN, before);
+#else
+	return true;
+#endif	/* defined(IP_RECVERR) && defined(MSG_ERRQUEUE) */
 }
 
-/*
- * (IKE v1) send fragments of packet.
- *
- * non-IETF magic voodoo we need to consider for interop:
- * - www.cisco.com/en/US/docs/ios/sec_secure_connectivity/configuration/guide/sec_fragment_ike_pack.html
- * - www.cisco.com/en/US/docs/ios-xml/ios/sec_conn_ikevpn/configuration/15-mt/sec-fragment-ike-pack.pdf
- * - msdn.microsoft.com/en-us/library/cc233452.aspx
- * - iOS/Apple racoon source ipsec-164.9 at www.opensource.apple.com (frak length 1280)
- * - stock racoon source (frak length 552)
- */
-
-static bool send_v1_frags(struct state *st, const char *where)
+void check_outgoing_msg_errqueue(const struct iface_port *ifp UNUSED,
+				 const char *before UNUSED)
 {
-	unsigned int fragnum = 0;
-
-	/* Each fragment, if we are doing NATT, needs a non-ESP_Marker prefix.
-	 * natt_bonus is the size of the addition (0 if not needed).
-	 */
-	const size_t natt_bonus =
-		st->st_interface->ike_float ? NON_ESP_MARKER_SIZE : 0;
-
-	/* We limit fragment packets to ISAKMP_FRAG_MAXLEN octets.
-	 * max_data_len is the maximum data length that will fit within it.
-	 */
-	const size_t max_data_len =
-		((st->st_connection->addr_family ==
-		  AF_INET) ? ISAKMP_V1_FRAG_MAXLEN_IPv4 : ISAKMP_V1_FRAG_MAXLEN_IPv6)
-		-
-		(natt_bonus + NSIZEOF_isakmp_hdr +
-		 NSIZEOF_isakmp_ikefrag);
-
-	u_int8_t *packet_cursor = st->st_tpacket.ptr;
-	size_t packet_remainder_len = st->st_tpacket.len;
-
-	/* BUG: this code does not use the marshalling code
-	 * in packet.h to translate between wire and host format.
-	 * This is dangerous.  The following assertion should
-	 * fail in most cases where this cheat won't work.
-	 */
-	passert(sizeof(struct isakmp_hdr) == NSIZEOF_isakmp_hdr &&
-		sizeof(struct isakmp_ikefrag) == NSIZEOF_isakmp_ikefrag);
-
-	while (packet_remainder_len > 0) {
-		u_int8_t frag_prefix[NSIZEOF_isakmp_hdr +
-				     NSIZEOF_isakmp_ikefrag];
-		const size_t data_len = packet_remainder_len > max_data_len ?
-					max_data_len : packet_remainder_len;
-		const size_t fragpl_len = NSIZEOF_isakmp_ikefrag + data_len;
-		const size_t isakmppl_len = NSIZEOF_isakmp_hdr + fragpl_len;
-
-		fragnum++;
-
-		/* emit isakmp header derived from original */
-		{
-			struct isakmp_hdr *ih =
-				(struct isakmp_hdr*) frag_prefix;
-
-			memcpy(ih, st->st_tpacket.ptr, NSIZEOF_isakmp_hdr);
-			ih->isa_np = ISAKMP_NEXT_IKE_FRAGMENTATION; /* one octet */
-			/* Do we need to set any of ISAKMP_FLAGS_v1_ENCRYPTION?
-			 * Seems there might be disagreement between Cisco and Microsoft.
-			 * st->st_suspended_md->hdr.isa_flags; TODO must this be set?
-			 */
-			ih->isa_flags &= ~ISAKMP_FLAGS_v1_ENCRYPTION;
-			ih->isa_length = htonl(isakmppl_len);
-		}
-
-		/* Append the ike frag header */
-		{
-			struct isakmp_ikefrag *fh =
-				(struct isakmp_ikefrag*) (frag_prefix +
-							  NSIZEOF_isakmp_hdr);
-
-			fh->isafrag_np = 0;             /* must be zero */
-			fh->isafrag_reserved = 0;       /* reserved at this time, must be zero */
-			fh->isafrag_length = htons(fragpl_len);
-			fh->isafrag_id = htons(1);      /* In theory required to be unique, in practise not needed? */
-			fh->isafrag_number = fragnum;   /* one byte, no htons() call needed */
-			fh->isafrag_flags = packet_remainder_len == data_len ?
-					    ISAKMP_FRAG_LAST : 0;
-		}
-		DBG(DBG_CONTROL,
-		    DBG_log("sending IKE fragment id '%d', number '%u'%s",
-			    1, /* hard coded for now, seems to be what all the cool implementations do */
-			    fragnum,
-			    packet_remainder_len == data_len ? " (last)" : ""));
-
-		if (!send_packet(st, where, FALSE,
-				 frag_prefix, NSIZEOF_isakmp_hdr +
-				 NSIZEOF_isakmp_ikefrag,
-				 packet_cursor, data_len))
-			return FALSE;
-
-		packet_remainder_len -= data_len;
-		packet_cursor += data_len;
-	}
-	return TRUE;
+#if defined(IP_RECVERR) && defined(MSG_ERRQUEUE)
+	(void) check_msg_errqueue(ifp, POLLOUT, before);
+#endif	/* defined(IP_RECVERR) && defined(MSG_ERRQUEUE) */
 }
 
 bool should_fragment_ike_msg(struct state *st, size_t len, bool resending)
@@ -1724,120 +1534,6 @@ bool should_fragment_ike_msg(struct state *st, size_t len, bool resending)
 			st->st_seen_fragvid) ||
 		(st->st_connection->policy & POLICY_IKE_FRAG_FORCE) ||
 		st->st_seen_fragments   );
-}
-
-static bool send_ikev2_frags(struct state *st, const char *where)
-{
-	for (struct v2_ike_tfrag *frag = st->st_v2_tfrags; frag != NULL; frag = frag->next)
-		if (!send_packet(st, where, FALSE,
-				 frag->cipher.ptr, frag->cipher.len, NULL, 0))
-			return FALSE;
-
-	return TRUE;
-}
-
-static bool send_or_resend_ike_msg(struct state *st, const char *where,
-				   bool resending)
-{
-	if (st->st_interface == NULL) {
-		libreswan_log("Cannot send packet - interface vanished!");
-		return FALSE;
-	}
-
-	if (st->st_v2_tfrags != NULL) {
-		/* if a V2 packet needs fragmenting it would have already happened */
-		passert(st->st_ikev2);
-		passert(st->st_tpacket.ptr == NULL);
-		return send_ikev2_frags(st, where);
-	} else {
-		/*
-		 * Each fragment, if we are doing NATT, needs a non-ESP_Marker prefix.
-		 * natt_bonus is the size of the addition (0 if not needed).
-		 */
-		size_t natt_bonus = st->st_interface->ike_float ? NON_ESP_MARKER_SIZE : 0;
-		size_t len = st->st_tpacket.len;
-
-		passert(len != 0);
-
-		/*
-		 * Decide of whether we're to fragment.
-		 * Only for IKEv1 (V2 fragments earlier).
-		 * ??? why can't we fragment in STATE_MAIN_I1?
-		 */
-		if (!st->st_ikev2 &&
-		    st->st_state != STATE_MAIN_I1 &&
-		    should_fragment_ike_msg(st, len + natt_bonus, resending))
-		{
-			return send_v1_frags(st, where);
-		} else {
-			return send_packet(st, where, FALSE, st->st_tpacket.ptr,
-					   st->st_tpacket.len, NULL, 0);
-		}
-	}
-}
-
-void record_outbound_ike_msg(struct state *st, pb_stream *pbs, const char *what)
-{
-	passert(pbs_offset(pbs) != 0);
-	release_fragments(st);
-	freeanychunk(st->st_tpacket);
-	clonetochunk(st->st_tpacket, pbs->start, pbs_offset(pbs), what);
-}
-
-bool send_ike_msg(struct state *st, const char *where)
-{
-	return send_or_resend_ike_msg(st, where, FALSE);
-}
-
-bool record_and_send_ike_msg(struct state *st, pb_stream *pbs, const char *what)
-{
-	record_outbound_ike_msg(st, pbs, what);
-	return send_ike_msg(st, what);
-}
-
-/* hack! Leaves st->st_tpacket and st->st_tfrags as it was found */
-bool send_ike_msg_without_recording(struct state *st, pb_stream *pbs, const char *where)
-{
-	chunk_t saved_tpacket = st->st_tpacket;
-	struct v2_ike_tfrag *saved_tfrags  = st->st_v2_tfrags;
-	bool r;
-
-	st->st_v2_tfrags = NULL; /* assume notification and no fragments */
-
-	setchunk(st->st_tpacket, pbs->start, pbs_offset(pbs));
-	r = send_ike_msg(st, where);
-
-	/* restore the previous transmitted packet to st */
-	st->st_tpacket = saved_tpacket;
-	st->st_v2_tfrags = saved_tfrags;
-
-	return r;
-}
-
-bool resend_ike_v1_msg(struct state *st, const char *where)
-{
-	bool ret = send_or_resend_ike_msg(st, where, TRUE);
-
-	if (st->st_state == STATE_XAUTH_R0 &&
-	    !LIN(POLICY_AGGRESSIVE, st->st_connection->policy)) {
-		/* Only for Main mode + XAUTH */
-		event_schedule(EVENT_v1_SEND_XAUTH, deltatime_ms(EVENT_v1_SEND_XAUTH_DELAY_MS), st);
-	}
-
-	return ret;
-}
-
-/*
- * send keepalive is special in two ways:
- * We don't want send errors logged (too noisy).
- * We don't want the packet prefixed with a non-ESP Marker.
- */
-bool send_keepalive(struct state *st, const char *where)
-{
-	static const unsigned char ka_payload = 0xff;
-
-	return send_packet(st, where, TRUE, &ka_payload, sizeof(ka_payload),
-			   NULL, 0);
 }
 
 bool ev_before(struct pluto_event *pev, deltatime_t delay) {

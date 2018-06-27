@@ -147,7 +147,8 @@
 #include "timer.h"
 #include "whack.h"      /* requires connections.h */
 #include "server.h"
-
+#include "send.h"
+#include "ikev1_send.h"
 #include "ikev1_xauth.h"
 #include "retransmit.h"
 #include "nat_traversal.h"
@@ -683,7 +684,7 @@ static stf_status unexpected(struct state *st, struct msg_digest *md UNUSED)
  *  #   Initiator  Direction Responder  NOTE
  * (1)  HDR*; N/D     =>                Error Notification or Deletion
  */
-static stf_status informational(struct state *st UNUSED, struct msg_digest *md)
+static stf_status informational(struct state *st, struct msg_digest *md)
 {
 	struct payload_digest *const n_pld = md->chain[ISAKMP_NEXT_N];
 
@@ -692,7 +693,8 @@ static stf_status informational(struct state *st UNUSED, struct msg_digest *md)
 		pb_stream *const n_pbs = &n_pld->pbs;
 		struct isakmp_notification *const n =
 			&n_pld->payload.notification;
-		struct state *st = md->st;    /* may be NULL */
+		pexpect(st == md->st);
+		st = md->st;    /* may be NULL */
 
 		/* Switch on Notification Type (enum) */
 		/* note that we _can_ get notification payloads unencrypted
@@ -920,16 +922,6 @@ static stf_status informational(struct state *st UNUSED, struct msg_digest *md)
 			}
 			return STF_IGNORE;
 		default:
-			if (st != NULL &&
-			    (lmod_is_set(st->st_connection->extra_impairing,
-					 IMPAIR_DIE_ONINFO))) {
-				loglog(RC_LOG_SERIOUS,
-				       "received unhandled informational notification payload %d: '%s'",
-				       n->isan_type,
-				       enum_name(&ikev1_notify_names,
-						 n->isan_type));
-				return STF_FATAL;
-			}
 			loglog(RC_LOG_SERIOUS,
 			       "received and ignored informational message");
 			return STF_IGNORE;
@@ -993,7 +985,7 @@ static bool ikev1_duplicate(struct state *st, struct msg_digest *md)
 				loglog(RC_RETRANSMISSION,
 				       "retransmitting in response to duplicate packet; already %s",
 				       st->st_state_name);
-				resend_ike_v1_msg(st, "retransmit in response to duplicate");
+				resend_recorded_v1_ike_msg(st, "retransmit in response to duplicate");
 			} else {
 				loglog(RC_LOG_SERIOUS,
 				       "discarding duplicate packet -- exhausted retransmission; already %s",
@@ -1710,8 +1702,9 @@ void process_v1_packet(struct msg_digest **mdp)
 				(unsigned)hportof(&md->sender));
 		});
 
-		/* if there was a previous packet, let it go, and go with most
-		 * recent one.
+		/*
+		 * if there was a previous packet, let it go, and go
+		 * with most recent one.
 		 */
 		if (st->st_suspended_md != NULL) {
 			DBG(DBG_CONTROL,
@@ -1719,9 +1712,7 @@ void process_v1_packet(struct msg_digest **mdp)
 				    st->st_suspended_md));
 			release_any_md(&st->st_suspended_md);
 		}
-
-		set_suspended(st, md);
-		*mdp = NULL;
+		suspend_md(st, mdp);
 		return;
 	}
 
@@ -1847,7 +1838,6 @@ void process_packet_tail(struct msg_digest **mdp)
 	 * struct isakmp_hdr in packet.h.
 	 */
 	{
-		struct payload_digest *pd = md->digest;
 		enum next_payload_types_ikev1 np = md->hdr.isa_np;
 		lset_t needed = smc->req_payloads;
 		const char *excuse =
@@ -1860,13 +1850,14 @@ void process_packet_tail(struct msg_digest **mdp)
 		while (np != ISAKMP_NEXT_NONE) {
 			struct_desc *sd = v1_payload_desc(np);
 
-			if (pd == &md->digest[PAYLIMIT]) {
+			if (md->digest_roof >= elemsof(md->digest)) {
 				loglog(RC_LOG_SERIOUS,
-				       "more than %d payloads in message; ignored",
-				       PAYLIMIT);
+				       "more than %zu payloads in message; ignored",
+				       elemsof(md->digest));
 				SEND_NOTIFICATION(PAYLOAD_MALFORMED);
 				return;
 			}
+			struct payload_digest *const pd = md->digest + md->digest_roof;
 
 			/*
 			 * only do this in main mode. In aggressive mode, there
@@ -2012,6 +2003,12 @@ void process_packet_tail(struct msg_digest **mdp)
 
 			/* place this payload at the end of the chain for this type */
 			{
+				/*
+				 * Spell out that chain[] isn't
+				 * overflowing.  Above also asserts
+				 * NP<LELEM_ROOF.
+				 */
+				passert(np < elemsof(md->chain));
 				struct payload_digest **p;
 
 				for (p = &md->chain[np]; *p != NULL;
@@ -2022,7 +2019,7 @@ void process_packet_tail(struct msg_digest **mdp)
 			}
 
 			np = pd->payload.generic.isag_np;
-			pd++;
+			md->digest_roof++;
 
 			/* since we've digested one payload happily, it is probably
 			 * the case that any decryption worked.  So we will not suggest
@@ -2031,8 +2028,6 @@ void process_packet_tail(struct msg_digest **mdp)
 			 */
 			excuse = "";
 		}
-
-		md->digest_roof = pd;
 
 		DBG(DBG_PARSING, {
 			    if (pbs_left(&md->message_pbs) != 0)
@@ -2170,16 +2165,6 @@ void process_packet_tail(struct msg_digest **mdp)
 					       p->payload.notification.isan_length);
 					DBG_dump_pbs(&p->pbs);
 				}
-				if (st != NULL &&
-				    lmod_is_set(st->st_connection->extra_impairing,
-						IMPAIR_DIE_ONINFO)) {
-					loglog(RC_LOG_SERIOUS,
-					       "received and failed on unknown informational message");
-					complete_v1_state_transition(mdp,
-								     STF_FATAL);
-					/* our caller will release_any_md(mdp); */
-					return;
-				}
 			}
 			DBG_cond_dump(DBG_PARSING, "info:", p->pbs.cur, pbs_left(
 					      &p->pbs));
@@ -2205,7 +2190,7 @@ void process_packet_tail(struct msg_digest **mdp)
 
 	if (self_delete) {
 		accept_self_delete(md);
-		st = md->st;	/* st not subsequently used */
+		st = md->st;
 		/* note: st ought to be NULL from here on */
 	}
 
@@ -2285,7 +2270,18 @@ void complete_v1_state_transition(struct msg_digest **mdp, stf_status result)
 	switch (result) {
 	case STF_SUSPEND:
 		set_cur_state(md->st);	/* might have changed */
-		*mdp = NULL;	/* take md away from parent */
+		if (*mdp != NULL) {
+			/*
+			 * If this transition was triggered by an
+			 * incoming packet, save it.
+			 *
+			 * XXX: some initiator code creates a fake MD
+			 * (there isn't a real one); save that as
+			 * well.
+			 */
+			suspend_md(md->st, mdp);
+			passert(*mdp == NULL); /* ownership transfered */
+		}
 		return;
 	case STF_IGNORE:
 		return;
@@ -2407,7 +2403,7 @@ void complete_v1_state_transition(struct msg_digest **mdp, stf_status result)
 		/* in aggressive mode, there will be no reply packet in transition
 		 * from STATE_AGGR_R1 to STATE_AGGR_R2
 		 */
-		if (nat_traversal_enabled && st->st_connection->ikev1_natt != natt_none) {
+		if (nat_traversal_enabled && st->st_connection->ikev1_natt != NATT_NONE) {
 			/* adjust our destination port if necessary */
 			nat_traversal_change_port_lookup(md, st);
 		}
@@ -2431,7 +2427,7 @@ void complete_v1_state_transition(struct msg_digest **mdp, stf_status result)
 					enum_name(&state_names, from_state));
 				libreswan_log("IMPAIR: Skipped sending STATE_MAIN_R2 response packet");
 			} else {
-				record_and_send_ike_msg(st, &reply_stream,
+				record_and_send_v1_ike_msg(st, &reply_stream,
 					enum_name(&state_names, from_state));
 			}
 		}
@@ -2604,10 +2600,9 @@ void complete_v1_state_transition(struct msg_digest **mdp, stf_status result)
 				 */
 				stf_status s = dpd_init(st);
 
-				pexpect(s != STF_FAIL);
-				if (s == STF_FAIL)
+				if (!pexpect(s != STF_FAIL))
 					result = STF_FAIL; /* ??? fall through !?! */
-				/* ??? result not subsequently used */
+				/* ??? result not subsequently used. Looks bad! */
 			}
 		}
 
@@ -2671,6 +2666,11 @@ void complete_v1_state_transition(struct msg_digest **mdp, stf_status result)
 			change_state(st, STATE_MODE_CFG_R1);
 			set_cur_state(st);
 			libreswan_log("Sending MODE CONFIG set");
+			/*
+			 * ??? we ignore the result of modecfg.
+			 * But surely, if it fails, we ought to terminate this exchange.
+			 * What do the RFCs say?
+			 */
 			modecfg_start_set(st);
 			break;
 		}
@@ -2745,7 +2745,7 @@ void complete_v1_state_transition(struct msg_digest **mdp, stf_status result)
 		/* update the previous packet history */
 		remember_received_packet(st, md);
 
-		whack_log(RC_INTERNALERR + md->note,
+		whack_log(RC_INTERNALERR + md->v1_note,
 			  "%s: internal error",
 			  st->st_state_name);
 
@@ -2778,7 +2778,7 @@ void complete_v1_state_transition(struct msg_digest **mdp, stf_status result)
 
 	default:        /* a shortcut to STF_FAIL, setting md->note */
 		passert(result > STF_FAIL);
-		md->note = result - STF_FAIL;
+		md->v1_note = result - STF_FAIL;
 		/* FALL THROUGH */
 	case STF_FAIL:
 		/* As it is, we act as if this message never happened:
@@ -2789,17 +2789,17 @@ void complete_v1_state_transition(struct msg_digest **mdp, stf_status result)
 		 * Perhaps because the message hasn't been authenticated?
 		 * But then then any duplicate would lose too, I would think.
 		 */
-		whack_log(RC_NOTIFICATION + md->note,
+		whack_log(RC_NOTIFICATION + md->v1_note,
 			  "%s: %s", st->st_state_name,
-			  enum_name(&ikev1_notify_names, md->note));
+			  enum_name(&ikev1_notify_names, md->v1_note));
 
-		if (md->note != NOTHING_WRONG)
-			SEND_NOTIFICATION(md->note);
+		if (md->v1_note != NOTHING_WRONG)
+			SEND_NOTIFICATION(md->v1_note);
 
 		DBG(DBG_CONTROL,
 		    DBG_log("state transition function for %s failed: %s",
 			    enum_name(&state_names, from_state),
-			    enum_name(&ikev1_notify_names, md->note)));
+			    enum_name(&ikev1_notify_names, md->v1_note)));
 
 #ifdef HAVE_NM
 		if (st->st_connection->remotepeertype == CISCO &&
@@ -3095,7 +3095,7 @@ void doi_log_cert_thinking(u_int16_t auth,
 		} else if (certtype == CERT_NONE) {
 			DBG(DBG_CONTROL,
 				DBG_log("I did not send a certificate because I do not have one."));
-		} else if (policy == cert_sendifasked) {
+		} else if (policy == CERT_SENDIFASKED) {
 			DBG(DBG_CONTROL,
 				DBG_log("I did not send my certificate because I was not asked to."));
 		}

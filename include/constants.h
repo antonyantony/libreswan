@@ -24,15 +24,18 @@
 #ifndef _CONSTANTS_H_
 #define _CONSTANTS_H_
 
-struct lswlog;
-
 #include <stddef.h> /* for size_t */
+
+#include "shunk.h"
+#include "lset.h"
+
+struct lswlog;
 
 /*
  * This file was split into internal contants (Libreswan/pluto related),
  * and external constants (defined by IETF, etc.)
  *
- * Constants which are kernel/IPsec related are in appropriate
+ * Constants that are kernel/IPsec related are in appropriate
  * libreswan / *.h files.
  *
  */
@@ -91,16 +94,20 @@ struct lswlog;
  * <libreswan.h> defines err_t for this return type.
  */
 
-/* you'd think this should be builtin to compiler... */
+/*
+ * Libreswan was written before <stdbool.h> was standardized.
+ * We continue to use TRUE and FALSE because we think that they are clearer
+ * than true or false.
+ */
 
 #include <stdbool.h> /* for 'bool' */
 
 #ifndef TRUE
-#  define TRUE 1
+#  define TRUE true
 #endif
 
 #ifndef FALSE
-#  define FALSE 0
+#  define FALSE false
 #endif
 
 #define NULL_FD (-1)	/* NULL file descriptor */
@@ -179,24 +186,6 @@ extern const char *bool_str(bool b);	/* bool -> string */
 extern char *jam_str(char *dest, size_t size, const char *src);
 extern char *add_str(char *buf, size_t size, char *hint, const char *src);
 
-/* set type with room for at least 64 elements for ALG opts
- * (was 32 in stock FS)
- */
-
-typedef uint_fast64_t lset_t;
-#define PRIxLSET    PRIxFAST64
-#define LELEM_ROOF  64	/* all elements must be less than this */
-#define LEMPTY ((lset_t)0)
-#define LELEM(opt) ((lset_t)1 << (opt))
-#define LRANGE(lwb, upb) LRANGES(LELEM(lwb), LELEM(upb))
-#define LRANGES(first, last) (last - first + last)
-#define LHAS(set, elem)  (((set) & LELEM(elem)) != LEMPTY)
-#define LIN(subset, set)  (((subset) & (set)) == (subset))
-#define LDISJOINT(a, b)  (((a) & (b)) == LEMPTY)
-/* LFIRST: find first element of a set (tricky use of twos complement) */
-#define LFIRST(s) ((s) & -(s))
-#define LSINGLETON(s) ((s) != LEMPTY && LFIRST(s) == (s))
-
 /* Routines to check and display values.
  *
  * WARNING: Some of these routines are not re-entrant because
@@ -268,11 +257,11 @@ extern int enum_search(enum_names *ed, const char *string);
  * found.
  *
  * Unlike enum_search() this compares strings both with and without
- * any prefixes and suffixes.  For instance, and assuming "ESP_" is
- * the prefix discarded by enum_short_name(), "blowfish" will match
- * "ESP_BLOWFISH(OBSOLETE)" while enum_search() will not.
+ * any prefix or suffix.  For instance, given the enum_name entry
+ * "ESP_BLOWFISH(OBSOLETE)" with prefix "ESP_", any of
+ * "esp_blowfish(obsolete)", "esp_blowfish" and "blowfish" will match.
  */
-extern int enum_match(enum_names *ed, const char *string);
+extern int enum_match(enum_names *ed, shunk_t string);
 
 /*
  * Printing enum enums.
@@ -345,8 +334,6 @@ struct keyword_enum_values {
 	const struct keyword_enum_value *values;
 	size_t valuesize;
 };
-
-extern struct keyword_enum_values kw_host_list;
 
 extern const char *keyword_name(struct keyword_enum_values *kevs,
 				unsigned int value);

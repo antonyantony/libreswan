@@ -1,5 +1,6 @@
-ipsec look
+../../pluto/bin/ipsec-look.sh
 ipsec whack --trafficstatus
+grep "MOBIKE " /tmp/pluto.log
 sleep 7
 : ==== cut ====
 ipsec auto --status

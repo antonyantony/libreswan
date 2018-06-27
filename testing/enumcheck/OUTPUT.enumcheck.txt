@@ -33,24 +33,27 @@ pluto enum_names:
          lswlog_enum_short 4: OK
 
   certpolicy_type_names:
-    1 -> cert_neversend
+    1 -> CERT_NEVERSEND
          lswlog_enum 1: OK
-         search cert_neversend: OK
-         match cert_neversend: OK
+         search CERT_NEVERSEND: OK
+         match CERT_NEVERSEND: OK
          short_name 1:  OK
          lswlog_enum_short 1: OK
-    2 -> cert_sendifasked
+         match NEVERSEND [short]: OK
+    2 -> CERT_SENDIFASKED
          lswlog_enum 2: OK
-         search cert_sendifasked: OK
-         match cert_sendifasked: OK
+         search CERT_SENDIFASKED: OK
+         match CERT_SENDIFASKED: OK
          short_name 2:  OK
          lswlog_enum_short 2: OK
-    3 -> cert_alwayssend
+         match SENDIFASKED [short]: OK
+    3 -> CERT_ALWAYSSEND
          lswlog_enum 3: OK
-         search cert_alwayssend: OK
-         match cert_alwayssend: OK
+         search CERT_ALWAYSSEND: OK
+         match CERT_ALWAYSSEND: OK
          short_name 3:  OK
          lswlog_enum_short 3: OK
+         match ALWAYSSEND [short]: OK
 
 IETF registry enum_names:
 
@@ -249,138 +252,161 @@ IETF registry enum_names:
          match ISAKMP_NEXT_v2NONE: OK
          short_name 0:  OK
          lswlog_enum_short 0: OK
+         match NONE [short]: OK
    33 -> ISAKMP_NEXT_v2SA
          lswlog_enum 33: OK
          search ISAKMP_NEXT_v2SA: OK
          match ISAKMP_NEXT_v2SA: OK
          short_name 33:  OK
          lswlog_enum_short 33: OK
+         match SA [short]: OK
    34 -> ISAKMP_NEXT_v2KE
          lswlog_enum 34: OK
          search ISAKMP_NEXT_v2KE: OK
          match ISAKMP_NEXT_v2KE: OK
          short_name 34:  OK
          lswlog_enum_short 34: OK
+         match KE [short]: OK
    35 -> ISAKMP_NEXT_v2IDi
          lswlog_enum 35: OK
          search ISAKMP_NEXT_v2IDi: OK
          match ISAKMP_NEXT_v2IDi: OK
          short_name 35:  OK
          lswlog_enum_short 35: OK
+         match IDi [short]: OK
    36 -> ISAKMP_NEXT_v2IDr
          lswlog_enum 36: OK
          search ISAKMP_NEXT_v2IDr: OK
          match ISAKMP_NEXT_v2IDr: OK
          short_name 36:  OK
          lswlog_enum_short 36: OK
+         match IDr [short]: OK
    37 -> ISAKMP_NEXT_v2CERT
          lswlog_enum 37: OK
          search ISAKMP_NEXT_v2CERT: OK
          match ISAKMP_NEXT_v2CERT: OK
          short_name 37:  OK
          lswlog_enum_short 37: OK
+         match CERT [short]: OK
    38 -> ISAKMP_NEXT_v2CERTREQ
          lswlog_enum 38: OK
          search ISAKMP_NEXT_v2CERTREQ: OK
          match ISAKMP_NEXT_v2CERTREQ: OK
          short_name 38:  OK
          lswlog_enum_short 38: OK
+         match CERTREQ [short]: OK
    39 -> ISAKMP_NEXT_v2AUTH
          lswlog_enum 39: OK
          search ISAKMP_NEXT_v2AUTH: OK
          match ISAKMP_NEXT_v2AUTH: OK
          short_name 39:  OK
          lswlog_enum_short 39: OK
+         match AUTH [short]: OK
    40 -> ISAKMP_NEXT_v2Ni
          lswlog_enum 40: OK
          search ISAKMP_NEXT_v2Ni: OK
          match ISAKMP_NEXT_v2Ni: OK
          short_name 40:  OK
          lswlog_enum_short 40: OK
+         match Ni [short]: OK
    41 -> ISAKMP_NEXT_v2N
          lswlog_enum 41: OK
          search ISAKMP_NEXT_v2N: OK
          match ISAKMP_NEXT_v2N: OK
          short_name 41:  OK
          lswlog_enum_short 41: OK
+         match N [short]: OK
    42 -> ISAKMP_NEXT_v2D
          lswlog_enum 42: OK
          search ISAKMP_NEXT_v2D: OK
          match ISAKMP_NEXT_v2D: OK
          short_name 42:  OK
          lswlog_enum_short 42: OK
+         match D [short]: OK
    43 -> ISAKMP_NEXT_v2V
          lswlog_enum 43: OK
          search ISAKMP_NEXT_v2V: OK
          match ISAKMP_NEXT_v2V: OK
          short_name 43:  OK
          lswlog_enum_short 43: OK
+         match V [short]: OK
    44 -> ISAKMP_NEXT_v2TSi
          lswlog_enum 44: OK
          search ISAKMP_NEXT_v2TSi: OK
          match ISAKMP_NEXT_v2TSi: OK
          short_name 44:  OK
          lswlog_enum_short 44: OK
+         match TSi [short]: OK
    45 -> ISAKMP_NEXT_v2TSr
          lswlog_enum 45: OK
          search ISAKMP_NEXT_v2TSr: OK
          match ISAKMP_NEXT_v2TSr: OK
          short_name 45:  OK
          lswlog_enum_short 45: OK
+         match TSr [short]: OK
    46 -> ISAKMP_NEXT_v2SK
          lswlog_enum 46: OK
          search ISAKMP_NEXT_v2SK: OK
          match ISAKMP_NEXT_v2SK: OK
          short_name 46:  OK
          lswlog_enum_short 46: OK
+         match SK [short]: OK
    47 -> ISAKMP_NEXT_v2CP
          lswlog_enum 47: OK
          search ISAKMP_NEXT_v2CP: OK
          match ISAKMP_NEXT_v2CP: OK
          short_name 47:  OK
          lswlog_enum_short 47: OK
+         match CP [short]: OK
    48 -> ISAKMP_NEXT_v2EAP
          lswlog_enum 48: OK
          search ISAKMP_NEXT_v2EAP: OK
          match ISAKMP_NEXT_v2EAP: OK
          short_name 48:  OK
          lswlog_enum_short 48: OK
+         match EAP [short]: OK
    49 -> ISAKMP_NEXT_v2GSPM
          lswlog_enum 49: OK
          search ISAKMP_NEXT_v2GSPM: OK
          match ISAKMP_NEXT_v2GSPM: OK
          short_name 49:  OK
          lswlog_enum_short 49: OK
+         match GSPM [short]: OK
    50 -> ISAKMP_NEXT_v2IDG
          lswlog_enum 50: OK
          search ISAKMP_NEXT_v2IDG: OK
          match ISAKMP_NEXT_v2IDG: OK
          short_name 50:  OK
          lswlog_enum_short 50: OK
+         match IDG [short]: OK
    51 -> ISAKMP_NEXT_v2GSA
          lswlog_enum 51: OK
          search ISAKMP_NEXT_v2GSA: OK
          match ISAKMP_NEXT_v2GSA: OK
          short_name 51:  OK
          lswlog_enum_short 51: OK
+         match GSA [short]: OK
    52 -> ISAKMP_NEXT_v2KD
          lswlog_enum 52: OK
          search ISAKMP_NEXT_v2KD: OK
          match ISAKMP_NEXT_v2KD: OK
          short_name 52:  OK
          lswlog_enum_short 52: OK
+         match KD [short]: OK
    53 -> ISAKMP_NEXT_v2SKF
          lswlog_enum 53: OK
          search ISAKMP_NEXT_v2SKF: OK
          match ISAKMP_NEXT_v2SKF: OK
          short_name 53:  OK
          lswlog_enum_short 53: OK
+         match SKF [short]: OK
   132 -> ISAKMP_NEXT_v2IKE_FRAGMENTATION
          lswlog_enum 132: OK
          search ISAKMP_NEXT_v2IKE_FRAGMENTATION: OK
          match ISAKMP_NEXT_v2IKE_FRAGMENTATION: OK
          short_name 132:  OK
          lswlog_enum_short 132: OK
+         match IKE_FRAGMENTATION [short]: OK
 
   payload_names_ikev1orv2:
     0 -> ISAKMP_NEXT_NONE
@@ -753,30 +779,35 @@ IETF registry enum_names:
          match ISAKMP_v2_SA_INIT: OK
          short_name 34:  OK
          lswlog_enum_short 34: OK
+         match SA_INIT [short]: OK
    35 -> ISAKMP_v2_AUTH
          lswlog_enum 35: OK
          search ISAKMP_v2_AUTH: OK
          match ISAKMP_v2_AUTH: OK
          short_name 35:  OK
          lswlog_enum_short 35: OK
+         match AUTH [short]: OK
    36 -> ISAKMP_v2_CREATE_CHILD_SA
          lswlog_enum 36: OK
          search ISAKMP_v2_CREATE_CHILD_SA: OK
          match ISAKMP_v2_CREATE_CHILD_SA: OK
          short_name 36:  OK
          lswlog_enum_short 36: OK
+         match CREATE_CHILD_SA [short]: OK
    37 -> ISAKMP_v2_INFORMATIONAL
          lswlog_enum 37: OK
          search ISAKMP_v2_INFORMATIONAL: OK
          match ISAKMP_v2_INFORMATIONAL: OK
          short_name 37:  OK
          lswlog_enum_short 37: OK
+         match INFORMATIONAL [short]: OK
    38 -> ISAKMP_v2_IKE_SESSION_RESUME
          lswlog_enum 38: OK
          search ISAKMP_v2_IKE_SESSION_RESUME: OK
          match ISAKMP_v2_IKE_SESSION_RESUME: OK
          short_name 38:  OK
          lswlog_enum_short 38: OK
+         match IKE_SESSION_RESUME [short]: OK
   244 -> ISAKMP_XCHG_ECHOREQUEST_PRIVATE
          lswlog_enum 244: OK
          search ISAKMP_XCHG_ECHOREQUEST_PRIVATE: OK
@@ -1803,6 +1834,13 @@ IETF registry enum_names:
          match SHA2_512 [short]: OK
 
   oakley_group_names:
+    0 -> OAKLEY_GROUP_NONE
+         lswlog_enum 0: OK
+         search OAKLEY_GROUP_NONE: OK
+         match OAKLEY_GROUP_NONE: OK
+         short_name 0:  OK
+         lswlog_enum_short 0: OK
+         match NONE [short]: OK
     1 -> OAKLEY_GROUP_MODP768
          lswlog_enum 1: OK
          search OAKLEY_GROUP_MODP768: OK
@@ -2764,6 +2802,12 @@ IETF registry enum_names:
          match IKEv2_INTERNAL_DNS_DOMAIN: OK
          short_name 25:  OK
          lswlog_enum_short 25: OK
+   26 -> IKEv2_INTERNAL_DNSSEC_TA
+         lswlog_enum 26: OK
+         search IKEv2_INTERNAL_DNSSEC_TA: OK
+         match IKEv2_INTERNAL_DNSSEC_TA: OK
+         short_name 26:  OK
+         lswlog_enum_short 26: OK
 
   pkk_names:
     1 -> PKK_PSK
@@ -3536,60 +3580,70 @@ IETF registry enum_names:
          match CERT_PKCS7_WRAPPED_X509: OK
          short_name 1:  OK
          lswlog_enum_short 1: OK
+         match PKCS7_WRAPPED_X509 [short]: OK
     2 -> CERT_PGP
          lswlog_enum 2: OK
          search CERT_PGP: OK
          match CERT_PGP: OK
          short_name 2:  OK
          lswlog_enum_short 2: OK
+         match PGP [short]: OK
     3 -> CERT_DNS_SIGNED_KEY
          lswlog_enum 3: OK
          search CERT_DNS_SIGNED_KEY: OK
          match CERT_DNS_SIGNED_KEY: OK
          short_name 3:  OK
          lswlog_enum_short 3: OK
+         match DNS_SIGNED_KEY [short]: OK
     4 -> CERT_X509_SIGNATURE
          lswlog_enum 4: OK
          search CERT_X509_SIGNATURE: OK
          match CERT_X509_SIGNATURE: OK
          short_name 4:  OK
          lswlog_enum_short 4: OK
+         match X509_SIGNATURE [short]: OK
     5 -> CERT_X509_KEY_EXCHANGE
          lswlog_enum 5: OK
          search CERT_X509_KEY_EXCHANGE: OK
          match CERT_X509_KEY_EXCHANGE: OK
          short_name 5:  OK
          lswlog_enum_short 5: OK
+         match X509_KEY_EXCHANGE [short]: OK
     6 -> CERT_KERBEROS_TOKENS
          lswlog_enum 6: OK
          search CERT_KERBEROS_TOKENS: OK
          match CERT_KERBEROS_TOKENS: OK
          short_name 6:  OK
          lswlog_enum_short 6: OK
+         match KERBEROS_TOKENS [short]: OK
     7 -> CERT_CRL
          lswlog_enum 7: OK
          search CERT_CRL: OK
          match CERT_CRL: OK
          short_name 7:  OK
          lswlog_enum_short 7: OK
+         match CRL [short]: OK
     8 -> CERT_ARL
          lswlog_enum 8: OK
          search CERT_ARL: OK
          match CERT_ARL: OK
          short_name 8:  OK
          lswlog_enum_short 8: OK
+         match ARL [short]: OK
     9 -> CERT_SPKI
          lswlog_enum 9: OK
          search CERT_SPKI: OK
          match CERT_SPKI: OK
          short_name 9:  OK
          lswlog_enum_short 9: OK
+         match SPKI [short]: OK
    10 -> CERT_X509_ATTRIBUTE
          lswlog_enum 10: OK
          search CERT_X509_ATTRIBUTE: OK
          match CERT_X509_ATTRIBUTE: OK
          short_name 10:  OK
          lswlog_enum_short 10: OK
+         match X509_ATTRIBUTE [short]: OK
 
   ikev2_cert_type_names:
     1 -> CERT_PKCS7_WRAPPED_X509
@@ -3598,84 +3652,98 @@ IETF registry enum_names:
          match CERT_PKCS7_WRAPPED_X509: OK
          short_name 1:  OK
          lswlog_enum_short 1: OK
+         match PKCS7_WRAPPED_X509 [short]: OK
     2 -> CERT_PGP
          lswlog_enum 2: OK
          search CERT_PGP: OK
          match CERT_PGP: OK
          short_name 2:  OK
          lswlog_enum_short 2: OK
+         match PGP [short]: OK
     3 -> CERT_DNS_SIGNED_KEY
          lswlog_enum 3: OK
          search CERT_DNS_SIGNED_KEY: OK
          match CERT_DNS_SIGNED_KEY: OK
          short_name 3:  OK
          lswlog_enum_short 3: OK
+         match DNS_SIGNED_KEY [short]: OK
     4 -> CERT_X509_SIGNATURE
          lswlog_enum 4: OK
          search CERT_X509_SIGNATURE: OK
          match CERT_X509_SIGNATURE: OK
          short_name 4:  OK
          lswlog_enum_short 4: OK
+         match X509_SIGNATURE [short]: OK
     6 -> CERT_KERBEROS_TOKENS
          lswlog_enum 6: OK
          search CERT_KERBEROS_TOKENS: OK
          match CERT_KERBEROS_TOKENS: OK
          short_name 6:  OK
          lswlog_enum_short 6: OK
+         match KERBEROS_TOKENS [short]: OK
     7 -> CERT_CRL
          lswlog_enum 7: OK
          search CERT_CRL: OK
          match CERT_CRL: OK
          short_name 7:  OK
          lswlog_enum_short 7: OK
+         match CRL [short]: OK
     8 -> CERT_ARL
          lswlog_enum 8: OK
          search CERT_ARL: OK
          match CERT_ARL: OK
          short_name 8:  OK
          lswlog_enum_short 8: OK
+         match ARL [short]: OK
     9 -> CERT_SPKI
          lswlog_enum 9: OK
          search CERT_SPKI: OK
          match CERT_SPKI: OK
          short_name 9:  OK
          lswlog_enum_short 9: OK
+         match SPKI [short]: OK
    10 -> CERT_X509_ATTRIBUTE
          lswlog_enum 10: OK
          search CERT_X509_ATTRIBUTE: OK
          match CERT_X509_ATTRIBUTE: OK
          short_name 10:  OK
          lswlog_enum_short 10: OK
+         match X509_ATTRIBUTE [short]: OK
    11 -> CERT_RAW_RSA
          lswlog_enum 11: OK
          search CERT_RAW_RSA: OK
          match CERT_RAW_RSA: OK
          short_name 11:  OK
          lswlog_enum_short 11: OK
+         match RAW_RSA [short]: OK
    12 -> CERT_X509_CERT_URL
          lswlog_enum 12: OK
          search CERT_X509_CERT_URL: OK
          match CERT_X509_CERT_URL: OK
          short_name 12:  OK
          lswlog_enum_short 12: OK
+         match X509_CERT_URL [short]: OK
    13 -> CERT_X509_BUNDLE_URL
          lswlog_enum 13: OK
          search CERT_X509_BUNDLE_URL: OK
          match CERT_X509_BUNDLE_URL: OK
          short_name 13:  OK
          lswlog_enum_short 13: OK
+         match X509_BUNDLE_URL [short]: OK
    14 -> CERT_OCSP_CONTENT
          lswlog_enum 14: OK
          search CERT_OCSP_CONTENT: OK
          match CERT_OCSP_CONTENT: OK
          short_name 14:  OK
          lswlog_enum_short 14: OK
+         match OCSP_CONTENT [short]: OK
    15 -> CERT_RAW_PUBLIC_KEY
          lswlog_enum 15: OK
          search CERT_RAW_PUBLIC_KEY: OK
          match CERT_RAW_PUBLIC_KEY: OK
          short_name 15:  OK
          lswlog_enum_short 15: OK
+         match RAW_PUBLIC_KEY [short]: OK
 
   modecfg_attr_names:
     1 -> INTERNAL_IP4_ADDRESS
@@ -4018,334 +4086,6 @@ IETF registry enum_names:
          short_name 13:  OK
          lswlog_enum_short 13: OK
 
-  debug_and_impair_names:
-    0 -> debug-raw
-         lswlog_enum 0: OK
-         search debug-raw: OK
-         match debug-raw: OK
-         short_name 0:  OK
-         lswlog_enum_short 0: OK
-         match raw [short]: OK
-    1 -> debug-crypt
-         lswlog_enum 1: OK
-         search debug-crypt: OK
-         match debug-crypt: OK
-         short_name 1:  OK
-         lswlog_enum_short 1: OK
-         match crypt [short]: OK
-    2 -> debug-parsing
-         lswlog_enum 2: OK
-         search debug-parsing: OK
-         match debug-parsing: OK
-         short_name 2:  OK
-         lswlog_enum_short 2: OK
-         match parsing [short]: OK
-    3 -> debug-emitting
-         lswlog_enum 3: OK
-         search debug-emitting: OK
-         match debug-emitting: OK
-         short_name 3:  OK
-         lswlog_enum_short 3: OK
-         match emitting [short]: OK
-    4 -> debug-control
-         lswlog_enum 4: OK
-         search debug-control: OK
-         match debug-control: OK
-         short_name 4:  OK
-         lswlog_enum_short 4: OK
-         match control [short]: OK
-    5 -> debug-lifecycle
-         lswlog_enum 5: OK
-         search debug-lifecycle: OK
-         match debug-lifecycle: OK
-         short_name 5:  OK
-         lswlog_enum_short 5: OK
-         match lifecycle [short]: OK
-    6 -> debug-kernel
-         lswlog_enum 6: OK
-         search debug-kernel: OK
-         match debug-kernel: OK
-         short_name 6:  OK
-         lswlog_enum_short 6: OK
-         match kernel [short]: OK
-    7 -> debug-dns
-         lswlog_enum 7: OK
-         search debug-dns: OK
-         match debug-dns: OK
-         short_name 7:  OK
-         lswlog_enum_short 7: OK
-         match dns [short]: OK
-    8 -> debug-oppo
-         lswlog_enum 8: OK
-         search debug-oppo: OK
-         match debug-oppo: OK
-         short_name 8:  OK
-         lswlog_enum_short 8: OK
-         match oppo [short]: OK
-    9 -> debug-controlmore
-         lswlog_enum 9: OK
-         search debug-controlmore: OK
-         match debug-controlmore: OK
-         short_name 9:  OK
-         lswlog_enum_short 9: OK
-         match controlmore [short]: OK
-   10 -> debug-pfkey
-         lswlog_enum 10: OK
-         search debug-pfkey: OK
-         match debug-pfkey: OK
-         short_name 10:  OK
-         lswlog_enum_short 10: OK
-         match pfkey [short]: OK
-   11 -> debug-nattraversal
-         lswlog_enum 11: OK
-         search debug-nattraversal: OK
-         match debug-nattraversal: OK
-         short_name 11:  OK
-         lswlog_enum_short 11: OK
-         match nattraversal [short]: OK
-   12 -> debug-x509
-         lswlog_enum 12: OK
-         search debug-x509: OK
-         match debug-x509: OK
-         short_name 12:  OK
-         lswlog_enum_short 12: OK
-         match x509 [short]: OK
-   13 -> debug-dpd
-         lswlog_enum 13: OK
-         search debug-dpd: OK
-         match debug-dpd: OK
-         short_name 13:  OK
-         lswlog_enum_short 13: OK
-         match dpd [short]: OK
-   14 -> debug-xauth
-         lswlog_enum 14: OK
-         search debug-xauth: OK
-         match debug-xauth: OK
-         short_name 14:  OK
-         lswlog_enum_short 14: OK
-         match xauth [short]: OK
-   15 -> debug-retransmits
-         lswlog_enum 15: OK
-         search debug-retransmits: OK
-         match debug-retransmits: OK
-         short_name 15:  OK
-         lswlog_enum_short 15: OK
-         match retransmits [short]: OK
-   16 -> debug-oppoinfo
-         lswlog_enum 16: OK
-         search debug-oppoinfo: OK
-         match debug-oppoinfo: OK
-         short_name 16:  OK
-         lswlog_enum_short 16: OK
-         match oppoinfo [short]: OK
-   17 -> debug-whackwatch
-         lswlog_enum 17: OK
-         search debug-whackwatch: OK
-         match debug-whackwatch: OK
-         short_name 17:  OK
-         lswlog_enum_short 17: OK
-         match whackwatch [short]: OK
-   18 -> debug-private
-         lswlog_enum 18: OK
-         search debug-private: OK
-         match debug-private: OK
-         short_name 18:  OK
-         lswlog_enum_short 18: OK
-         match private [short]: OK
-   19 -> debug-add-prefix
-         lswlog_enum 19: OK
-         search debug-add-prefix: OK
-         match debug-add-prefix: OK
-         short_name 19:  OK
-         lswlog_enum_short 19: OK
-         match add-prefix [short]: OK
-   20 -> impair-bust-mi2
-         lswlog_enum 20: OK
-         search impair-bust-mi2: OK
-         match impair-bust-mi2: OK
-         short_name 20:  OK
-         lswlog_enum_short 20: OK
-   21 -> impair-bust-mr2
-         lswlog_enum 21: OK
-         search impair-bust-mr2: OK
-         match impair-bust-mr2: OK
-         short_name 21:  OK
-         lswlog_enum_short 21: OK
-   22 -> impair-drop-i2
-         lswlog_enum 22: OK
-         search impair-drop-i2: OK
-         match impair-drop-i2: OK
-         short_name 22:  OK
-         lswlog_enum_short 22: OK
-   23 -> impair-sa-creation
-         lswlog_enum 23: OK
-         search impair-sa-creation: OK
-         match impair-sa-creation: OK
-         short_name 23:  OK
-         lswlog_enum_short 23: OK
-   24 -> impair-die-oninfo
-         lswlog_enum 24: OK
-         search impair-die-oninfo: OK
-         match impair-die-oninfo: OK
-         short_name 24:  OK
-         lswlog_enum_short 24: OK
-   25 -> impair-jacob-two-two
-         lswlog_enum 25: OK
-         search impair-jacob-two-two: OK
-         match impair-jacob-two-two: OK
-         short_name 25:  OK
-         lswlog_enum_short 25: OK
-   26 -> impair-allow-null-null
-         lswlog_enum 26: OK
-         search impair-allow-null-null: OK
-         match impair-allow-null-null: OK
-         short_name 26:  OK
-         lswlog_enum_short 26: OK
-   27 -> impair-major-version-bump
-         lswlog_enum 27: OK
-         search impair-major-version-bump: OK
-         match impair-major-version-bump: OK
-         short_name 27:  OK
-         lswlog_enum_short 27: OK
-   28 -> impair-minor-version-bump
-         lswlog_enum 28: OK
-         search impair-minor-version-bump: OK
-         match impair-minor-version-bump: OK
-         short_name 28:  OK
-         lswlog_enum_short 28: OK
-   29 -> impair-retransmits
-         lswlog_enum 29: OK
-         search impair-retransmits: OK
-         match impair-retransmits: OK
-         short_name 29:  OK
-         lswlog_enum_short 29: OK
-   30 -> impair-send-no-retransmits
-         lswlog_enum 30: OK
-         search impair-send-no-retransmits: OK
-         match impair-send-no-retransmits: OK
-         short_name 30:  OK
-         lswlog_enum_short 30: OK
-   31 -> impair-send-bogus-payload-flag
-         lswlog_enum 31: OK
-         search impair-send-bogus-payload-flag: OK
-         match impair-send-bogus-payload-flag: OK
-         short_name 31:  OK
-         lswlog_enum_short 31: OK
-   32 -> impair-send-bogus-isakmp-flag
-         lswlog_enum 32: OK
-         search impair-send-bogus-isakmp-flag: OK
-         match impair-send-bogus-isakmp-flag: OK
-         short_name 32:  OK
-         lswlog_enum_short 32: OK
-   33 -> impair-send-ikev2-ke
-         lswlog_enum 33: OK
-         search impair-send-ikev2-ke: OK
-         match impair-send-ikev2-ke: OK
-         short_name 33:  OK
-         lswlog_enum_short 33: OK
-   34 -> impair-send-no-delete
-         lswlog_enum 34: OK
-         search impair-send-no-delete: OK
-         match impair-send-no-delete: OK
-         short_name 34:  OK
-         lswlog_enum_short 34: OK
-   35 -> impair-send-no-ikev2-auth
-         lswlog_enum 35: OK
-         search impair-send-no-ikev2-auth: OK
-         match impair-send-no-ikev2-auth: OK
-         short_name 35:  OK
-         lswlog_enum_short 35: OK
-   36 -> impair-send-no-xauth-r0
-         lswlog_enum 36: OK
-         search impair-send-no-xauth-r0: OK
-         match impair-send-no-xauth-r0: OK
-         short_name 36:  OK
-         lswlog_enum_short 36: OK
-   37 -> impair-drop-xauth-r0
-         lswlog_enum 37: OK
-         search impair-drop-xauth-r0: OK
-         match impair-drop-xauth-r0: OK
-         short_name 37:  OK
-         lswlog_enum_short 37: OK
-   38 -> impair-send-no-main-r2
-         lswlog_enum 38: OK
-         search impair-send-no-main-r2: OK
-         match impair-send-no-main-r2: OK
-         short_name 38:  OK
-         lswlog_enum_short 38: OK
-   39 -> impair-force-fips
-         lswlog_enum 39: OK
-         search impair-force-fips: OK
-         match impair-force-fips: OK
-         short_name 39:  OK
-         lswlog_enum_short 39: OK
-   40 -> impair-send-key-size-check
-         lswlog_enum 40: OK
-         search impair-send-key-size-check: OK
-         match impair-send-key-size-check: OK
-         short_name 40:  OK
-         lswlog_enum_short 40: OK
-   41 -> impair-send-zero-gx
-         lswlog_enum 41: OK
-         search impair-send-zero-gx: OK
-         match impair-send-zero-gx: OK
-         short_name 41:  OK
-         lswlog_enum_short 41: OK
-   42 -> impair-send-bogus-dcookie
-         lswlog_enum 42: OK
-         search impair-send-bogus-dcookie: OK
-         match impair-send-bogus-dcookie: OK
-         short_name 42:  OK
-         lswlog_enum_short 42: OK
-   43 -> impair-omit-hash-notify
-         lswlog_enum 43: OK
-         search impair-omit-hash-notify: OK
-         match impair-omit-hash-notify: OK
-         short_name 43:  OK
-         lswlog_enum_short 43: OK
-   44 -> impair-ignore-hash-notify
-         lswlog_enum 44: OK
-         search impair-ignore-hash-notify: OK
-         match impair-ignore-hash-notify: OK
-         short_name 44:  OK
-         lswlog_enum_short 44: OK
-   45 -> impair-ignore-hash-notify-resp
-         lswlog_enum 45: OK
-         search impair-ignore-hash-notify-resp: OK
-         match impair-ignore-hash-notify-resp: OK
-         short_name 45:  OK
-         lswlog_enum_short 45: OK
-   46 -> impair-ikev2-exclude-integ-none
-         lswlog_enum 46: OK
-         search impair-ikev2-exclude-integ-none: OK
-         match impair-ikev2-exclude-integ-none: OK
-         short_name 46:  OK
-         lswlog_enum_short 46: OK
-   47 -> impair-ikev2-include-integ-none
-         lswlog_enum 47: OK
-         search impair-ikev2-include-integ-none: OK
-         match impair-ikev2-include-integ-none: OK
-         short_name 47:  OK
-         lswlog_enum_short 47: OK
-   48 -> impair-replay-duplicates
-         lswlog_enum 48: OK
-         search impair-replay-duplicates: OK
-         match impair-replay-duplicates: OK
-         short_name 48:  OK
-         lswlog_enum_short 48: OK
-   49 -> impair-replay-forward
-         lswlog_enum 49: OK
-         search impair-replay-forward: OK
-         match impair-replay-forward: OK
-         short_name 49:  OK
-         lswlog_enum_short 49: OK
-   50 -> impair-replay-backward
-         lswlog_enum 50: OK
-         search impair-replay-backward: OK
-         match impair-replay-backward: OK
-         short_name 50:  OK
-         lswlog_enum_short 50: OK
-
 IKEv2 transforms:
          enum_enum_table 1: OK
          enum_enum_name 1 3: OK
@@ -4367,10 +4107,8 @@ IKEv2 transforms:
 
 lswlog_enum_lset_short:
 
-  debug fffff:
-	<<raw+crypt+parsing+emitting+control+lifecycle+kernel+dns+oppo+controlmore+pfkey+nattraversal+x509+dpd+xauth+retransmits+oppoinfo+whackwatch+private+add-prefix>>
-  impair 7fffffff00000:
-	<<bust-mi2+bust-mr2+drop-i2+sa-creation+die-oninfo+jacob-two-two+allow-null-null+major-version-bump+minor-version-bump+retransmits+send-no-retransmits+send-bogus-payload-flag+send-bogus-isakmp-flag+send-ikev2-ke+send-no-delete+send-no-ikev2-auth+send-no-xauth-r0+drop-xauth-r0+send-no-main-r2+force-fips+send-key-size-check+send-zero-gx+send-bogus-dcookie+omit-hash-notify+ignore-hash-notify+ignore-hash-notify-resp+ikev2-exclude-integ-none+ikev2-include-integ-none+replay-duplicates+replay-forward+replay-backward>>
-  debug+impair 4000000180001:
-	<<raw+add-prefix+impair-bust-mi2+impair-replay-backward>>
+  debug 30000:
+	<<crypt+crypt-low>>
+  impair 100000000000000:
+	<<proposal-parser>>
 

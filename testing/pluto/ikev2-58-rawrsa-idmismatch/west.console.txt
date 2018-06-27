@@ -2,7 +2,7 @@
 west #
  # confirm that the network is alive
 west #
- # make sure that clear text does not get through
+ # ensure that clear text does not get through
 west #
  iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j LOGDROP
 west #
@@ -35,7 +35,7 @@ west #
 000 "west-westnet-eastnet":   policy_label:unset;
 000 "west-westnet-eastnet":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "west-westnet-eastnet":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
-000 "west-westnet-eastnet":   sha2-truncbug:no; initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
+000 "west-westnet-eastnet":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "west-westnet-eastnet":   policy: RSASIG+ENCRYPT+TUNNEL+PFS+IKEV1_ALLOW+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
 000 "west-westnet-eastnet":   conn_prio: 24,24; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "west-westnet-eastnet":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
@@ -45,7 +45,7 @@ west #
  echo "initdone"
 initdone
 west #
- ipsec whack --debug-all --impair retransmits
+ ipsec whack --impair retransmits
 west #
  # this connection will fail
 west #

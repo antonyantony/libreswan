@@ -33,6 +33,7 @@
 #include <libreswan.h>
 
 #include "constants.h"
+#include "lswtool.h"
 #include "lswlog.h"
 
 bool log_to_stderr = TRUE;	/* should log go to stderr? */
@@ -52,25 +53,6 @@ void tool_init_log(const char *name)
 }
 
 /* <prefix><PROGNAME>: <message>. Errno N: <errmess> */
-
-void libreswan_log_errno(int e, const char *prefix, const char *message, ...)
-{
-	if (log_to_stderr) {
-		LSWLOG_FILE(stderr, buf) {
-			/* <prefix><PROGNAME>: <message>. Errno N: <errmess> */
-			lswlogs(buf, prefix);
-			lswlogs(buf, progname);
-			lswlogs(buf, prog_suffix);
-			va_list args;
-			va_start(args, message);
-			lswlogvf(buf, message, args);
-			va_end(args);
-			lswlogs(buf, ".");
-			lswlog_errno(buf, e);
-			lswlogs(buf, "\n");
-		}
-	}
-}
 
 void lswlog_errno_prefix(struct lswlog *buf, const char *prefix)
 {

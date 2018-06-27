@@ -38,9 +38,7 @@ extern void ipsecdoi_initiate(int whack_sock, struct connection *c,
 #endif
 			      );
 
-extern void ipsecdoi_replace(struct state *st,
-			     lset_t policy_add, lset_t policy_del,
-			     unsigned long try);
+extern void ipsecdoi_replace(struct state *st, unsigned long try);
 
 extern void init_phase2_iv(struct state *st, const msgid_t *msgid);
 
@@ -58,7 +56,7 @@ extern state_transition_fn
  * forward
  */
 struct oakley_group_desc;
-extern bool send_delete(struct state *st);
+extern void send_delete(struct state *st);
 extern bool accept_delete(struct msg_digest *md,
 			  struct payload_digest *p);
 extern void accept_self_delete(struct msg_digest *md);
@@ -71,12 +69,6 @@ extern void send_notification_from_md(struct msg_digest *md, notification_t type
 extern notification_t accept_KE(chunk_t *dest, const char *val_name,
 				const struct oakley_group_desc *gr,
 				pb_stream *pbs);
-
-/*
- * some additional functions are exported for xauth.c
- */
-extern bool close_message(pb_stream *pbs, struct state *st) MUST_USE_RESULT;
-extern bool encrypt_message(pb_stream *pbs, struct state *st) MUST_USE_RESULT;
 
 /* START_HASH_PAYLOAD_NO_HASH_START
  *

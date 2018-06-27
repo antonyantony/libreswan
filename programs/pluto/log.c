@@ -25,7 +25,6 @@
 
 #include <pthread.h>    /* Must be the first include file; XXX: why? */
 
-#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -472,7 +471,7 @@ static void add_whack_rc_prefix(struct lswlog *buf, enum rc_type rc)
 }
 
 /*
- * Wrap up the logic to decide if a particular output should occure.
+ * Wrap up the logic to decide if a particular output should occur.
  * The compiler will likely inline these.
  */
 
@@ -661,22 +660,6 @@ void lswlog_errno_suffix(struct lswlog *buf, int e)
 	lswlogs(buf, ".");
 	lswlog_errno(buf, e);
 	lswlog_to_error_stream(buf);
-}
-
-void libreswan_log_errno(int e, const char *prefix, const char *message, ...)
-{
-	LSWBUF(buf) {
-		/* <prefix><state#N...><message>.Errno %d: <strerror> */
-		lswlogs(buf, prefix);
-		lswlog_log_prefix(buf);
-		va_list args;
-		va_start(args, message);
-		lswlogvf(buf, message, args);
-		va_end(args);
-		lswlogs(buf, ".");
-		lswlog_errno(buf, e);
-		lswlog_to_error_stream(buf);
-	}
 }
 
 void exit_log(const char *message, ...)

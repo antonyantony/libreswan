@@ -37,6 +37,7 @@
 
 #include "deltatime.h"
 #include "monotime.h"
+#include "reqid.h"
 
 #include <nss.h>
 #include <pk11pub.h>
@@ -45,23 +46,6 @@
 #include "labeled_ipsec.h"	/* for struct xfrm_user_sec_ctx_ike and friends */
 #include "list_entry.h"
 #include "retransmit.h"
-
-/* Message ID mechanism.
- *
- * A Message ID is contained in each IKE message header.
- * For Phase 1 exchanges (Main and Aggressive), it will be zero.
- * For other exchanges, which must be under the protection of an
- * ISAKMP SA, the Message ID must be unique within that ISAKMP SA.
- * Effectively, this labels the message as belonging to a particular
- * exchange.
- *
- * RFC2408 "ISAKMP" 3.1 "ISAKMP Header Format" (near end) states that
- * the Message ID must be unique.  We interpret this to be "unique within
- * one ISAKMP SA".
- *
- * BTW, we feel this uniqueness allows rekeying to be somewhat simpler
- * than specified by draft-jenkins-ipsec-rekeying-06.txt.
- */
 
 /* msgid_t defined in defs.h */
 
@@ -242,12 +226,23 @@ struct hidden_variables {
 };
 
 struct msg_digest *unsuspend_md(struct state *st);
-#define set_suspended(st, md) { \
-	passert((st)->st_suspended_md == NULL); \
-	(st)->st_suspended_md = (md); \
-	(st)->st_suspended_md_func = __FUNCTION__; \
-	(st)->st_suspended_md_line = __LINE__; \
-    }
+
+/*
+ * On entry to this macro, when crypto has been off loaded then
+ * st_offloaded_task is non-NULL.  However, with XAUTH immediate,
+ * there's nothing to check.
+ */
+#define suspend_md(ST, MDP) {						\
+		DBG(DBG_CONTROL,					\
+		    DBG_log("suspending state #%lu and saving MD",	\
+			    (ST)->st_serialno));			\
+		passert((ST)->st_suspended_md == NULL);			\
+		(ST)->st_suspended_md = *(MDP);				\
+		*(MDP) = NULL; /* take ownership */			\
+		(ST)->st_suspended_md_func = __FUNCTION__;		\
+		(ST)->st_suspended_md_line = __LINE__;			\
+		passert(state_is_busy(ST));				\
+	}
 
 /* IKEv2, this struct will be mapped into a ikev2_ts1 payload  */
 struct traffic_selector {
@@ -300,7 +295,8 @@ struct state {
 #endif
 
 	bool st_ikev2;                          /* is this an IKEv2 state? */
-	bool st_ikev2_no_del;                   /* suppress sending DELETE - eg replaced conn */
+	bool st_ikev2_anon;                     /* is this an anonymous IKEv2 state? */
+	bool st_suppress_del_notify;            /* suppress sending DELETE - eg replaced conn */
 	bool st_rekeytov2;                      /* true if this IKEv1 is about
 						 * to be replaced with IKEv2
 						 */
@@ -348,6 +344,7 @@ struct state {
 	ip_address st_deleted_local_addr;	/* kernel deleted address */
 	ip_address st_mobike_localaddr;		/* new address to initiate MOBIKE */
 	u_int16_t st_mobike_localport;		/* is this necessary ? */
+	ip_address st_mobike_host_nexthop;	/* for updown script */
 
 	/** IKEv1-only things **/
 
@@ -375,12 +372,13 @@ struct state {
 	/* end of IKEv1-only things */
 
 	/** IKEv2-only things **/
-
+	bool st_viable_parent;	/* can initiate new CERAET_CHILD_SA */
 	struct ikev2_proposal *st_accepted_ike_proposal;
 	struct ikev2_proposal *st_accepted_esp_or_ah_proposal;
 
 	/* Am I the original initator, or orignal responder (v2 IKE_I flag). */
 	enum original_role st_original_role;
+	enum sa_role st_sa_role;
 
 	/* message ID sequence for things we send (as initiator) */
 	msgid_t st_msgid_lastack;               /* last one peer acknowledged  - host order */
@@ -579,7 +577,6 @@ struct state {
 	/*
 	 * Post-quantum preshared key variables
 	 */
-	char *st_ppk_dynamic_filename;		/* Filename containing dynamic PPKs */
 	bool st_ppk_used;			/* both ends agreed on PPK ID and PPK */
 	bool st_seen_ppk;			/* does remote peer support PPK? */
 
@@ -637,9 +634,40 @@ struct state {
 	bool st_seen_mobike;			/* did we receive MOBIKE */
 	bool st_sent_mobike;			/* sent MOBIKE notify */
 	bool st_seen_nonats;			/* did we receive NO_NATS_ALLOWED */
+	bool st_seen_initialc;			/* did we receive INITIAL_CONTACT */
 	generalName_t *st_requested_ca;		/* collected certificate requests */
 	u_int8_t st_reply_xchg;
+	bool st_peer_wants_null;		/* We received IDr payload of type ID_NULL (and we allow POLICY_AUTH_NULL */
 };
+
+/*
+ * The IKE and CHILD SAs.
+ *
+ * The terms IKE (parent, phase1) SA and CHILD * (phase2) SA are both
+ * taken from the IKEv2 RFC.
+ *
+ * For the moment, abuse the rule that says you can flip flop between
+ * a structure and a pointer to the structure's first entry.  Perhaps,
+ * one day, new_state() et.al. will be replaced with functions that
+ * return the correct SA.
+ *
+ * In code suggest:
+ *
+ *    struct ike_sa *ike; ike->sa.st_...
+ *    struct child_sa *child; child->sa.st_...
+ *
+ * The function ike_sa() returns the IKE SA that the struct state
+ * belongs to (an IKE SA belongs to itself).
+ *
+ * pexpect_ike_sa() is similar, except it complains loudly when ST
+ * isn't an IKE SA.
+ */
+
+struct ike_sa { struct state sa; };
+struct ike_sa *ike_sa(struct state *st);
+struct ike_sa *pexpect_ike_sa(struct state *st);
+struct child_sa *pexpect_child_sa(struct state *st);
+struct child_sa { struct state sa; };
 
 /* global variables */
 
@@ -668,8 +696,11 @@ extern void delete_p2states_by_connection(struct connection *c);
 extern void rekey_p2states_by_connection(struct connection *c);
 extern void delete_my_family(struct state *pst, bool v2_responder_state);
 
+struct state *ikev1_duplicate_state(struct state *st, sa_t ipsec);
+struct state *ikev2_duplicate_state(struct ike_sa *st, sa_t ipsec,
+				    enum sa_role sa_role);
+
 extern struct state
-	*duplicate_state(struct state *st, sa_t ipsec),
 	*state_with_serialno(so_serial_t sn),
 	*find_phase2_state_to_delete(const struct state *p1st, u_int8_t protoid,
 			     ipsec_spi_t spi, bool *bogus),
@@ -684,8 +715,9 @@ extern bool find_pending_phase2(const so_serial_t psn,
 					const struct connection *c,
 					lset_t ok_states);
 
-struct state *state_with_parent_msgid_expect(so_serial_t psn, msgid_t st_msgid,
-		                enum state_kind expected_state);
+extern struct state *resp_state_with_msgid(so_serial_t psn, msgid_t st_msgid);
+
+extern struct state *state_with_parent_msgid(so_serial_t psn, msgid_t st_msgid);
 
 extern struct state *find_state_ikev2_parent(const u_char *icookie,
 					     const u_char *rcookie);
@@ -693,9 +725,10 @@ extern struct state *find_state_ikev2_parent(const u_char *icookie,
 extern struct state *ikev2_find_state_in_init(const u_char *icookie,
 						  enum state_kind expected_state);
 
-extern struct state *find_state_ikev2_child(const u_char *icookie,
+extern struct state *find_state_ikev2_child(const enum isakmp_xchg_types ix,
+					    const u_char *icookie,
 					    const u_char *rcookie,
-					    msgid_t msgid);
+					    const msgid_t msgid);
 
 extern struct state *find_state_ikev2_child_to_delete(const u_char *icookie,
 						      const u_char *rcookie,
@@ -714,13 +747,12 @@ extern void initialize_new_state(struct state *st,
 				 int whack_sock,
 				 enum crypto_importance importance);
 
-extern void show_traffic_status(void);
+extern void show_traffic_status(const char *name);
 extern void show_states_status(void);
-
 
 extern void ikev2_repl_est_ipsec(struct state *st, void *data);
 extern void ikev2_inherit_ipsec_sa(so_serial_t osn, so_serial_t nsn,
-		                const u_char *icookie,
+				const u_char *icookie,
 				const u_char *rcookie);
 
 void for_each_state(void (*f)(struct state *, void *data), void *data);
@@ -771,7 +803,11 @@ bool shared_phase1_connection(const struct connection *c);
 extern void record_deladdr(ip_address *ip, char *a_type);
 extern void record_newaddr(ip_address *ip, char *a_type);
 
-extern void append_st_cfg_domain(struct state *st, const char *dnsip);
+extern void append_st_cfg_domain(struct state *st, char *dnsip);
 extern void append_st_cfg_dns(struct state *st, const char *dnsip);
+extern bool ikev2_viable_parent(const struct ike_sa *ike);
+
+extern bool uniqueIDs;  /* --uniqueids? */
+extern void ISAKMP_SA_established(const struct state *pst);
 
 #endif /* _STATE_H */

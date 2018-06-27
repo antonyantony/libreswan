@@ -19,7 +19,8 @@
 
 #include <stdio.h>
 #include <pk11pub.h>
-#include "lswalloc.h"
+
+#include "chunk.h"
 
 struct ike_alg;
 struct hash_desc;
@@ -60,6 +61,9 @@ PK11SymKey *concat_bytes_symkey(const void *lhs, size_t sizeof_lhs,
 PK11SymKey *concat_symkey_chunk(PK11SymKey *lhs, chunk_t rhs);
 PK11SymKey *concat_symkey_byte(PK11SymKey *lhs, uint8_t rhs);
 chunk_t concat_chunk_chunk(const char *name, chunk_t lhs, chunk_t rhs);
+chunk_t concat_chunk_symkey(const char *name, chunk_t lhs, PK11SymKey *rhs);
+chunk_t concat_chunk_bytes(const char *name, chunk_t lhs,
+			   const void *rhs, size_t sizeof_rhs);
 
 /*
  * Append new keying material to an existing key; replace the existing
@@ -75,6 +79,9 @@ void append_bytes_symkey(const void *lhs, size_t sizeof_lhs,
 void append_symkey_chunk(PK11SymKey **lhs, chunk_t rhs);
 void append_symkey_byte(PK11SymKey **lhs, uint8_t rhs);
 void append_chunk_chunk(const char *name, chunk_t *lhs, chunk_t rhs);
+void append_chunk_bytes(const char *name, chunk_t *lhs, const void *rhs,
+			size_t sizeof_rhs);
+void append_chunk_symkey(const char *name, chunk_t *lhs, PK11SymKey *rhs);
 
 /*
  * Extract SIZEOF_SYMKEY bytes of keying material as an ALG key (i.e.,
@@ -85,7 +92,7 @@ void append_chunk_chunk(const char *name, chunk_t *lhs, chunk_t rhs);
  *
  * Offset into the SYMKEY is in BYTES.
  */
-PK11SymKey *prf_key_from_symkey_bytes(const char *name, lset_t debug,
+PK11SymKey *prf_key_from_symkey_bytes(const char *name,
 				      const struct prf_desc *prf,
 				      size_t symkey_start_byte, size_t sizeof_symkey,
 				      PK11SymKey *source_key);
@@ -99,7 +106,7 @@ PK11SymKey *prf_key_from_symkey_bytes(const char *name, lset_t debug,
  *
  * Offset into the SYMKEY is in BYTES.
  */
-PK11SymKey *encrypt_key_from_symkey_bytes(const char *name, lset_t debug,
+PK11SymKey *encrypt_key_from_symkey_bytes(const char *name,
 					  const struct encrypt_desc *encrypt,
 					  size_t symkey_start_byte, size_t sizeof_symkey,
 					  PK11SymKey *source_key);
@@ -110,9 +117,9 @@ PK11SymKey *encrypt_key_from_symkey_bytes(const char *name, lset_t debug,
  * Used to avoid interface issues with NSS.  If ALG is null then the
  * key has a generic mechanism type.
  */
-chunk_t chunk_from_symkey(const char *prefix, lset_t debug,
+chunk_t chunk_from_symkey(const char *prefix,
 			  PK11SymKey *symkey);
-chunk_t chunk_from_symkey_bytes(const char *prefix, lset_t debug,
+chunk_t chunk_from_symkey_bytes(const char *prefix,
 				PK11SymKey *symkey,
 				size_t chunk_start, size_t sizeof_chunk);
 
@@ -121,14 +128,14 @@ chunk_t chunk_from_symkey_bytes(const char *prefix, lset_t debug,
  *
  * Used to avoid interface issues with NSS.
  */
-PK11SymKey *symkey_from_bytes(const char *name, lset_t debug,
+PK11SymKey *symkey_from_bytes(const char *name,
 			      const u_int8_t *bytes, size_t sizeof_bytes);
-PK11SymKey *symkey_from_chunk(const char *name, lset_t debug,
+PK11SymKey *symkey_from_chunk(const char *name,
 			      chunk_t chunk);
-PK11SymKey *encrypt_key_from_bytes(const char *name, lset_t debug,
+PK11SymKey *encrypt_key_from_bytes(const char *name,
 				   const struct encrypt_desc *encrypt,
 				   const u_int8_t *bytes, size_t sizeof_bytes);
-PK11SymKey *prf_key_from_bytes(const char *name, lset_t debug,
+PK11SymKey *prf_key_from_bytes(const char *name,
 			       const struct prf_desc *prf,
 			       const u_int8_t *bytes, size_t sizeof_bytes);
 

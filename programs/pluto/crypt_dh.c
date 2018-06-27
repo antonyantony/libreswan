@@ -83,7 +83,7 @@ struct dh_secret *calc_dh_secret(const struct oakley_group_desc *group,
 	chunk_t ke = alloc_chunk(group->bytes, "local ke");
 	SECKEYPrivateKey *privk;
 	SECKEYPublicKey *pubk;
-	group->dhmke_ops->calc_secret(group, &privk, &pubk,
+	group->dh_ops->calc_secret(group, &privk, &pubk,
 				      ke.ptr, ke.len);
 	passert(privk != NULL);
 	passert(pubk != NULL);
@@ -109,10 +109,10 @@ PK11SymKey *calc_dh_shared(struct dh_secret *secret,
 			   chunk_t remote_ke)
 {
 	PK11SymKey *dhshared =
-		secret->group->dhmke_ops->calc_shared(secret->group,
-						      secret->privk,
-						      secret->pubk,
-						      remote_ke.ptr, remote_ke.len);
+		secret->group->dh_ops->calc_shared(secret->group,
+						   secret->privk,
+						   secret->pubk,
+						   remote_ke.ptr, remote_ke.len);
 	/*
 	 * The IKEv2 documentation, even for ECP, refers to "g^ir".
 	 */
@@ -135,7 +135,7 @@ void transfer_dh_secret_to_state(const char *helper, struct dh_secret **secret,
 {
 	LSWDBGP(DBG_CRYPT, buf) {
 		lswlog_dh_secret(buf, *secret);
-		lswlogf(buf, "transfering ownership from helper %s to state #%lu",
+		lswlogf(buf, "transferring ownership from helper %s to state #%lu",
 			helper, st->st_serialno);
 	}
 	pexpect(st->st_dh_secret == NULL);
@@ -148,7 +148,7 @@ void transfer_dh_secret_to_helper(struct state *st,
 {
 	LSWDBGP(DBG_CRYPT, buf) {
 		lswlog_dh_secret(buf, st->st_dh_secret);
-		lswlogf(buf, "transfering ownership from state #%lu to helper %s",
+		lswlogf(buf, "transferring ownership from state #%lu to helper %s",
 			st->st_serialno, helper);
 	}
 	pexpect(*secret == NULL);

@@ -11,6 +11,7 @@
  * Copyright (C) 2013 David McCullough <ucdevel@gmail.com>
  * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
  * Copyright (C) 2014,2017 Andrew Cagney <cagney@gmail.com>
+ * Copyright (C) 2017-2018 Antony Antony <antony@phenome.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -65,14 +66,14 @@
 #include "secrets.h"
 #include "crypt_dh.h"
 #include "ike_alg.h"
-#include "ike_alg_null.h"
+#include "ike_alg_none.h"
 #include "kernel_alg.h"
 #include "plutoalg.h"
 #include "pluto_crypt.h"
 #include "ikev1.h"
 #include "ikev1_continuations.h"
 #include "ikev2.h"
-
+#include "ikev2_send.h"
 #include "ikev1_xauth.h"
 
 #include "vendor.h"
@@ -82,6 +83,8 @@
 #include "pluto_x509.h"
 #include "ip_address.h"
 #include "pluto_stats.h"
+#include "chunk.h"
+#include "pending.h"
 
 /*
  * Process KE values.
@@ -174,53 +177,6 @@ bool ikev1_ship_nonce(chunk_t *n, struct pluto_crypto_req *r,
 	return ikev1_justship_nonce(n, outs, np, name);
 }
 
-/*
- * In IKEv1, some implementations (including freeswan/openswan/libreswan)
- * interpreted the RFC that the whole IKE message must padded to a multiple
- * of 4 octets, but other implementations (i.e. Checkpoint in Aggressive Mode)
- * drop padded IKE packets. Some of the text on this topic can be found in the
- * IKEv1 RFC 2408 section 3.6 Transform Payload.
- *
- * The ikepad= option can be set to yes or no on a per-connection basis,
- * and defaults to yes.
- *
- * In IKEv2, there is no padding specified in the RFC and some implementations
- * will reject IKEv2 messages that are padded. As there are no known IKEv2
- * clients that REQUIRE padding, padding is never done for IKEv2. If IKEv2
- * clients are discovered in the wild, we will revisit this - please contact
- * the libreswan developers if you find such an implementation.
- * Therefore the ikepad= option has no effect on IKEv2 connections.
- *
- * @param pbs PB Stream
- */
-bool close_message(pb_stream *pbs, struct state *st)
-{
-	size_t padding;
-
-	if (st->st_ikev2) {
-		DBG(DBG_CONTROLMORE, DBG_log("no IKE message padding required for IKEv2"));
-		close_output_pbs(pbs);
-		return TRUE;
-	}
-
-	padding =  pad_up(pbs_offset(pbs), 4);
-
-	if (padding != 0 && st != NULL && st->st_connection != NULL &&
-	    (st->st_connection->policy & POLICY_NO_IKEPAD)) {
-		DBG(DBG_CONTROLMORE, DBG_log("IKEv1 message padding of %zu bytes skipped by policy",
-			padding));
-	} else if (padding != 0) {
-		DBG(DBG_CONTROLMORE, DBG_log("padding IKEv1 message with %zu bytes", padding));
-		if (!out_zero(padding, pbs, "message padding"))
-			return FALSE;
-	} else {
-		DBG(DBG_CONTROLMORE, DBG_log("no IKEv1 message padding required"));
-	}
-
-	close_output_pbs(pbs);
-	return TRUE;
-}
-
 static initiator_function *pick_initiator(struct connection *c,
 					  lset_t policy)
 {
@@ -228,7 +184,7 @@ static initiator_function *pick_initiator(struct connection *c,
 	    (policy & c->policy & POLICY_IKEV2_ALLOW) &&
 	    !c->failed_ikev2) {
 		/* we may try V2, and we haven't failed */
-		return ikev2parent_outI1;
+		return ikev2_parent_outI1;
 	} else if (policy & c->policy & POLICY_IKEV1_ALLOW) {
 		/* we may try V1; Aggressive or Main Mode? */
 		return (policy & POLICY_AGGRESSIVE) ? aggr_outI1 : main_outI1;
@@ -256,8 +212,8 @@ void ipsecdoi_initiate(int whack_sock,
 		       )
 {
 	/*
-         * If there's already an IKEv1 ISAKMP SA established, use that and
-         * go directly to Quick Mode.  We are even willing to use one
+	 * If there's already an IKEv1 ISAKMP SA established, use that and
+	 * go directly to Quick Mode.  We are even willing to use one
 	 * that is still being negotiated, but only if we are the Initiator
 	 * (thus we can be sure that the IDs are not going to change;
 	 * other issues around intent might matter).
@@ -296,12 +252,17 @@ void ipsecdoi_initiate(int whack_sock,
 #endif
 				    );
 		} else if (st->st_ikev2) {
-			ikev2_add_ipsec_child(whack_sock, st, c, policy, try,
-					replacing
+			struct pending p;
+			p.whack_sock = whack_sock;
+			p.isakmp_sa = st;
+			p.connection = c;
+			p.try = try;
+			p.policy = policy;
+			p.replacing = replacing;
 #ifdef HAVE_LABELED_IPSEC
-					, uctx
+			p.uctx = uctx;
 #endif
-					);
+			ikev2_initiate_child_sa(&p);
 		} else {
 			/* ??? we assume that peer_nexthop_sin isn't important:
 			 * we already have it from when we negotiated the ISAKMP SA!
@@ -326,42 +287,42 @@ void ipsecdoi_initiate(int whack_sock,
  * - duplicate whack fd, if live.
  * Does not delete the old state -- someone else will do that.
  */
-void ipsecdoi_replace(struct state *st,
-		      lset_t policy_add, lset_t policy_del,
-		      unsigned long try)
+void ipsecdoi_replace(struct state *st, unsigned long try)
 {
-	initiator_function *initiator;
-	int whack_sock = dup_any(st->st_whack_sock);
-	lset_t policy = st->st_policy;
+	if (IS_PARENT_SA_ESTABLISHED(st) &&
+	    !LIN(POLICY_REAUTH, st->st_connection->policy)) {
+		libreswan_log("initiate rekey of IKEv2 CREATE_CHILD_SA IKE Rekey");
+		/* ??? why does this not need whack socket fd? */
+		ikev2_rekey_ike_start(st);
+	} else if (IS_IKE_SA(st)) {
+		/* start from policy in connection */
 
-	/*
-	 * this is an improvement when an initiator does not get R2.
-	 * when we support CREATE_CHILD_SA revisit this code.
-	 */
-	if (IS_IKE_SA(st) || !HAS_IPSEC_POLICY(policy)) {
 		struct connection *c = st->st_connection;
-		policy = (c->policy & ~POLICY_IPSEC_MASK &
-				~policy_del) | policy_add;
 
-		initiator = pick_initiator(c, policy);
-		passert(!HAS_IPSEC_POLICY(policy));
+		lset_t policy = c->policy & ~POLICY_IPSEC_MASK;
+
+		if (IS_PARENT_SA_ESTABLISHED(st))
+			libreswan_log("initiate reauthentication of IKE SA");
+
+		initiator_function *initiator = pick_initiator(c, policy);
+
 		if (initiator != NULL) {
-			(void) initiator(whack_sock, st->st_connection,
-					st, policy,
-					try, st->st_import
+			(void) initiator(dup_any(st->st_whack_sock),
+				c, st, policy, try, st->st_import
 #ifdef HAVE_LABELED_IPSEC
-					, st->sec_ctx
+				, st->sec_ctx
 #endif
-					);
-		} else {
-			/* fizzle: whack_sock will be unused */
-			close_any(whack_sock);
+				);
 		}
 	} else {
-		/* Add features of actual old state to policy.  This ensures
-		 * that rekeying doesn't downgrade security.  I admit that
-		 * this doesn't capture everything.
+		/*
+		 * Start from policy in (ipsec) state, not connection.
+		 * This ensures that rekeying doesn't downgrade
+		 * security.  I admit that this doesn't capture
+		 * everything.
 		 */
+		lset_t policy = st->st_policy;
+
 		if (st->st_pfs_group != NULL)
 			policy |= POLICY_PFS;
 		if (st->st_ah.present) {
@@ -384,13 +345,14 @@ void ipsecdoi_replace(struct state *st,
 				policy |= POLICY_TUNNEL;
 		}
 
-		passert(HAS_IPSEC_POLICY(policy));
-		ipsecdoi_initiate(whack_sock, st->st_connection, policy, try,
-				  st->st_serialno, st->st_import
+		if (!st->st_ikev2)
+			passert(HAS_IPSEC_POLICY(policy));
+		ipsecdoi_initiate(dup_any(st->st_whack_sock), st->st_connection,
+			policy, try, st->st_serialno, st->st_import
 #ifdef HAVE_LABELED_IPSEC
-				  , st->sec_ctx
+			, st->sec_ctx
 #endif
-				  );
+			);
 	}
 }
 
@@ -494,10 +456,13 @@ bool extract_peer_id(enum ike_id_type kind, struct id *peer, const pb_stream *id
 
 	case ID_NULL:
 		if (left != 0) {
-			loglog(RC_LOG_SERIOUS,
-				"peer's ID_NULL must be empty but is not");
-			return FALSE;
+			setchunk(peer->name, id_pbs->cur, left);
+			DBG(DBG_PARSING,
+				DBG_dump_chunk("unauthenticated NULL ID:", peer->name));
+			peer->name.ptr = NULL;
+			peer->name.len = 0;
 		}
+		peer->kind = ID_NULL;
 		break;
 
 	default:
@@ -545,18 +510,16 @@ void initialize_new_state(struct state *st,
 	set_cur_state(st);
 }
 
-bool send_delete(struct state *st)
+void send_delete(struct state *st)
 {
 	if (DBGP(IMPAIR_SEND_NO_DELETE)) {
-		DBG(DBG_CONTROL,
-			DBG_log("send_delete(): impair-send-no-delete set - not sending Delete/Notify"));
-		return TRUE;
+		DBGF(DBG_CONTROL, "IMPAIR: impair-send-no-delete set - not sending Delete/Notify");
+	} else {
+		DBGF(DBG_CONTROL, "#%lu send %s delete notification for %s",
+		     st->st_serialno, st->st_ikev2 ? "IKEv2": "IKEv1",
+		     st->st_state_name);
+		st->st_ikev2 ? send_v2_delete(st) : send_v1_delete(st);
 	}
-	DBG(DBG_CONTROL, DBG_log("#%lu send %s detlete notification for %s",
-			st->st_serialno, st->st_ikev2 ? "IKEv2": "IKEv1",
-			st->st_state_name));
-
-	return st->st_ikev2 ? ikev2_delete_out(st) : ikev1_delete_out(st);
 }
 
 static void pstats_sa(bool nat, bool tfc, bool esn)
@@ -588,7 +551,7 @@ void fmt_ipsec_sa_established(struct state *st, char *sadetails, size_t sad_len)
 	}
 
 	if (st->st_esp.present) {
-		bool nat = st->hidden_variables.st_nat_traversal & NAT_T_DETECTED;
+		bool nat = (st->hidden_variables.st_nat_traversal & NAT_T_DETECTED) != 0;
 		bool tfc = c->sa_tfcpad != 0 && !st->st_seen_no_tfc;
 		bool esn = st->st_esp.attrs.transattrs.esn_enabled;
 
@@ -597,8 +560,8 @@ void fmt_ipsec_sa_established(struct state *st, char *sadetails, size_t sad_len)
 				    c->spd.that.host_port));
 
 		DBG(DBG_NATT, DBG_log("NAT-T: encaps is '%s'",
-			    c->encaps == encaps_auto ? "auto" :
-				bool_str(c->encaps == encaps_yes)));
+			    c->encaps == yna_auto ? "auto" :
+				bool_str(c->encaps == yna_yes)));
 
 		snprintf(b, sad_len - (b - sadetails),
 			 "%sESP%s%s%s=>0x%08lx <0x%08lx xfrm=%s_%d-%s",

@@ -17,20 +17,22 @@
 #ifndef _LIBRESWAN_H
 #define _LIBRESWAN_H    /* seen it, no need to see it again */
 
-/* linux has 'typedef _bool bool' in KERNEL/include/types.h */
+/*
+ * Libreswan was written before <stdbool.h> was standardized.
+ * We continue to use TRUE and FALSE because we think that they are clearer
+ * than true or false.
+ */
 
 #ifndef __KERNEL__
 # include <stdbool.h> /* for 'bool' */
 #endif
 
-/* you'd think this should be builtin to compiler... */
-
 #ifndef TRUE
-# define TRUE 1
+# define TRUE true
 #endif
 
 #ifndef FALSE
-# define FALSE 0
+# define FALSE false
 #endif
 
 #include <stddef.h>
@@ -521,31 +523,5 @@ enum klips_debug_flags {
 #define PASSTHROUGHSPI  0
 #define PASSTHROUGHDST  0
 #endif
-
-/*
- * reqid definitions
- *
- * A reqid is a numerical identifier used to match IPsec SAs using
- * iptables with NETKEY/XFRM. This identifier is normally automatically
- * allocated.  It is exported to the _updown script as REQID. On Linux,
- * reqids are supported with IP Connection Tracking and NAT (iptables).
- * Automatically generated values use the range 16380 and higher.
- * Manually specified reqid values therefore must be between 1 and 16379.
- *
- * Automatically generated reqids are allocated in groups of four, one
- * for each potential SA and pseudo SA in an SA bundle.  Their number
- * will be above 16380.  The base number will be a multiple of four.
- *
- * Manually assigned reqids are all identical for a particular connection
- * and its instantiations.
- */
-
-typedef uint32_t reqid_t;
-
-#define IPSEC_MANUAL_REQID_MAX  0x3fff
-
-#define reqid_ah(r)	(r)
-#define reqid_esp(r)	((r) <= IPSEC_MANUAL_REQID_MAX ? (r) : (r) + 1)
-#define reqid_ipcomp(r)	((r) <= IPSEC_MANUAL_REQID_MAX ? (r) : (r) + 2)
 
 #endif /* _LIBRESWAN_H */
