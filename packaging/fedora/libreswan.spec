@@ -29,7 +29,7 @@
 Name: libreswan
 Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
 # version is generated in the release script
-Version: 3.24
+Version: 3.25
 Release: %{?prever:0.}1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Url: https://libreswan.org/
@@ -204,5 +204,5 @@ export NSS_DISABLE_HW_GCM=1
 %{_libdir}/fipscheck/pluto.hmac
 
 %changelog
-* Tue Jun 26 2018 Team Libreswan <team@libreswan.org> - 3.24-1
+* Wed Jun 27 2018 Team Libreswan <team@libreswan.org> - 3.25-1
 - Automated build from release tar ball
