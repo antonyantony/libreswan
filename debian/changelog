@@ -1,3 +1,10 @@
+libreswan (3.25-2) unstable; urgency=medium
+
+  * remove explicit list of libraries from Depends (Closes: #909203)
+  * bump Standards-Version to 4.2.1 (no changes needed)
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Fri, 21 Sep 2018 02:35:42 -0400
+
 libreswan (3.25-1) unstable; urgency=medium
 
   * new upstream release
