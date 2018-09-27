@@ -10,7 +10,7 @@
  * Copyright (C) 2010 Tuomo Soini <tis@foobar.fi>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2012 Panagiotis Tamtamis <tamtamis@gmail.com>
- * Copyright (C) 2012-2015 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2012-2018 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 Antony Antony <antony@phenome.org>
  *
  *
@@ -40,7 +40,6 @@
 
 #include <libreswan.h>
 #include "libreswan/pfkeyv2.h"
-#include "kameipsec.h"
 
 #include "sysdep.h"
 #include "constants.h"
@@ -92,7 +91,7 @@ static void swap_ends(struct connection *c)
 	sr->that = t;
 
 	/*
-	 * incase of asymetric auth c->policy contains left.authby
+	 * in case of asymetric auth c->policy contains left.authby
 	 * This magic will help responder to find connction during INIT
 	 */
 	if (sr->this.authby != sr->that.authby)
@@ -104,6 +103,9 @@ static void swap_ends(struct connection *c)
 			break;
 		case AUTH_RSASIG:
 			c->policy |= POLICY_RSASIG;
+			break;
+		case AUTH_ECDSA:
+			c->policy |= POLICY_ECDSA;
 			break;
 		case AUTH_NULL:
 			c->policy |= POLICY_AUTH_NULL;
@@ -174,7 +176,6 @@ struct initiate_stuff {
 	int whackfd;
 	lmod_t more_debugging;
 	lmod_t more_impairing;
-	enum crypto_importance importance;
 	char *remote_host;
 };
 
@@ -182,7 +183,6 @@ static int initiate_a_connection(struct connection *c, void *arg)
 {
 	struct initiate_stuff *is = (struct initiate_stuff *)arg;
 	int whackfd = is->whackfd;
-	enum crypto_importance importance = is->importance;
 
 	set_cur_connection(c);
 
@@ -228,7 +228,6 @@ static int initiate_a_connection(struct connection *c, void *arg)
 	}
 
 	if ((is->remote_host == NULL) && (c->kind != CK_PERMANENT) && !(c->policy & POLICY_IKEV2_ALLOW_NARROWING)) {
-
 		if (isanyaddr(&c->spd.that.host_addr)) {
 			if (c->dnshostname != NULL) {
 				loglog(RC_NOPEERIP,
@@ -292,7 +291,6 @@ static int initiate_a_connection(struct connection *c, void *arg)
 	 */
 
 	if (c->policy & (POLICY_ENCRYPT | POLICY_AUTHENTICATE)) {
-
 		struct alg_info_esp *alg = c->alg_info_esp;
 		struct db_sa *phase2_sa = kernel_alg_makedb(
 			c->policy, alg, TRUE);
@@ -309,7 +307,7 @@ static int initiate_a_connection(struct connection *c, void *arg)
 
 	c->policy |= POLICY_UP;
 	whackfd = dup(whackfd);
-	ipsecdoi_initiate(whackfd, c, c->policy, 1, SOS_NOBODY, importance
+	ipsecdoi_initiate(whackfd, c, c->policy, 1, SOS_NOBODY
 #ifdef HAVE_LABELED_IPSEC
 		  , NULL
 #endif
@@ -322,7 +320,6 @@ static int initiate_a_connection(struct connection *c, void *arg)
 void initiate_connection(const char *name, int whackfd,
 			 lmod_t more_debugging,
 			 lmod_t more_impairing,
-			 enum crypto_importance importance,
 			 char *remote_host)
 {
 	struct connection *c = conn_by_name(name, FALSE, FALSE);
@@ -333,7 +330,6 @@ void initiate_connection(const char *name, int whackfd,
 		.whackfd = whackfd,
 		.more_debugging = more_debugging,
 		.more_impairing = more_impairing,
-		.importance = importance,
 		.remote_host = remote_host,
 	};
 
@@ -424,7 +420,7 @@ void restart_connections_by_peer(struct connection *const c)
 					d->dnshostname, &d->spd.that.host_addr))
 				initiate_connection(d->name, NULL_FD,
 						    empty_lmod, empty_lmod,
-						    pcim_demand_crypto, NULL);
+						    NULL);
 		}
 	}
 	pfreeany(dnshostname);
@@ -604,8 +600,6 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b
 #ifdef HAVE_LABELED_IPSEC
 	DBG(DBG_CONTROLMORE, {
 		if (uctx != NULL) {
-
-
 			DBG_log("received security label string: %.*s",
 				uctx->ctx.ctx_len,
 				uctx->sec_ctx_value);
@@ -725,7 +719,7 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b
 		}
 
 		ipsecdoi_initiate(b->whackfd, c, c->policy, 1,
-				  SOS_NOBODY, pcim_local_crypto
+				  SOS_NOBODY
 #ifdef HAVE_LABELED_IPSEC
 				  , uctx
 #endif
@@ -936,7 +930,7 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b
 					    b->want));
 
 				ipsecdoi_initiate(b->whackfd, c, c->policy, 1,
-						  SOS_NOBODY, pcim_local_crypto
+						  SOS_NOBODY
 #ifdef HAVE_LABELED_IPSEC
 						  , NULL /* shall we pass uctx for opportunistic connections? */
 #endif
@@ -1093,8 +1087,7 @@ static void connection_check_ddns1(struct connection *c)
 	 * lookup
 	 */
 	update_host_pairs(c);
-	initiate_connection(c->name, NULL_FD, empty_lmod, empty_lmod,
-			    pcim_demand_crypto, NULL);
+	initiate_connection(c->name, NULL_FD, empty_lmod, empty_lmod, NULL);
 
 	/* no host pairs, no more to do */
 	pexpect(c->host_pair != NULL);	/* ??? surely */
@@ -1104,17 +1097,14 @@ static void connection_check_ddns1(struct connection *c)
 	for (d = c->host_pair->connections; d != NULL; d = d->hp_next) {
 		if (c != d && same_in_some_sense(c, d))
 			initiate_connection(d->name, NULL_FD,
-					    empty_lmod, empty_lmod,
-					    pcim_demand_crypto, NULL);
+					    empty_lmod, empty_lmod, NULL);
 	}
 }
 
 void connection_check_ddns(void)
 {
 	struct connection *c, *cnext;
-	struct timeval tv1;
-
-	gettimeofday(&tv1, NULL);
+	realtime_t tv1 = realnow();
 
 	/* reschedule */
 	event_schedule_s(EVENT_PENDING_DDNS, PENDING_DDNS_INTERVAL, NULL);
@@ -1129,17 +1119,11 @@ void connection_check_ddns(void)
 	}
 	check_orientations();
 
-	DBG(DBG_DNS, {
-		struct timeval tv2;
-		unsigned long borrow;
-
-		gettimeofday(&tv2, NULL);
-		borrow = tv2.tv_usec < tv1.tv_usec ? 1 : 0;
-		DBG_log("elapsed time in %s for hostname lookup %lu.%06lu",
-			__func__,
-			(unsigned long)(tv2.tv_sec - borrow - tv2.tv_sec),
-			(unsigned long)(tv2.tv_usec + borrow * 1000000 - tv2.tv_usec));
-	});
+	LSWDBGP(DBG_DNS, buf) {
+		realtime_t tv2 = realnow();
+		lswlogf(buf, "elapsed time in %s for hostname lookup ", __func__);
+		lswlog_deltatime(buf, realtimediff(tv2, tv1));
+	};
 }
 
 /* time between scans of pending phase2 */
@@ -1212,7 +1196,6 @@ void connection_check_phase2(void)
 				is.whackfd = NULL_FD;
 				is.more_debugging = empty_lmod;
 				is.more_impairing = empty_lmod;
-				is.importance = pcim_local_crypto;
 				is.remote_host = NULL;
 
 				initiate_a_connection(c, &is);

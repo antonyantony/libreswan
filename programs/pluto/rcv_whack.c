@@ -10,7 +10,7 @@
  * Copyright (C) 2010 David McCullough <david_mccullough@securecomputing.com>
  * Copyright (C) 2011 Mika Ilmaranta <ilmis@foobar.fi>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2014-2017 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2014-2018 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2014-2017 Antony Antony <antony@phenome.org>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -36,6 +36,7 @@
 #include <arpa/inet.h>
 #include <resolv.h>
 #include <fcntl.h>
+#include <unistd.h>		/* for gethostname() */
 
 #include <libreswan.h>
 #include "libreswan/pfkeyv2.h"
@@ -101,7 +102,7 @@ struct key_add_continuation {
 };
 
 static int whack_route_connection(struct connection *c,
-			__attribute__((unused)) void *arg)
+				  UNUSED void *arg)
 {
 	set_cur_connection(c);
 
@@ -118,7 +119,7 @@ static int whack_route_connection(struct connection *c,
 }
 
 static int whack_unroute_connection(struct connection *c,
-			__attribute__((unused)) void *arg)
+				    UNUSED void *arg)
 {
 	const struct spd_route *sr;
 	int fail = 0;
@@ -195,7 +196,7 @@ static FILE *whackrecordfile = NULL;
  */
 static bool writewhackrecord(char *buf, size_t buflen)
 {
-	u_int32_t header[3];	/* length, high time, low time */
+	uint32_t header[3];	/* length, high time, low time */
 	time_t now = time(NULL);
 
 	/* round up buffer length */
@@ -230,7 +231,7 @@ static bool openwhackrecordfile(char *file)
 {
 	char when[256];
 	char FQDN[SWAN_MAX_DOMAIN_LEN];
-	const u_int32_t magic = WHACK_BASIC_MAGIC;
+	const uint32_t magic = WHACK_BASIC_MAGIC;
 
 	strcpy(FQDN, "unknown host");
 	gethostname(FQDN, sizeof(FQDN));
@@ -423,9 +424,9 @@ void whack_process(int whackfd, const struct whack_message *const m)
 	if (m->whack_crash)
 		delete_states_by_peer(&m->whack_crash_peer);
 
-	if (m->whack_connection)
+	if (m->whack_connection) {
 		add_connection(m);
-
+	}
 	/* update any socket buffer size before calling listen */
 	if (m->ike_buf_size != 0) {
 		pluto_sock_bufsize = m->ike_buf_size;
@@ -549,7 +550,6 @@ void whack_process(int whackfd, const struct whack_message *const m)
 					    dup_any(whackfd),
 					    m->debugging,
 					    m->impairing,
-					    pcim_demand_crypto,
 					    pass_remote ? m->remote_host : NULL);
 		}
 	}

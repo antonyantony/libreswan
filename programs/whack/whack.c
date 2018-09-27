@@ -41,6 +41,7 @@
 #include <arpa/inet.h>
 #include <getopt.h>
 #include <assert.h>
+#include <limits.h>	/* for INT_MAX */
 
 #include <libreswan.h>
 
@@ -271,6 +272,7 @@ enum option_enums {
 	OPT_KEYID,
 	OPT_ADDKEY,
 	OPT_PUBKEYRSA,
+	OPT_PUBKEYECDSA,
 
 	OPT_ROUTE,
 	OPT_UNROUTE,
@@ -432,6 +434,9 @@ enum option_enums {
 	CD_XAUTHBY,
 	CD_XAUTHFAIL,
 	CD_NIC_OFFLOAD,
+	CD_RSA_SHA2_256,
+	CD_RSA_SHA2_384,
+	CD_RSA_SHA2_512,
 	CD_ESP,
 #   define CD_LAST CD_ESP	/* last connection description */
 
@@ -589,6 +594,7 @@ static const struct option long_opts[] = {
 #define PS(o, p)	{ o, no_argument, NULL, CDP_SINGLETON + POLICY_##p##_IX + OO }
 	PS("psk", PSK),
 	PS("rsasig", RSASIG),
+	PS("ecdsa", ECDSA),
 	PS("auth-never", AUTH_NEVER),
 	PS("auth-null", AUTH_NULL),
 
@@ -676,6 +682,11 @@ static const struct option long_opts[] = {
 	{ "sendca", required_argument, NULL, CD_SEND_CA + OO },
 	{ "ipv4", no_argument, NULL, CD_CONNIPV4 + OO },
 	{ "ipv6", no_argument, NULL, CD_CONNIPV6 + OO },
+
+	{ "rsa-sha2", no_argument, NULL, CD_RSA_SHA2_256 + OO },
+	{ "rsa-sha2_256", no_argument, NULL, CD_RSA_SHA2_256 + OO },
+	{ "rsa-sha2_384", no_argument, NULL, CD_RSA_SHA2_384 + OO },
+	{ "rsa-sha2_512", no_argument, NULL, CD_RSA_SHA2_512 + OO },
 
 	{ "ikelifetime", required_argument, NULL, CD_IKELIFETIME + OO + NUMERIC_ARG },
 	{ "ipseclifetime", required_argument, NULL, CD_IPSECLIFETIME + OO + NUMERIC_ARG },
@@ -853,7 +864,7 @@ int main(int argc, char **argv)
 	/* space for at most one RSA key */
 	char keyspace[RSA_MAX_ENCODING_BYTES];
 
-	char username[MAX_USERNAME_LEN];
+	char xauthusername[MAX_XAUTH_USERNAME_LEN];
 	char xauthpass[XAUTH_MAX_PASS_LENGTH];
 	int usernamelen = 0;
 	int xauthpasslen = 0;
@@ -1150,6 +1161,32 @@ int main(int argc, char **argv)
 			msg.keyval.ptr = (unsigned char *)keyspace;
 		}
 			continue;
+		case OPT_PUBKEYECDSA:	/* --pubkeyecdsa <key> */
+		{
+			char mydiag_space[TTODATAV_BUF];
+
+			if (msg.keyval.ptr != NULL)
+				diagq("only one ECDSA public-key allowed", optarg);
+
+			ugh = ttodatav(optarg, 0, 0,
+				       keyspace, sizeof(keyspace),
+				       &msg.keyval.len, mydiag_space,
+				       sizeof(mydiag_space),
+				       TTODATAV_SPACECOUNTS);
+
+			if (ugh != NULL) {
+				/* perhaps enough space */
+				char ugh_space[80];
+
+				snprintf(ugh_space, sizeof(ugh_space),
+					 "ECDSA public-key data malformed (%s)",
+					 ugh);
+				diagq(ugh_space, optarg);
+			}
+			msg.pubkey_alg = PUBKEY_ALG_ECDSA;
+			msg.keyval.ptr = (unsigned char *)keyspace;
+		}
+			continue;
 
 		case OPT_ROUTE:	/* --route */
 			msg.whack_route = TRUE;
@@ -1190,7 +1227,7 @@ int main(int argc, char **argv)
 			}
 			continue;
 
-		/* --deleteuser  --name <username> */
+		/* --deleteuser --name <xauthusername> */
 		case OPT_DELETEUSER:
 			msg.whack_deleteuser = TRUE;
 			continue;
@@ -1676,7 +1713,7 @@ int main(int argc, char **argv)
 			 * ??? what values are legitimate?
 			 * 32 and often 64, but what else?
 			 * Not so large that the
-			 * number of bits overflows u_int32_t.
+			 * number of bits overflows uint32_t.
 			 */
 			msg.sa_replay_window = opt_whole;
 			continue;
@@ -1818,6 +1855,16 @@ int main(int argc, char **argv)
 			 */
 			continue;
 
+		case CD_RSA_SHA2_256:
+			msg.sighash_policy = POL_SIGHASH_SHA2_256;
+			continue;
+		case CD_RSA_SHA2_384:
+			msg.sighash_policy = POL_SIGHASH_SHA2_384;
+			continue;
+		case CD_RSA_SHA2_512:
+			msg.sighash_policy = POL_SIGHASH_SHA2_512;
+			continue;
+
 		case CD_CONNIPV6:
 			if (LHAS(cd_seen, CD_CONNIPV4 - CD_FIRST))
 				diag("--ipv6 conflicts with --ipv4");
@@ -1874,12 +1921,12 @@ int main(int argc, char **argv)
 			 * if this is going to be an conn definition, so do
 			 * both actions
 			 */
-			msg.right.username = optarg;
+			msg.right.xauth_username = optarg;
 			gotusername = TRUE;
 			/* ??? why does this length include NUL? */
-			usernamelen = jam_str(username, sizeof(username),
+			usernamelen = jam_str(xauthusername, sizeof(xauthusername),
 					optarg) -
-				username + 1;
+				xauthusername + 1;
 			continue;
 
 		case OPT_XAUTHPASS:
@@ -2078,6 +2125,11 @@ int main(int argc, char **argv)
 							lswlogs(buf, "  ");
 						}
 						lswlog_enum_short(buf, &debug_names, e);
+						const char *help = enum_name(&debug_help, e);
+						if (help != NULL) {
+							lswlogs(buf, ": ");
+							lswlogs(buf, help);
+						}
 					}
 				}
 				exit(1);
@@ -2095,6 +2147,11 @@ int main(int argc, char **argv)
 					LSWLOG_FILE(stdout, buf) {
 						lswlogs(buf, "  ");
 						lswlog_enum_short(buf, &impair_names, e);
+						const char *help = enum_name(&impair_help, e);
+						if (help != NULL) {
+							lswlogs(buf, ": ");
+							lswlogs(buf, help);
+						}
 					}
 				}
 				exit(1);
@@ -2460,11 +2517,11 @@ int main(int argc, char **argv)
 			case RC_USERPROMPT:
 				if (!gotusername) {
 					usernamelen = whack_get_value(
-						username,
-						sizeof(username));
+						xauthusername,
+						sizeof(xauthusername));
 				}
 				send_reply(sock,
-					   username,
+					   xauthusername,
 					   usernamelen);
 				break;
 

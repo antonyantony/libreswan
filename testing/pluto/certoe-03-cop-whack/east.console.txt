@@ -14,7 +14,7 @@ Redirecting to: systemctl start ipsec.service
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
- ipsec whack --impair retransmits
+ ipsec whack --impair suppress-retransmits
 east #
  # give OE policies time to load
 east #
@@ -35,7 +35,7 @@ east #
 east #
  grep IKEv2_AUTH_ /tmp/pluto.log
 |    auth method: IKEv2_AUTH_NULL (0xd)
-|    auth method: IKEv2_AUTH_DIGSIG (0xe)
+|    auth method: IKEv2_AUTH_RSA (0x1)
 east #
 east #
  ../bin/check-for-core.sh

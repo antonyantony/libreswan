@@ -31,9 +31,9 @@ initdone
 east #
  grep IKEv2_AUTH_ OUTPUT/*pluto.log
 OUTPUT/east.pluto.log:|    auth method: IKEv2_AUTH_NULL (0xd)
-OUTPUT/east.pluto.log:|    auth method: IKEv2_AUTH_DIGSIG (0xe)
+OUTPUT/east.pluto.log:|    auth method: IKEv2_AUTH_RSA (0x1)
 OUTPUT/west.pluto.log:|    auth method: IKEv2_AUTH_NULL (0xd)
-OUTPUT/west.pluto.log:|    auth method: IKEv2_AUTH_DIGSIG (0xe)
+OUTPUT/west.pluto.log:|    auth method: IKEv2_AUTH_RSA (0x1)
 east #
  ../../pluto/bin/ipsec-look.sh
 east NOW
@@ -63,11 +63,11 @@ XFRM done
 IPSEC mangle TABLES
 NEW_IPSEC_CONN mangle TABLES
 ROUTING TABLES
-default via 192.1.2.254 dev eth1 
-192.0.1.0/24 via 192.1.2.45 dev eth1 
-192.0.2.0/24 dev eth0 proto kernel scope link src 192.0.2.254 
-192.1.2.0/24 dev eth1 proto kernel scope link src 192.1.2.23 
-192.9.2.0/24 dev eth2 proto kernel scope link src 192.9.2.23 
+default via 192.1.2.254 dev eth1
+192.0.1.0/24 via 192.1.2.45 dev eth1
+192.0.2.0/24 dev eth0 proto kernel scope link src 192.0.2.254
+192.1.2.0/24 dev eth1 proto kernel scope link src 192.1.2.23
+192.9.2.0/24 dev eth2 proto kernel scope link src 192.9.2.23
 NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
