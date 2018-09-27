@@ -3,7 +3,7 @@ Date: Wed, 9 Mar 2016 19:22:41 +0200
 Subject: debian-pam.d-pluto
 
 debian: fix /etc/pam.d/pluto to work with debian
-    
+
 Signed-off-by: Tuomo Soini <tis@foobar.fi>
 ---
  pam.d/pluto | 27 +++++++++++----------------

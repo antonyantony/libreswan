@@ -3,11 +3,11 @@ Date: Wed, 27 Jun 2018 12:42:01 -0400
 Subject: update README.nss to match debian defaults for IPSEC_NSSDIR
 
 ---
- README.nss | 15 +++++++--------
- 1 file changed, 7 insertions(+), 8 deletions(-)
+ README.nss | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
 
 diff --git a/README.nss b/README.nss
-index 5c0c53a..f28c3b1 100644
+index aa58d1e..cb8b9c5 100644
 --- a/README.nss
 +++ b/README.nss
 @@ -64,7 +64,7 @@ using:
@@ -50,17 +50,16 @@ index 5c0c53a..f28c3b1 100644
  	ipsec import certkey.p12
  
  If you did not pick a name using the -name option, you can use
--certutil -L -d /etc/ipsec.d to figure out the name NSS picked durnig
-+certutil -L -d sql:/var/lib/ipsec/nss to figure out the name NSS picked during
+-certutil -L -d sql:/etc/ipsec.d to figure out the name NSS picked durnig
++certutil -L -d sql:/var/lib/ipsec/nss to figure out the name NSS picked durnig
  the import.
  
  Add following to /etc/ipsec.secrets file:
-@@ -229,13 +229,12 @@ Paul: add "ipsec export" ?
+@@ -229,12 +229,12 @@ Paul: add "ipsec export" ?
  
  To export the CA certificate:
  
--	NSS_DEFAULT_DB_TYPE="sql:" pk12util -o cacert1.p12 -n cacert1 \
--		-d /etc/ipsec.d
+-	pk12util -o cacert1.p12 -n cacert1 -d sql:/etc/ipsec.d
 +	pk12util -o cacert1.p12 -n cacert1 -d sql:/var/lib/ipsec/nss
  
  Copy the file "cacert1.p12" to the new machine and import it using:
