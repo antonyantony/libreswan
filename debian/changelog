@@ -1,3 +1,9 @@
+libreswan (3.27-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Fri, 12 Oct 2018 16:55:36 -0400
+
 libreswan (3.26-1) unstable; urgency=medium
 
   * new upstream release (Closes: #909291)
