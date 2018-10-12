@@ -18,7 +18,7 @@ index ce962ed..fd7ce7c 100755
  import sys
  import os
 diff --git a/programs/verify/verify.in b/programs/verify/verify.in
-index cff1d79..779a072 100755
+index ef595cc..ed11b3d 100755
 --- a/programs/verify/verify.in
 +++ b/programs/verify/verify.in
 @@ -1,4 +1,4 @@
