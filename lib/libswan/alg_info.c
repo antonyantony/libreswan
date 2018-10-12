@@ -8,7 +8,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -285,20 +285,20 @@ static const struct ike_alg *lookup_byname(const struct proposal_parser *parser,
 							       print_name);
 			if (alg == NULL) {
 				DBG(DBG_PROPOSAL_PARSER,
-				    DBG_log("%s_byname('"PRISHUNK"') failed: %s",
-					    what, SHUNKF(name),
+				    DBG_log("%s_byname('"PRI_SHUNK"') failed: %s",
+					    what, PRI_shunk(name),
 					    parser->err_buf));
 				passert(parser->err_buf[0] != '\0');
 				return NULL;
 			}
 			DBG(DBG_PROPOSAL_PARSER,
-			    DBG_log("%s_byname('"PRISHUNK"') returned '%s'",
-				    what, SHUNKF(name), alg->name));
+			    DBG_log("%s_byname('"PRI_SHUNK"') returned '%s'",
+				    what, PRI_shunk(name), alg->name));
 			return alg;
 		} else {
 			DBG(DBG_PROPOSAL_PARSER,
-			    DBG_log("ignoring %s '"PRISHUNK"'",
-				    what, SHUNKF(name)));
+			    DBG_log("ignoring %s '"PRI_SHUNK"'",
+				    what, PRI_shunk(name)));
 			return NULL;
 		}
 	}
@@ -313,14 +313,14 @@ static int parse_eklen(char *err_buf, size_t err_buf_len,
 	long eklen = strtol(buf.ptr, &end, 10);
 	if (buf.ptr + buf.len != end) {
 		snprintf(err_buf, err_buf_len,
-			 "encryption key length '"PRISHUNK"' contains a non-numeric character",
-			 SHUNKF(buf));
+			 "encryption key length '"PRI_SHUNK"' contains a non-numeric character",
+			 PRI_shunk(buf));
 		return 0;
 	}
 	if (eklen >= INT_MAX) {
 		snprintf(err_buf, err_buf_len,
-			 "encryption key length '"PRISHUNK"' WAY too big",
-			 SHUNKF(buf));
+			 "encryption key length '"PRI_SHUNK"' WAY too big",
+			 PRI_shunk(buf));
 		return 0;
 	}
 	if (eklen == 0) {
@@ -434,8 +434,8 @@ static bool parser_alg_info_add(const struct proposal_parser *parser,
 	LSWDBGP(DBG_PROPOSAL_PARSER, buf) {
 		lswlogs(buf, "algs:");
 		for (struct token *token = tokens; token->alg.ptr != NULL; token++) {
-			lswlogf(buf, " algs[%tu] = '"PRISHUNK"'",
-				token - tokens, SHUNKF(token->alg));
+			lswlogf(buf, " algs[%tu] = '"PRI_SHUNK"'",
+				token - tokens, PRI_shunk(token->alg));
 		}
 	}
 
@@ -535,8 +535,8 @@ static bool parser_alg_info_add(const struct proposal_parser *parser,
 
 	if (tokens->alg.ptr != NULL) {
 		snprintf(parser->err_buf, parser->err_buf_len,
-			 "'"PRISHUNK"' unexpected",
-			 SHUNKF(tokens[0].alg));
+			 "'"PRI_SHUNK"' unexpected",
+			 PRI_shunk(tokens[0].alg));
 		return false;
 	}
 
@@ -553,8 +553,8 @@ bool alg_info_parse_str(const struct proposal_parser *parser,
 			shunk_t alg_str)
 {
 	DBG(DBG_PROPOSAL_PARSER,
-	    DBG_log("parsing '"PRISHUNK"' for %s",
-		    SHUNKF(alg_str), parser->protocol->name));
+	    DBG_log("parsing '"PRI_SHUNK"' for %s",
+		    PRI_shunk(alg_str), parser->protocol->name));
 
 	/* use default if no string */
 	if (alg_str.ptr == NULL) {
@@ -574,7 +574,7 @@ bool alg_info_parse_str(const struct proposal_parser *parser,
 	shunk_t prop_ptr = alg_str;
 	do {
 		/* find the next proposal */
-		shunk_t prop = shunk_token(&prop_ptr, ",");
+		shunk_t prop = shunk_strsep(&prop_ptr, ",");
 		/* parse it */
 		struct token tokens[8];
 		zero(&tokens);
@@ -589,7 +589,7 @@ bool alg_info_parse_str(const struct proposal_parser *parser,
 				return false;
 			}
 			/* find the next alg */
-			shunk_t alg = shunk_token(&alg_ptr, "-;,");
+			shunk_t alg = shunk_strsep(&alg_ptr, "-;,");
 			*token++ = (struct token) {
 				.alg = alg,
 				.sep = last_sep,

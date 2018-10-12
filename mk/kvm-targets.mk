@@ -5,7 +5,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -26,7 +26,7 @@
 #
 # Pull in all its defaults so that they override everything below.
 
-KVM_OS ?= fedora22
+KVM_OS ?= fedora28
 include testing/libvirt/$(KVM_OS).mk
 
 
@@ -46,7 +46,7 @@ KVM_PREFIXES ?= $(if $(KVM_PREFIX), $(KVM_PREFIX), '')
 KVM_WORKERS ?= 1
 KVM_USER ?= $(shell id -u)
 KVM_GROUP ?= $(shell id -g qemu)
-KVM_MAKEFLAGS ?= USE_EFENCE=false ALL_ALGS=false USE_DH31=false USE_SECCOMP=true USE_LABELED_IPSEC=true
+KVM_MAKEFLAGS ?= USE_EFENCE=true ALL_ALGS=false USE_SECCOMP=true USE_LABELED_IPSEC=true
 
 # targets for dumping the above
 .PHONY: print-kvm-prefixes
@@ -279,7 +279,7 @@ web-pages-disabled:
 define kvm-test
 .PHONY: $(1)
 $(1): kvm-keys kvm-shutdown-local-domains web-test-prep
-	$$(if $$(WEB_SUMMARYDIR),,@$(MAKE) -s web-pages-disabled)
+	$$(if $$(WEB_ENABLED),,@$(MAKE) -s web-pages-disabled)
 	: kvm-test target=$(1) param=$(2)
 	$$(call check-kvm-qemu-directory)
 	$$(call check-kvm-entropy)
@@ -287,10 +287,12 @@ $(1): kvm-keys kvm-shutdown-local-domains web-test-prep
 	$$(KVMRUNNER) \
 		$$(foreach prefix,$$(KVM_PREFIXES), --prefix $$(prefix)) \
 		$$(if $$(KVM_WORKERS), --workers $$(KVM_WORKERS)) \
-		$$(if $$(WEB_RESULTSDIR), --publish-results $$(WEB_RESULTSDIR)) \
-		$$(if $$(WEB_SUMMARYDIR), --publish-status $$(WEB_SUMMARYDIR)/status.json) \
+		$$(if $$(WEB_ENABLED), \
+			--publish-hash $$(WEB_HASH) \
+			--publish-results $$(WEB_RESULTSDIR) \
+			--publish-status $$(WEB_SUMMARYDIR)/status.json) \
 		$(2) $$(KVM_TEST_FLAGS) $$(STRIPPED_KVM_TESTS)
-	$$(if $$(WEB_SUMMARYDIR),,@$(MAKE) -s web-pages-disabled)
+	$$(if $$(WEB_ENABLED),,@$(MAKE) -s web-pages-disabled)
 endef
 
 # "test" and "check" just runs the entire testsuite.
@@ -319,25 +321,6 @@ kvm-diffs:
 #
 # Build the KVM keys using the KVM.
 #
-
-KVM_KEYS_SCRIPT = ./testing/x509/kvm-keys.sh
-KVM_KEYS_EXPIRATION_DAY = 7
-KVM_KEYS_EXPIRED = find testing/x509/*/ -mtime +$(KVM_KEYS_EXPIRATION_DAY)
-
-.PHONY: kvm-keys
-kvm-keys: $(KVM_KEYS)
-	$(MAKE) --no-print-directory kvm-keys-up-to-date
-
-# For moment don't force keys to be re-built.
-.PHONY: kvm-keys-up-to-date
-kvm-keys-up-to-date:
-	@if test $$($(KVM_KEYS_EXPIRED) | wc -l) -gt 0 ; then \
-		echo "The following keys are more than $(KVM_KEYS_EXPIRATION_DAY) days old:" ; \
-		$(KVM_KEYS_EXPIRED) | sed -e 's/^/  /' ; \
-		echo "run 'make kvm-keys-clean kvm-keys' to force an update" ; \
-		exit 1 ; \
-	fi
-
 # XXX:
 #
 # Can't yet force the domain's creation.  This target may have been
@@ -347,19 +330,66 @@ kvm-keys-up-to-date:
 # Make certain everything is shutdown.  Can't depend on the phony
 # target kvm-shutdown-local-domains as that triggers an unconditional
 # rebuild.  Instead invoke that rule inline.
+#
+# "dist_certs.py" can't create a directory called "certs/" on a 9p
+# mounted file system (OSError: [Errno 13] Permission denied:
+# 'certs/').  In fact, "mkdir xxx/ certs/" half fails (only xxx/ is
+# created) so it might even be a problem with the mkdir call!  Get
+# around this by first creating the certs in /tmp on the guest, and
+# then copying back using a tar file.
+#
+# "dist_certs.py" always writes its certificates to $(dirname $0).
+# Get around this by running a copy of dist_certs.py placed in /tmp.
 
-$(KVM_KEYS): testing/x509/dist_certs.py $(KVM_KEYS_SCRIPT) # | $(KVM_LOCALDIR)/$(KVM_BUILD_DOMAIN).xml
+KVM_KEYS_EXPIRATION_DAY = 7
+KVM_KEYS_EXPIRED = find testing/x509/*/ -mtime +$(KVM_KEYS_EXPIRATION_DAY)
+
+.PHONY: kvm-keys
+kvm-keys: $(KVM_KEYS)
+	$(MAKE) --no-print-directory kvm-keys-up-to-date
+
+# $(KVM_KEYS): | $(KVM_LOCALDIR)/$(KVM_BUILD_DOMAIN).xml
+$(KVM_KEYS): $(top_srcdir)/testing/x509/dist_certs.py
+$(KVM_KEYS): $(top_srcdir)/testing/x509/strongswan-ec-gen.sh
+$(KVM_KEYS): $(top_srcdir)/testing/baseconfigs/all/etc/bind/generate-dnssec.sh
+$(KVM_KEYS):
 	$(call check-kvm-domain,$(KVM_BUILD_DOMAIN))
 	$(call check-kvm-entropy)
 	$(call check-kvm-qemu-directory)
-	: invoke phony target to shut things down
+	: invoke phony target to shut things down and delete old keys
 	$(MAKE) kvm-shutdown-local-domains
 	$(MAKE) kvm-keys-clean
-	$(KVM_KEYS_SCRIPT) $(KVM_BUILD_DOMAIN) testing/x509
+	:
+	: disable FIPS
+	:
+	$(KVMSH) $(KVM_BUILD_DOMAIN) rm -f /etc/system-fips
+	$(KVMSH) --chdir . $(KVM_BUILD_DOMAIN) ./testing/guestbin/fipsoff
+	:
+	: create the empty /tmp/x509 directory ready for the keys
+	:
+	$(KVMSH) $(KVM_BUILD_DOMAIN) rm -rf /tmp/x509
+	$(KVMSH) $(KVM_BUILD_DOMAIN) mkdir /tmp/x509
+	:
+	: per comments, generate everything in /tmp/x509
+	:
+	$(KVMSH) --chdir . $(KVM_BUILD_DOMAIN) cp -f ./testing/x509/dist_certs.py /tmp/x509
+	$(KVMSH) --chdir /tmp/x509 $(KVM_BUILD_DOMAIN) ./dist_certs.py
+	$(KVMSH) --chdir . $(KVM_BUILD_DOMAIN) cp -f ./testing/x509/strongswan-ec-gen.sh /tmp/x509
+	$(KVMSH) --chdir /tmp/x509 $(KVM_BUILD_DOMAIN) ./strongswan-ec-gen.sh
+	:
+	: copy the certs from guest to host in a tar ball to avoid 9fs bug
+	:
+	rm -f testing/x509/kvm-keys.tar
+	$(KVMSH) --chdir /tmp/x509 $(KVM_BUILD_DOMAIN) tar cf kvm-keys.tar '*/' nss-pw
+	$(KVMSH) --chdir . $(KVM_BUILD_DOMAIN) cp /tmp/x509/kvm-keys.tar testing/x509
+	cd testing/x509 && tar xf kvm-keys.tar
+	rm -f testing/x509/kvm-keys.tar
+	:
 	: Also regenerate the DNSSEC keys -- uses host
+	:
 	$(top_srcdir)/testing/baseconfigs/all/etc/bind/generate-dnssec.sh
 	$(KVMSH) --shutdown $(KVM_BUILD_DOMAIN)
-	touch $(KVM_KEYS)
+	touch $@
 
 KVM_KEYS_CLEAN_TARGETS = clean-kvm-keys kvm-clean-keys kvm-keys-clean
 .PHONY: $(KVM_KEYS_CLEAN_TARGETS)
@@ -370,7 +400,17 @@ $(KVM_KEYS_CLEAN_TARGETS):
 	rm -f testing/baseconfigs/all/etc/bind/keys/*.key
 	rm -f testing/baseconfigs/all/etc/bind/keys/*.private
 	rm -f testing/baseconfigs/all/etc/bind/dsset/dsset-*
+	rm -f testing/x509/kvm-keys.tar
 
+# For moment don't force keys to be re-built.
+.PHONY: kvm-keys-up-to-date
+kvm-keys-up-to-date:
+	@if test $$($(KVM_KEYS_EXPIRED) | wc -l) -gt 0 ; then \
+		echo "The following keys are more than $(KVM_KEYS_EXPIRATION_DAY) days old:" ; \
+		$(KVM_KEYS_EXPIRED) | sed -e 's/^/  /' ; \
+		echo "run 'make kvm-keys-clean kvm-keys' to force an update" ; \
+		exit 1 ; \
+	fi
 
 #
 # Create an RPM for the test domains
@@ -592,7 +632,7 @@ $(KVM_BASEDIR)/$(KVM_BASE_DOMAIN).ks: | $(KVM_ISO) $(KVM_KICKSTART_FILE) $(KVM_G
 	: XXX: Passing $(VIRT_SECURITY) to virt-install causes it to panic
 	$(VIRT_INSTALL) \
 		--name=$(KVM_BASE_DOMAIN) \
-		$(VIRT__OS_VARIANT) \
+		$(VIRT_OS_VARIANT) \
 		--vcpus=1 \
 		--memory 1024 \
 		--nographics \

@@ -14,7 +14,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -64,7 +64,7 @@ const char *sensitive_ipstr(const ip_address *src, ipstr_buf *b)
  * (apparently) If the context provides a whack file descriptor,
  * messages should be copied to it -- see whack_log()
  */
-int whack_log_fd = NULL_FD;                     /* only set during whack_handle() */
+fd_t whack_log_fd = { .fd = NULL_FD, };      /* only set during whack_handle() */
 
 /*
  * Context for logging.
@@ -190,13 +190,13 @@ static void log_processing(enum processing processing, bool current,
  */
 void log_reset_globals(const char *func, const char *file, long line)
 {
-	if (whack_log_fd != NULL_FD) {
+	if (fd_p(whack_log_fd)) {
 		LSWDBGP(DBG_MASK, buf) {
-			lswlogf(buf, "processing: RESET whack log_fd (was %d)",
-				whack_log_fd);
+			lswlogf(buf, "processing: RESET whack log_fd (was "PRI_FD")",
+				PRI_fd(whack_log_fd));
 			lswlog_source_line(buf, func, file, line);
 		}
-		whack_log_fd = NULL_FD;
+		whack_log_fd = null_fd;
 	}
 	if (cur_state != NULL) {
 		log_processing(RESET, true, cur_state, NULL, NULL,
@@ -226,12 +226,12 @@ void log_reset_globals(const char *func, const char *file, long line)
 
 void log_pexpect_reset_globals(const char *func, const char *file, long line)
 {
-	if (whack_log_fd != NULL_FD) {
+	if (fd_p(whack_log_fd)) {
 		LSWLOG_PEXPECT_SOURCE(func, file, line, buf) {
-			lswlogf(buf, "processing: unexpected whack_log_fd %d should be %d",
-				whack_log_fd, NULL_FD);
+			lswlogf(buf, "processing: unexpected whack_log_fd "PRI_FD" should be "PRI_FD,
+				PRI_fd(whack_log_fd), PRI_fd(null_fd));
 		}
-		whack_log_fd = NULL_FD;
+		whack_log_fd = null_fd;
 	}
 	if (cur_state != NULL) {
 		LSWLOG_PEXPECT_SOURCE(func, file, line, buf) {
@@ -512,7 +512,7 @@ static void whack_raw(struct lswlog *b, enum rc_type rc)
 	 * Helper threads, which are asynchronous, shouldn't be trying
 	 * to directly emit whack output.
 	 */
-	if (pthread_equal(pthread_self(), main_thread)) {
+	if (in_main_thread()) {
 		if (whack_log_p()) {
 			/*
 			 * On the assumption that logging to whack is
@@ -534,7 +534,7 @@ static void lswlog_cur_prefix(struct lswlog *buf,
 			      struct connection *cur_connection,
 			      const ip_address *cur_from)
 {
-	if (!pthread_equal(pthread_self(), main_thread)) {
+	if (!in_main_thread()) {
 		return;
 	}
 
@@ -684,20 +684,20 @@ void libreswan_exit(enum rc_type rc)
 
 void whack_log_pre(enum rc_type rc, struct lswlog *buf)
 {
-	passert(pthread_equal(pthread_self(), main_thread));
+	passert(in_main_thread());
 	add_whack_rc_prefix(buf, rc);
 	lswlog_log_prefix(buf);
 }
 
 void lswlog_to_whack_stream(struct lswlog *buf)
 {
-	passert(pthread_equal(pthread_self(), main_thread));
+	passert(in_main_thread());
 
-	int wfd = whack_log_fd != NULL_FD ? whack_log_fd :
-	      cur_state != NULL ? cur_state->st_whack_sock :
-	      NULL_FD;
+	fd_t wfd = fd_p(whack_log_fd) ? whack_log_fd :
+		cur_state != NULL ? cur_state->st_whack_sock :
+		null_fd;
 
-	passert(wfd != NULL_FD);
+	passert(fd_p(wfd));
 
 	char *m = buf->array;
 	size_t len = buf->len;
@@ -705,7 +705,7 @@ void lswlog_to_whack_stream(struct lswlog *buf)
 	/* write to whack socket, but suppress possible SIGPIPE */
 #ifdef MSG_NOSIGNAL                     /* depends on version of glibc??? */
 	m[len] = '\n';  /* don't need NUL, do need NL */
-	(void) send(wfd, m, len + 1, MSG_NOSIGNAL);
+	(void) send(wfd.fd, m, len + 1, MSG_NOSIGNAL);
 #else /* !MSG_NOSIGNAL */
 	int r;
 	struct sigaction act, oldact;
@@ -726,16 +726,16 @@ void lswlog_to_whack_stream(struct lswlog *buf)
 
 bool whack_log_p(void)
 {
-	if (!pthread_equal(pthread_self(), main_thread)) {
+	if (!in_main_thread()) {
 		PEXPECT_LOG("%s", "whack_log*() must be called from the main thread");
 		return false;
 	}
 
-	int wfd = whack_log_fd != NULL_FD ? whack_log_fd :
+	fd_t wfd = fd_p(whack_log_fd) ? whack_log_fd :
 	      cur_state != NULL ? cur_state->st_whack_sock :
-	      NULL_FD;
+	      null_fd;
 
-	return wfd != NULL_FD;
+	return fd_p(wfd);
 }
 
 /* emit message to whack.

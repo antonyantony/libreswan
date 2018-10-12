@@ -14,7 +14,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -429,11 +429,11 @@ static void timer_event_cb(evutil_socket_t fd UNUSED, const short event UNUSED, 
 		break;
 
 	case EVENT_v2_RELEASE_WHACK:
-		DBG(DBG_CONTROL, DBG_log("%s releasing whack for #%lu %s (sock=%d)",
+		DBG(DBG_CONTROL, DBG_log("%s releasing whack for #%lu %s (sock="PRI_FD")",
 					enum_show(&timer_event_names, type),
 					st->st_serialno,
 					st->st_state_name,
-					st->st_whack_sock));
+					 PRI_fd(st->st_whack_sock)));
 		release_pending_whacks(st, "release whack");
 		break;
 

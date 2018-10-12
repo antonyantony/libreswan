@@ -13,7 +13,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -188,6 +188,30 @@ struct state_v1_microcode {
  * Most entries will use SMF_ALL_AUTH because they apply to all.
  * Note: SMF_ALL_AUTH matches 0 for those circumstances when no auth
  * has been set.
+ *
+ * The IKEv1 state machine then uses the auth type (SMF_*_AUTH flags)
+ * to select the exact state transition.  For states where auth
+ * (SMF_*_AUTH flags) don't apply (.e.g, child states)
+ * flags|=SMF_ALL_AUTH so the first transition always matches.
+ *
+ * Once a transition is selected, the containing payloads are checked
+ * against what is allowed.  For instance, in STATE_MAIN_R2 ->
+ * STATE_MAIN_R3 with SMF_DS_AUTH requires P(SIG).
+ *
+ * In IKEv2, it is the message header and payload types that select
+ * the state.  As for how the IKEv1 'from state' is slected, look for
+ * a big nasty magic switch.
+ *
+ * XXX: the state transition table is littered with STATE_UNDEFINED /
+ * SMF_ALL_AUTH / unexpected() entries.  These are to catch things
+ * like unimplemented auth cases, and unexpected packets.  For the
+ * latter, they seem to be place holders so that the table contains at
+ * least one entry for the state.
+ *
+ * XXX: Some of the SMF flags specify attributes of the current state
+ * (e.g., SMF_RETRANSMIT_ON_DUPLICATE), some apply to the state
+ * transition (e.g., SMF_REPLY), and some can be interpreted as either
+ * (.e.g., SMF_INPUT_ENCRYPTED).
  */
 #define SMF_ALL_AUTH    LRANGE(0, OAKLEY_AUTH_ROOF - 1)
 #define SMF_PSK_AUTH    LELEM(OAKLEY_PRESHARED_KEY)
@@ -613,8 +637,20 @@ void init_ikev1(void)
 		/*
 		 * Copy over the flags that apply to the state; and
 		 * not the edge.
+		 *
+		 * Expect all states to have the same bits set.
 		 */
-		fs->fs_flags = t->flags & SMF_RETRANSMIT_ON_DUPLICATE;
+		if ((t->flags & fs->fs_flags) != fs->fs_flags) {
+			LSWDBGP(DBG_CONTROLMORE, buf) {
+				lswlogs(buf, "microcode for ");
+				lswlog_finite_state(buf, finite_states[t->state]);
+				lswlogs(buf, " -> ");
+				lswlog_finite_state(buf, fs);
+				lswlogf(buf, " missing flags 0x%"PRIxLSET,
+					fs->fs_flags);
+			}
+		}
+		fs->fs_flags |= t->flags & SMF_RETRANSMIT_ON_DUPLICATE;
 		do {
 			t++;
 		} while (t->state == fs->fs_state);
@@ -777,7 +813,7 @@ static stf_status informational(struct state *st, struct msg_digest *md)
 
 				/* Saving connection name and whack sock id */
 				const char *tmp_name = st->st_connection->name;
-				int tmp_whack_sock = dup_any(st->st_whack_sock);
+				fd_t tmp_whack_sock = dup_any(st->st_whack_sock);
 
 				/* deleting ISAKMP SA with the current remote peer */
 				delete_state(st);
@@ -920,12 +956,16 @@ static stf_status informational(struct state *st, struct msg_digest *md)
 			return STF_IGNORE;
 		default:
 			loglog(RC_LOG_SERIOUS,
-			       "received and ignored informational message");
+				"received and ignored notification payload: %s",
+				enum_name(&ikev1_notify_names, n->isan_type));
 			return STF_IGNORE;
 		}
 	} else {
-		loglog(RC_LOG_SERIOUS,
-		       "received and ignored empty informational notification payload");
+		/* warn if we didn't find any Delete or Notify payload in packet */
+		if (md->chain[ISAKMP_NEXT_D] == NULL) {
+			loglog(RC_LOG_SERIOUS,
+				"received and ignored empty informational notification payload");
+		}
 		return STF_IGNORE;
 	}
 }
@@ -972,7 +1012,21 @@ static bool ikev1_duplicate(struct state *st, struct msg_digest *md)
 	    st->st_rpacket.len == pbs_room(&md->packet_pbs) &&
 	    memeq(st->st_rpacket.ptr, md->packet_pbs.start,
 		  st->st_rpacket.len)) {
-		if (st->st_finite_state->fs_flags & SMF_RETRANSMIT_ON_DUPLICATE) {
+		/*
+		 * Duplicate.  Drop or retransmit?
+		 *
+		 * Only re-transmit when the last state transition
+		 * (triggered by this packet the first time) included
+		 * a reply.
+		 *
+		 * XXX: is SMF_RETRANSMIT_ON_DUPLICATE useful or
+		 * correct?
+		 */
+		bool replied = (st->st_v1_last_transition != NULL &&
+				(st->st_v1_last_transition->flags & SMF_REPLY));
+		bool retransmit_on_duplicate =
+			(st->st_finite_state->fs_flags & SMF_RETRANSMIT_ON_DUPLICATE);
+		if (replied && retransmit_on_duplicate) {
 			/*
 			 * States with EVENT_SO_DISCARD always respond
 			 * to re-transmits; else cap.
@@ -991,8 +1045,11 @@ static bool ikev1_duplicate(struct state *st, struct msg_digest *md)
 		} else {
 			LSWDBGP(DBG_CONTROLMORE, buf) {
 				lswlog_log_prefix(buf);
-				lswlogf(buf, "discarding duplicate packet; already %s",
-				st->st_state_name);
+				lswlogf(buf, "discarding duplicate packet; already %s;",
+					st->st_state_name);
+				lswlogf(buf, " replied=%s", replied ? "T" : "F");
+				lswlogf(buf, " retransmit_on_duplicate=%s",
+					retransmit_on_duplicate ? "T" : "F");
 			}
 		}
 		return true;
@@ -1646,6 +1703,19 @@ void process_v1_packet(struct msg_digest **mdp)
 	smc = fs->fs_microcode;
 	passert(smc != NULL);
 
+	/*
+	 * Find the state's the state transitions that has matching
+	 * authentication.
+	 *
+	 * For states where this makes no sense (eg, quick states
+	 * creating a CHILD_SA), .flags|=SMF_ALL_AUTH so the first
+	 * (only) one always matches.
+	 *
+	 * XXX: The code assums that when there is always a match (if
+	 * there isn't the passert() triggers.  If needed, bogus
+	 * transitions that log/drop the packet are added to the
+	 * table?  Would simply dropping the packets be easier.
+	 */
 	if (st != NULL) {
 		oakley_auth_t baseauth =
 			xauth_calcbaseauth(st->st_oakley.auth);
@@ -1656,6 +1726,8 @@ void process_v1_packet(struct msg_digest **mdp)
 		}
 	}
 
+	/*
+	 * XXX: do this earlier? */
 	if (verbose_state_busy(st))
 		return;
 
@@ -1668,6 +1740,8 @@ void process_v1_packet(struct msg_digest **mdp)
 	 * wasn't received -- retransmit it.  Otherwise, just discard
 	 * it.  ??? Notification packets are like exchanges -- I hope
 	 * that they are idempotent!
+	 *
+	 * XXX: do this earlier?
 	 */
 	if (st != NULL && ikev1_duplicate(st, md)) {
 		return;
@@ -1744,13 +1818,11 @@ void process_packet_tail(struct msg_digest **mdp)
 		if (st == NULL) {
 			libreswan_log(
 				"discarding encrypted message for an unknown ISAKMP SA");
-			SEND_NOTIFICATION(PAYLOAD_MALFORMED /* XXX ? */);
 			return;
 		}
 		if (st->st_skey_ei_nss == NULL) {
 			loglog(RC_LOG_SERIOUS,
 				"discarding encrypted message because we haven't yet negotiated keying material");
-			SEND_NOTIFICATION(INVALID_FLAGS);
 			return;
 		}
 
@@ -1777,47 +1849,46 @@ void process_packet_tail(struct msg_digest **mdp)
 		 * Each post phase 1 exchange generates IVs from
 		 * the last phase 1 block, not the last block sent.
 		 */
-		{
-			const struct encrypt_desc *e = st->st_oakley.ta_encrypt;
+		const struct encrypt_desc *e = st->st_oakley.ta_encrypt;
 
-			if (pbs_left(&md->message_pbs) % e->enc_blocksize != 0)
-			{
-				loglog(RC_LOG_SERIOUS,
-				       "malformed message: not a multiple of encryption blocksize");
-				SEND_NOTIFICATION(PAYLOAD_MALFORMED);
-				return;
-			}
-
-			/* XXX Detect weak keys */
-
-			/* grab a copy of raw packet (for duplicate packet detection) */
-			clonetochunk(md->raw_packet, md->packet_pbs.start,
-				     pbs_room(&md->packet_pbs), "raw packet");
-
-			/* Decrypt everything after header */
-			if (!new_iv_set) {
-				if (st->st_iv_len == 0) {
-					init_phase2_iv(st, &md->hdr.isa_msgid);
-				} else {
-					/* use old IV */
-					restore_new_iv(st, st->st_iv, st->st_iv_len);
-				}
-			}
-
-			passert(st->st_new_iv_len >= e->enc_blocksize);
-			st->st_new_iv_len = e->enc_blocksize;   /* truncate */
-			e->encrypt_ops->do_crypt(e, md->message_pbs.cur,
-						 pbs_left(&md->message_pbs),
-						 st->st_enc_key_nss,
-						 st->st_new_iv, FALSE);
-
+		if (pbs_left(&md->message_pbs) % e->enc_blocksize != 0) {
+			loglog(RC_LOG_SERIOUS, "malformed message: not a multiple of encryption blocksize");
+			return;
 		}
 
-		DBG_cond_dump(DBG_CRYPT, "decrypted:\n", md->message_pbs.cur,
-			      md->message_pbs.roof - md->message_pbs.cur);
+		/* XXX Detect weak keys */
 
-		DBG_cond_dump(DBG_CRYPT, "next IV:",
+		/* grab a copy of raw packet (for duplicate packet detection) */
+		clonetochunk(md->raw_packet, md->packet_pbs.start,
+			     pbs_room(&md->packet_pbs), "raw packet");
+
+		/* Decrypt everything after header */
+		if (!new_iv_set) {
+			if (st->st_iv_len == 0) {
+				init_phase2_iv(st, &md->hdr.isa_msgid);
+			} else {
+				/* use old IV */
+				restore_new_iv(st, st->st_iv, st->st_iv_len);
+			}
+		}
+
+		passert(st->st_new_iv_len >= e->enc_blocksize);
+		st->st_new_iv_len = e->enc_blocksize;   /* truncate */
+
+		DBG_cond_dump(DBG_CRYPT, "IV before:",
 			      st->st_new_iv, st->st_new_iv_len);
+		e->encrypt_ops->do_crypt(e, md->message_pbs.cur,
+					 pbs_left(&md->message_pbs),
+					 st->st_enc_key_nss,
+					 st->st_new_iv, FALSE);
+		DBG_cond_dump(DBG_CRYPT, "IV after:",
+			      st->st_new_iv, st->st_new_iv_len);
+
+		DBG(DBG_CRYPT,
+		    DBG_log("decrypted payload (starts at offset %td):",
+			    md->message_pbs.cur - md->message_pbs.roof);
+		    DBG_dump("", md->message_pbs.start,
+			     md->message_pbs.roof - md->message_pbs.start));
 	} else {
 		/* packet was not encryped -- should it have been? */
 
@@ -1852,7 +1923,9 @@ void process_packet_tail(struct msg_digest **mdp)
 				loglog(RC_LOG_SERIOUS,
 				       "more than %zu payloads in message; ignored",
 				       elemsof(md->digest));
-				SEND_NOTIFICATION(PAYLOAD_MALFORMED);
+				if (!md->encrypted) {
+					SEND_NOTIFICATION(PAYLOAD_MALFORMED);
+				}
 				return;
 			}
 			struct payload_digest *const pd = md->digest + md->digest_roof;
@@ -1936,7 +2009,9 @@ void process_packet_tail(struct msg_digest **mdp)
 						loglog(RC_LOG_SERIOUS,
 						       "%smalformed payload in packet",
 						       excuse);
-						SEND_NOTIFICATION(PAYLOAD_MALFORMED);
+						if (!md->encrypted) {
+							SEND_NOTIFICATION(PAYLOAD_MALFORMED);
+						}
 						return;
 					}
 					np = pd->payload.generic.isag_np;
@@ -1948,7 +2023,9 @@ void process_packet_tail(struct msg_digest **mdp)
 						"%smessage ignored because it contains an unknown or unexpected payload type (%s) at the outermost level",
 					       excuse,
 					       enum_show(&ikev1_payload_names, np));
-					SEND_NOTIFICATION(INVALID_PAYLOAD_TYPE);
+					if (!md->encrypted) {
+						SEND_NOTIFICATION(INVALID_PAYLOAD_TYPE);
+					}
 					return;
 				}
 				passert(sd != NULL);
@@ -1967,10 +2044,13 @@ void process_packet_tail(struct msg_digest **mdp)
 					      LELEM(ISAKMP_NEXT_CR) |
 					      LELEM(ISAKMP_NEXT_CERT))) {
 					loglog(RC_LOG_SERIOUS,
-						"%smessage ignored because it contains an unexpected payload type (%s)",
+						"%smessage ignored because it contains a payload type (%s) unexpected by state %s",
 						excuse,
-						enum_show(&ikev1_payload_names, np));
-					SEND_NOTIFICATION(INVALID_PAYLOAD_TYPE);
+						enum_show(&ikev1_payload_names, np),
+						st->st_state_name);
+					if (!md->encrypted) {
+						SEND_NOTIFICATION(INVALID_PAYLOAD_TYPE);
+					}
 					return;
 				}
 
@@ -1986,7 +2066,9 @@ void process_packet_tail(struct msg_digest **mdp)
 				loglog(RC_LOG_SERIOUS,
 				       "%smalformed payload in packet",
 				       excuse);
-				SEND_NOTIFICATION(PAYLOAD_MALFORMED);
+				if (!md->encrypted) {
+					SEND_NOTIFICATION(PAYLOAD_MALFORMED);
+				}
 				return;
 			}
 
@@ -2003,19 +2085,18 @@ void process_packet_tail(struct msg_digest **mdp)
 				break;
 			}
 
-			/* place this payload at the end of the chain for this type */
-			{
-				/*
-				 * Spell out that chain[] isn't
-				 * overflowing.  Above also asserts
-				 * NP<LELEM_ROOF.
-				 */
-				passert(np < elemsof(md->chain));
-				struct payload_digest **p;
 
-				for (p = &md->chain[np]; *p != NULL;
-				     p = &(*p)->next)
-					;
+			/*
+			 * Place payload at the end of the chain for this type.
+			 * This code appears in ikev1.c and ikev2.c.
+			 */
+			{
+				/* np is a proper subscript for chain[] */
+				passert(np < elemsof(md->chain));
+				struct payload_digest **p = &md->chain[np];
+
+				while (*p != NULL)
+					p = &(*p)->next;
 				*p = pd;
 				pd->next = NULL;
 			}
@@ -2046,7 +2127,9 @@ void process_packet_tail(struct msg_digest **mdp)
 			       "message for %s is missing payloads %s",
 			       enum_name(&state_names, from_state),
 			       bitnamesof(payload_name_ikev1, needed));
-			SEND_NOTIFICATION(PAYLOAD_MALFORMED);
+			if (!md->encrypted) {
+				SEND_NOTIFICATION(PAYLOAD_MALFORMED);
+			}
 			return;
 		}
 	}
@@ -2061,7 +2144,9 @@ void process_packet_tail(struct msg_digest **mdp)
 		    md->hdr.isa_np != ISAKMP_NEXT_SA) {
 			loglog(RC_LOG_SERIOUS,
 			       "malformed Phase 1 message: does not start with an SA payload");
-			SEND_NOTIFICATION(PAYLOAD_MALFORMED);
+			if (!md->encrypted) {
+				SEND_NOTIFICATION(PAYLOAD_MALFORMED);
+			}
 			return;
 		}
 	} else if (IS_QUICK(from_state)) {
@@ -2083,7 +2168,9 @@ void process_packet_tail(struct msg_digest **mdp)
 		if (md->hdr.isa_np != ISAKMP_NEXT_HASH) {
 			loglog(RC_LOG_SERIOUS,
 			       "malformed Quick Mode message: does not start with a HASH payload");
-			SEND_NOTIFICATION(PAYLOAD_MALFORMED);
+			if (!md->encrypted) {
+				SEND_NOTIFICATION(PAYLOAD_MALFORMED);
+			}
 			return;
 		}
 
@@ -2097,7 +2184,9 @@ void process_packet_tail(struct msg_digest **mdp)
 				if (p != &md->digest[i]) {
 					loglog(RC_LOG_SERIOUS,
 					       "malformed Quick Mode message: SA payload is in wrong position");
-					SEND_NOTIFICATION(PAYLOAD_MALFORMED);
+					if (!md->encrypted) {
+						SEND_NOTIFICATION(PAYLOAD_MALFORMED);
+					}
 					return;
 				}
 				p = p->next;
@@ -2408,13 +2497,23 @@ void complete_v1_state_transition(struct msg_digest **mdp, stf_status result)
 			nat_traversal_change_port_lookup(md, st);
 		}
 
+		/*
+		 * Save both the received packet, and this
+		 * state-transition.
+		 *
+		 * Only when the (last) state transition was a "reply"
+		 * should a duplicate packet trigger a retransmit
+		 * (else they get discarded).
+		 *
+		 * XXX: .st_finite_state .fs_flags & SMF_REPLY can't
+		 * be used because it contains flags for the new state
+		 * not the old-to-new state transition.
+		 */
+		remember_received_packet(st, md);
+		st->st_v1_last_transition = md->smc;
+
 		/* if requested, send the new reply packet */
 		if (smc->flags & SMF_REPLY) {
-			/*
-			 * Since replying, save previous packet so
-			 * that re-transmits can deal with it.
-			 */
-			remember_received_packet(st, md);
 			DBG(DBG_CONTROL, {
 				ipstr_buf b;
 				DBG_log("sending reply packet to %s:%u (from port %u)",

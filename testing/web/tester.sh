@@ -52,7 +52,8 @@ EOF
 }
 
 run() {
-    ${status} "running 'make $1'"
+    href="<a href=\"$(basename ${resultsdir})/$1.log\">$1</a>"
+    ${status} "running 'make ${href}'"
 
     # fudge up enough of summary.json to fool the top level
     if test ! -r ${resultsdir}/kvm-test.ok ; then
@@ -63,10 +64,10 @@ run() {
     # directory (${utilsdir}), but point it at files in the test
     # directory (${repodir}).
 
-    runner="${utilsdir}/kvmrunner.py --publish-results ${resultsdir} --testing-directory ${repodir}/testing --publish-status ${summarydir}/status.json"
+    runner="${utilsdir}/kvmrunner.py --publish-hash ${commit} --publish-results ${resultsdir} --testing-directory ${repodir}/testing --publish-status ${summarydir}/status.json"
 
-    # XXX: disable publishing when running make in the ${repodir}.  It
-    # will likely conflict with the above kvmrunner command.
+    # Use trick to both capture the status of make and tee output to a
+    # log file.
 
     if make -C ${repodir} $1 \
 	    WEB_REPODIR= \
@@ -77,15 +78,12 @@ run() {
 	    ${workers:+KVM_WORKERS="${workers}"} \
 	    2>&1 ; then
 	touch ${resultsdir}/$1.ok ;
-    fi | if test -r ${webdir}/$1-status.awk ; then
-	awk -v script="${status}" -f ${webdir}/$1-status.awk
-    else
-	cat
-     fi | tee -a ${resultsdir}/$1.log
+    fi | tee -a ${resultsdir}/$1.log
     if test ! -r ${resultsdir}/$1.ok ; then
-	${status} "'make $1' failed"
+	${status} "'make ${href}' failed"
 	exit 1
     fi
+
 }
 
 while true ; do
@@ -96,7 +94,7 @@ while true ; do
     # become corrupt and need a rebuild.
 
     status "checking KVMs"
-    if grep '"output-missing"' "${summarydir}"/*-g*/results.json > /dev/null ; then
+    if grep '"output-missing"' "${summarydir}"/*-g*/results.json ; then
 	status "corrupt domains detected, deleting old"
 	( cd ${repodir} && make kvm-purge )
 	status "corrupt domains detected, deleting bogus results"
@@ -168,6 +166,7 @@ while true ; do
     make -C ${makedir} web-resultsdir \
 	 WEB_TIME=${start_time} \
 	 WEB_REPODIR=${repodir} \
+	 WEB_HASH=${commit} \
 	 WEB_RESULTSDIR=${resultsdir} \
 	 WEB_SUMMARYDIR=${summarydir}
 

@@ -9,7 +9,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -715,7 +715,7 @@ static void merge_crl_fetch_request(struct crl_fetch_request *request)
 /*
  * list all distribution points
  */
-void list_distribution_points(const generalName_t *first_gn)
+static void list_distribution_points(const generalName_t *first_gn)
 {
 	const generalName_t *gn;
 	for (gn = first_gn; gn != NULL; gn = gn->next) {

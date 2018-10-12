@@ -9,7 +9,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -28,6 +28,7 @@
 #include "constants.h"
 #include "lswlog.h"
 #include "lswalloc.h"
+#include "impair.h"
 
 #include "packet.h"
 
@@ -55,7 +56,7 @@ const pb_stream empty_pbs;
 static field_desc isa_fields[] = {
 	{ ft_raw, COOKIE_SIZE, "initiator cookie", NULL },
 	{ ft_raw, COOKIE_SIZE, "responder cookie", NULL },
-	{ ft_fcp, 8 / BITS_PER_BYTE, "first contained payload type", &payload_names_ikev1orv2 },
+	{ ft_fcp, 8 / BITS_PER_BYTE, "next payload type", &payload_names_ikev1orv2 },
 	{ ft_loose_enum, 8 / BITS_PER_BYTE, "ISAKMP version", &version_names },
 	{ ft_enum, 8 / BITS_PER_BYTE, "exchange type", &exchange_names_ikev1orv2 },
 	{ ft_set, 8 / BITS_PER_BYTE, "flags", isakmp_flag_names },
@@ -820,6 +821,7 @@ struct_desc ikev2_sa_desc = {
 	.fields = ikev2generic_fields,
 	.size = sizeof(struct ikev2_sa),
 	.pt = ISAKMP_NEXT_v2SA,
+	.nsst = v2_PROPOSAL_NON_LAST,
 };
 
 /* IKEv2 - Proposal sub-structure
@@ -844,7 +846,7 @@ struct_desc ikev2_sa_desc = {
  *             Figure 7:  Proposal Substructure
  */
 static field_desc ikev2prop_fields[] = {
-	{ ft_pnp, 8 / BITS_PER_BYTE, "last proposal", &ikev2_last_proposal_desc },
+	{ ft_lss, 8 / BITS_PER_BYTE, "last proposal", &ikev2_last_proposal_desc },
 	{ ft_zig,  8 / BITS_PER_BYTE, NULL, NULL },
 	{ ft_len, 16 / BITS_PER_BYTE, "length", NULL },
 	{ ft_nat,  8 / BITS_PER_BYTE, "prop #", NULL },
@@ -858,7 +860,7 @@ struct_desc ikev2_prop_desc = {
 	.name = "IKEv2 Proposal Substructure Payload",
 	.fields = ikev2prop_fields,
 	.size = sizeof(struct ikev2_prop),
-	.pt = v2_PROPOSAL_NON_LAST,
+	.nsst = v2_TRANSFORM_NON_LAST,
 };
 
 /*
@@ -879,7 +881,7 @@ struct_desc ikev2_prop_desc = {
  */
 
 static field_desc ikev2trans_fields[] = {
-	{ ft_pnp, 8 / BITS_PER_BYTE, "last transform", &ikev2_last_transform_desc },
+	{ ft_lss, 8 / BITS_PER_BYTE, "last transform", &ikev2_last_transform_desc },
 	{ ft_zig,  8 / BITS_PER_BYTE, NULL, NULL },
 	{ ft_len, 16 / BITS_PER_BYTE, "length", NULL },
 	{ ft_enum, 8 / BITS_PER_BYTE, "IKEv2 transform type", &ikev2_trans_type_names },
@@ -892,7 +894,6 @@ struct_desc ikev2_trans_desc = {
 	.name = "IKEv2 Transform Substructure Payload",
 	.fields = ikev2trans_fields,
 	.size = sizeof(struct ikev2_trans),
-	.pt = v2_TRANSFORM_NON_LAST,
 };
 
 /*
@@ -1403,7 +1404,7 @@ struct_desc ikev2_ts1_desc = {
  */
 /* almost the same as ikev2generic_fields (ft_fcp instead of ft_pnp) */
 static field_desc ikev2sk_fields[] = {
-	{ ft_fcp, 8 / BITS_PER_BYTE, "first contained payload type", &ikev2_payload_names },
+	{ ft_fcp, 8 / BITS_PER_BYTE, "next payload type", &ikev2_payload_names },
 	{ ft_set, 8 / BITS_PER_BYTE, "flags", critical_names },
 	{ ft_len, 16 / BITS_PER_BYTE, "length", NULL },
 	{ ft_end,  0, NULL, NULL }
@@ -1679,6 +1680,7 @@ static void DBG_print_struct(const char *label, const void *struct_ptr,
 		case ft_loose_enum:     /* value from an enumeration with only some names known */
 		case ft_fcp:
 		case ft_pnp:
+		case ft_lss:		/* last substructure field */
 		case ft_loose_enum_enum:	/* value from an enumeration with partial name table based on previous enum */
 		case ft_af_enum:        /* Attribute Format + value from an enumeration */
 		case ft_af_loose_enum:  /* Attribute Format + value from an enumeration */
@@ -1714,14 +1716,31 @@ static void DBG_print_struct(const char *label, const void *struct_ptr,
 
 			case ft_af_loose_enum:  /* Attribute Format + value from an enumeration */
 			case ft_af_enum:        /* Attribute Format + value from an enumeration */
-				if ((n & ISAKMP_ATTR_AF_MASK) ==
-				    ISAKMP_ATTR_AF_TV)
-					immediate = TRUE;
-			/* FALL THROUGH */
+			{
+				immediate = ((n & ISAKMP_ATTR_AF_MASK) ==
+					     ISAKMP_ATTR_AF_TV);
+				last_enum = n & ~ISAKMP_ATTR_AF_MASK;
+				/*
+				 * try to deal with fp->desc
+				 * containing a selection of
+				 * AF+<value> and <value> entries.
+				 */
+				const char *name = enum_name(fp->desc, last_enum);
+				if (name == NULL) {
+					name = enum_show(fp->desc, n);
+				}
+				DBG_log("   %s: %s%s (0x%" PRIx32 ")",
+					fp->name,
+					immediate ? "AF+" : "",
+					name, n);
+				break;
+			}
+
 			case ft_enum:           /* value from an enumeration */
 			case ft_loose_enum:     /* value from an enumeration with only some names known */
 			case ft_fcp:
 			case ft_pnp:
+			case ft_lss:
 				last_enum = n;
 				DBG_log("   %s: %s (0x%" PRIx32 ")",
 					fp->name,
@@ -1836,21 +1855,27 @@ bool in_struct(void *struct_ptr, struct_desc *sd,
 			passert(outp - (cur - ins->cur) == struct_ptr);
 
 #if 0
-			DBG(DBG_PARSING, DBG_log("%d %s",
-						 (int) (cur - ins->cur),
-						 fp->name == NULL ?
-						   "" : fp->name));
+			DBGF(DBG_PARSING, "%td (%td) '%s'.'%s' %d bytes ",
+			     (cur - ins->cur), (cur - ins->start),
+			     sd->name, fp->name == NULL ? "?reserved?" : fp->name,
+			     fp->size);
 #endif
+
 			switch (fp->field_type) {
 			case ft_zig: /* should be zero, ignore if not - liberal in what to receive, strict to send */
 				for (; i != 0; i--) {
-					if (*cur++ != 0) {
-						/* We cannot zeroize it, it would break our hash calculation */
-						libreswan_log(
-							"byte %d of %s should have been zero, but was not (ignored)",
-							(int) (cur - ins->cur),
-							sd->name);
+					uint8_t byte = *cur;
+					if (byte != 0) {
+						/* We cannot zeroize it, it would break our hash calculation. */
+						libreswan_log( "byte at offset %td (%td) of '%s'.'%s' is 0x%02"PRIx8" but should have been zero (ignored)",
+							       (cur - ins->cur),
+							       (cur - ins->start),
+							       sd->name,
+							       (fp->name != NULL ?
+								fp->name : "?reserved?"),
+							       byte);
 					}
+					cur++;
 					*outp++ = '\0'; /* probably redundant */
 				}
 				break;
@@ -1862,6 +1887,7 @@ bool in_struct(void *struct_ptr, struct_desc *sd,
 			case ft_loose_enum:     /* value from an enumeration with only some names known */
 			case ft_fcp:
 			case ft_pnp:
+			case ft_lss:
 			case ft_loose_enum_enum:	/* value from an enumeration with partial name table based on previous enum */
 			case ft_af_enum:        /* Attribute Format + value from an enumeration */
 			case ft_af_loose_enum:  /* Attribute Format + value from an enumeration */
@@ -1897,17 +1923,27 @@ bool in_struct(void *struct_ptr, struct_desc *sd,
 					}
 					break;
 				}
+
 				case ft_af_loose_enum: /* Attribute Format + value from an enumeration */
-					if ((n & ISAKMP_ATTR_AF_MASK) ==
-					    ISAKMP_ATTR_AF_TV)
-						immediate = TRUE;
+				case ft_af_enum: /* Attribute Format + value from an enumeration */
+					immediate = ((n & ISAKMP_ATTR_AF_MASK) ==
+						     ISAKMP_ATTR_AF_TV);
+					last_enum = n & ~ISAKMP_ATTR_AF_MASK;
+					/*
+					 * Lookup fp->desc using N and
+					 * not LAST_ENUM.  Only when N
+					 * (value or AF+value) is
+					 * found is it acceptable.
+					 */
+					if (fp->field_type == ft_af_enum &&
+					    enum_name(fp->desc, n) == NULL) {
+						ugh = builddiag("%s of %s has an unknown value: %s%" PRIu32 " (0x%" PRIx32 ")",
+								fp->name, sd->name,
+								immediate ? "AF+" : "",
+								last_enum, n);
+					}
 					break;
 
-				case ft_af_enum: /* Attribute Format + value from an enumeration */
-					if ((n & ISAKMP_ATTR_AF_MASK) ==
-					    ISAKMP_ATTR_AF_TV)
-						immediate = TRUE;
-				/* FALL THROUGH */
 				case ft_enum:   /* value from an enumeration */
 					if (enum_name(fp->desc, n) == NULL) {
 						ugh = builddiag("%s of %s has an unknown value: %" PRIu32 " (0x%" PRIx32 ")",
@@ -1919,6 +1955,7 @@ bool in_struct(void *struct_ptr, struct_desc *sd,
 				case ft_loose_enum:     /* value from an enumeration with only some names known */
 				case ft_fcp:
 				case ft_pnp:
+				case ft_lss:
 					last_enum = n;
 					break;
 
@@ -2115,6 +2152,11 @@ bool out_struct(const void *struct_ptr, struct_desc *sd,
 			/* .previous_np = NULL, */
 			/* .previous_np_field = NULL, */
 			/* .previous_np_struct = NULL, */
+
+			/* until an ft_lss is discovered */
+			/* .previous_ss = NULL, */
+			/* .previous_ss_field = NULL, */
+			/* .previous_ss = NULL, */
 		};
 
 		for (field_desc *fp = sd->fields; ugh == NULL; fp++) {
@@ -2167,6 +2209,7 @@ bool out_struct(const void *struct_ptr, struct_desc *sd,
 			case ft_loose_enum:     /* value from an enumeration with only some names known */
 			case ft_fcp:
 			case ft_pnp:
+			case ft_lss:
 			case ft_loose_enum_enum:	/* value from an enumeration with partial name table based on previous enum */
 			case ft_af_enum:        /* Attribute Format + value from an enumeration */
 			case ft_af_loose_enum:  /* Attribute Format + value from an enumeration */
@@ -2189,17 +2232,25 @@ bool out_struct(const void *struct_ptr, struct_desc *sd,
 				}
 
 				switch (fp->field_type) {
+
 				case ft_af_loose_enum: /* Attribute Format + value from an enumeration */
-					if ((n & ISAKMP_ATTR_AF_MASK) ==
-					    ISAKMP_ATTR_AF_TV)
-						immediate = TRUE;
+				case ft_af_enum: /* Attribute Format + value from an enumeration */
+					immediate = ((n & ISAKMP_ATTR_AF_MASK) ==
+						     ISAKMP_ATTR_AF_TV);
+					last_enum = n & ~ISAKMP_ATTR_AF_MASK;
+					if (fp->field_type == ft_af_enum &&
+					    enum_name(fp->desc, n) == NULL) {
+						ugh = builddiag("%s of %s has an unknown value: 0x%x+%" PRIu32 " (0x%" PRIx32 ")",
+								fp->name, sd->name,
+								n & ISAKMP_ATTR_AF_MASK,
+								last_enum, n);
+						if (impair_emitting) {
+							libreswan_log("IMPAIR: emitting %s", ugh);
+							ugh = NULL;
+						}
+					}
 					break;
 
-				case ft_af_enum: /* Attribute Format + value from an enumeration */
-					if ((n & ISAKMP_ATTR_AF_MASK) ==
-					    ISAKMP_ATTR_AF_TV)
-						immediate = TRUE;
-				/* FALL THROUGH */
 				case ft_enum:   /* value from an enumeration */
 					if (enum_name(fp->desc, n) == NULL) {
 						ugh = builddiag("%s of %s has an unknown value: %" PRIu32 " (0x%" PRIx32 ")",
@@ -2248,6 +2299,47 @@ bool out_struct(const void *struct_ptr, struct_desc *sd,
 					outs->previous_np_field = fp;
 					break;
 				}
+
+				case ft_lss:
+					/*					 *
+					 * The containing structure
+					 * should be expecting
+					 * substructures.
+					 */
+					passert(fp->size == 1);
+					pexpect(outs->desc->nsst != ISAKMP_NEXT_NONE);
+					/*
+					 * Since there's a previous
+					 * substructure, it can no
+					 * longer be last.  Check/set
+					 * its last substructure field
+					 * to its type.
+					 */
+					if (outs->previous_ss.loc != NULL) {
+						struct esb_buf ssb;
+						/* not set or set correctly */
+						pexpect(outs->previous_ss.loc[0] == ISAKMP_NEXT_NONE ||
+							outs->previous_ss.loc[0] == outs->desc->nsst);
+						DBGF(DBG_EMITTING, "last substructure: setting '%s'.'%s'.'%s' to %s (0x%x)",
+						     outs->desc->name,
+						     outs->previous_ss.sd->name,
+						     outs->previous_ss.fp->name,
+						     enum_showb(outs->previous_ss.fp->desc,
+								outs->desc->nsst, &ssb),
+						     outs->desc->nsst);
+					}
+					/*
+					 * Now save the location of
+					 * this Last Substructure.
+					 */
+					DBGF(DBG_EMITTING, "last substructure: saving location '%s'.'%s'.'%s'",
+					     outs->desc->name, sd->name, fp->name);
+					outs->previous_ss.loc = cur;
+					outs->previous_ss.sd = sd;
+					outs->previous_ss.fp = fp;
+					pexpect(n == ISAKMP_NEXT_NONE || n == outs->desc->nsst);
+					last_enum = n;
+					break;
 
 				case ft_loose_enum_enum:	/* value from an enumeration with partial name table based on previous enum */
 					ugh = enum_enum_checker(sd->name, fp, last_enum);
@@ -2349,42 +2441,75 @@ bool ikev1_out_generic_raw(uint8_t np, struct_desc *sd,
 	return TRUE;
 }
 
+static bool space_for(size_t len, pb_stream *outs, const char *fmt, ...) PRINTF_LIKE(3);
+static bool space_for(size_t len, pb_stream *outs, const char *fmt, ...)
+{
+	if (pbs_left(outs) == 0) {
+		/* should this be a DBGLOG? */
+		LSWLOG_RC(RC_LOG_SERIOUS, buf) {
+			lswlogf(buf, "%s is already full; discarding ", outs->name);
+			va_list ap;
+			va_start(ap, fmt);
+			lswlogvf(buf, fmt, ap);
+			va_end(ap);
+		}
+		return false;
+	} else if (pbs_left(outs) <= len) {
+		/* overflow at at left==1; left==0 for already overflowed */
+		LSWLOG_RC(RC_LOG_SERIOUS, buf) {
+			lswlogf(buf, "%s is full; unable to emit ", outs->name);
+			va_list ap;
+			va_start(ap, fmt);
+			lswlogvf(buf, fmt, ap);
+			va_end(ap);
+		}
+		/* overflow the buffer */
+		outs->cur += pbs_left(outs);
+		return false;
+	} else {
+		LSWDBGP(DBG_EMITTING, buf) {
+			lswlogs(buf, "emitting ");
+			va_list ap;
+			va_start(ap, fmt);
+			lswlogvf(buf, fmt, ap);
+			va_end(ap);
+			lswlogf(buf, " into %s", outs->name);
+		}
+		return true;
+	}
+}
+
 bool out_raw(const void *bytes, size_t len, pb_stream *outs, const char *name)
 {
-	/*
-	 * clang 3.4: warning: The left operand of '-' [in pbs_left] is a garbage value
-	 * This diagnostic seems wrong.
-	 */
-	if (pbs_left(outs) < len) {
-		loglog(RC_LOG_SERIOUS,
-		       "not enough room left to place %zu bytes of %s in %s",
-		       len, name, outs->name);
-		return FALSE;
-	} else {
-		DBG(DBG_EMITTING,
-		    DBG_log("emitting %u raw bytes of %s into %s",
-			    (unsigned) len, name, outs->name);
-		    DBG_dump(name, bytes, len));
+	if (space_for(len, outs, "%zu raw bytes of %s", len, name)) {
+		DBG(DBG_EMITTING, DBG_dump(name, bytes, len));
 		memcpy(outs->cur, bytes, len);
 		outs->cur += len;
-		return TRUE;
+		return true;
+	} else {
+		return false;
+	}
+}
+
+bool out_repeated_byte(uint8_t byte, size_t len, pb_stream *outs, const char *name)
+{
+	if (space_for(len, outs, "%zu 0x%02x repeated bytes of %s", len, byte, name)) {
+		memset(outs->cur, byte, len);
+		outs->cur += len;
+		return true;
+	} else {
+		return false;
 	}
 }
 
 bool out_zero(size_t len, pb_stream *outs, const char *name)
 {
-	if (pbs_left(outs) < len) {
-		loglog(RC_LOG_SERIOUS,
-		       "not enough room left to place %s in %s", name,
-		       outs->name);
-		return FALSE;
-	} else {
-		DBG(DBG_EMITTING,
-		    DBG_log("emitting %u zero bytes of %s into %s",
-			    (unsigned) len, name, outs->name));
-		memset(outs->cur, 0x00, len);
+	if (space_for(len, outs, "%zu zero bytes of %s", len, name)) {
+		memset(outs->cur, 0, len);
 		outs->cur += len;
-		return TRUE;
+		return true;
+	} else {
+		return false;
 	}
 }
 

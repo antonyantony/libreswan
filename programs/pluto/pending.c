@@ -11,7 +11,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -30,6 +30,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <arpa/nameser.h>       /* missing from <resolv.h> on old systems */
+#include <errno.h>
 
 #include <libreswan.h>
 
@@ -55,7 +56,7 @@
  * queue an IPsec SA negotiation pending completion of a
  * suitable phase 1 (IKE SA)
  */
-void add_pending(int whack_sock,
+void add_pending(fd_t whack_sock,
 		 struct state *isakmp_sa,
 		 struct connection *c,
 		 lset_t policy,
@@ -80,7 +81,7 @@ void add_pending(int whack_sock,
 					ipstr(&c->spd.that.host_addr, &b),
 					c->name, fmt_conn_instance(c, cib));
 			});
-			close_any(whack_sock);
+			close_any(&whack_sock);
 			return;
 		}
 	}
@@ -119,45 +120,107 @@ void add_pending(int whack_sock,
 	host_pair_enqueue_pending(c, p, &p->next);
 }
 
-/* Release all the whacks awaiting the completion of this state.
- * This is accomplished by closing all the whack socket file descriptors.
- * We go to a lot of trouble to tell each whack, but to not tell it twice.
+/*
+ * Release all the whacks awaiting the completion of this state.  This
+ * is accomplished by closing all the whack socket file descriptors.
+ * We go to some trouble to tell each whack, but to not tell it twice.
  */
+
+static bool same_fd(const struct stat *stst, fd_t fd)
+{
+	struct stat pst;
+	if (!fd_p(fd)) {
+		return false;
+	} else if (fstat(fd.fd, &pst) != 0) {
+		return false;
+	} else {
+		return (stst->st_dev == pst.st_dev &&
+			stst->st_ino == pst.st_ino);
+	}
+}
+
 void release_pending_whacks(struct state *st, err_t story)
 {
-	struct pending *p, **pp;
+	/*
+	 * Use fstat() to uniquely identify the whack connection -
+	 * multiple sockets to the same whack will have similar
+	 * 'struct stat' values.
+	 *
+	 * If the socket is valid, close it.
+	 */
 	struct stat stst;
-
-	if (st->st_whack_sock == NULL_FD ||
-	    fstat(st->st_whack_sock, &stst) != 0) {
-		/* resulting st_dev/st_ino ought to be distinct */
-		zero(&stst);	/* OK: no pointer fields */
+	if (!fd_p(st->st_whack_sock)) {
+		DBGF(DBG_CONTROL, "%s: state #%lu has no whack fd",
+		     __func__, st->st_serialno);
+		zero(&stst);
+	} else if (fstat(st->st_whack_sock.fd, &stst) != 0) {
+		int e = errno;
+		LSWDBGP(DBG_CONTROL, buf) {
+			lswlogf(buf, "%s: state #%lu stat("PRI_FD") failed ",
+				__func__, st->st_serialno, PRI_fd(st->st_whack_sock));
+			lswlog_errno(buf, e);
+		}
+		/* presumably dead */
+		st->st_whack_sock = null_fd;
+		zero(&stst);
+	} else {
+		DBGF(DBG_CONTROL, "%s: state #%lu "PRI_FD" .st_dev=%lu .st_ino=%lu",
+		     __func__, st->st_serialno, PRI_fd(st->st_whack_sock),
+		     (unsigned long)stst.st_dev, (unsigned long)stst.st_ino);
+		release_whack(st);
 	}
 
-	release_whack(st);
+	/*
+	 * Check for the SA's parent and if that needs to disconnect.
+	 *
+	 * For instance, when the IKE_SA establishes but the first
+	 * CHILD_SA fails with a timeout then this code will be called
+	 * with the CHILD_SA.
+	 *
+	 * XXX: Since this is ment to release pending whacks, should
+	 * this check for, and release the whacks for any pending
+	 * CHILD_SA attached to this ST's IKE SA?
+	 */
+	if (IS_CHILD_SA(st)) {
+		struct ike_sa *ike = ike_sa(st);
+		if (same_fd(&stst, ike->sa.st_whack_sock)) {
+			release_whack(&ike->sa);
+		}
+	}
 
-	pp = host_pair_first_pending(st->st_connection);
+	/*
+	 * Now go through pending children and close the whack socket
+	 * of any that are going to be assigned this ST as the parent.
+	 * XXX: Is this because the parent is dying so anything
+	 * waiting on it should be deleted.
+	 *
+	 * SAME_FD() is used to identify whack sockets that are
+	 * differnt to ST - when found a further release message is
+	 * printed.
+	 *
+	 * XXX: but what if this is a child?  Presumably the loop
+	 * becomes redundant or does IKEv1 confuse things?
+	 */
+
+	struct pending **pp = host_pair_first_pending(st->st_connection);
 	if (pp == NULL)
 		return;
-
-	for (p = *pp;
-	     p != NULL;
-	     p = p->next) {
-		if (p->isakmp_sa == st && p->whack_sock != NULL_FD) {
-			struct stat pst;
-
-			if (fstat(p->whack_sock, &pst) == 0 &&
-			    (stst.st_dev != pst.st_dev ||
-			     stst.st_ino != pst.st_ino)) {
-				passert(whack_log_fd == NULL_FD);
+	for (struct pending *p = *pp; p != NULL; p = p->next) {
+		DBGF(DBG_CONTROL,
+		     "%s: IKE SA #%lu "PRI_FD" has pending CHILD SA with socket "PRI_FD,
+		     __func__, p->isakmp_sa->st_serialno,
+		     PRI_fd(p->isakmp_sa->st_whack_sock),
+		     PRI_fd(p->whack_sock));
+		if (p->isakmp_sa == st && fd_p(p->whack_sock)) {
+			if (!same_fd(&stst, p->whack_sock)) {
+				passert(!fd_p(whack_log_fd));
 				whack_log_fd = p->whack_sock;
 				whack_log(RC_COMMENT,
 					  "%s for IKE SA, but releasing whack for pending IPSEC SA",
 					  story);
-				whack_log_fd = NULL_FD;
+				whack_log_fd = null_fd;
 			}
-			close(p->whack_sock);
-			p->whack_sock = NULL_FD;
+			close_any(&p->whack_sock);
 		}
 	}
 }
@@ -178,7 +241,7 @@ static void delete_pending(struct pending **pp)
 	*pp = p->next;
 	if (p->connection != NULL)
 		connection_discard(p->connection);
-	close_any(p->whack_sock);
+	close_any(&p->whack_sock);
 
 	DBG(DBG_DPD, {
 		if (p->connection == NULL) {
@@ -262,7 +325,7 @@ void unpend(struct state *st, struct connection *cc)
 					fmt_conn_instance(p->connection, cib));
 			});
 
-			p->whack_sock = NULL_FD;        /* ownership transferred */
+			p->whack_sock = null_fd;        /* ownership transferred */
 			p->connection = NULL;           /* ownership transferred */
 			delete_pending(pp);	/* in effect, advances pp */
 		} else {
@@ -273,7 +336,7 @@ void unpend(struct state *st, struct connection *cc)
 
 struct connection *first_pending(const struct state *st,
 				 lset_t *policy,
-				 int *p_whack_sock)
+				 fd_t *p_whack_sock)
 {
 	struct pending **pp, *p;
 

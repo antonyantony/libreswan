@@ -5,7 +5,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -93,6 +93,7 @@ class Issues:
     CORE = "CORE"
     SEGFAULT = "SEGFAULT"
     GPFAULT = "GPFAULT"
+    PRINTF_NULL = "%NULL"
 
     CRASHED = {ASSERTION, EXPECTATION, CORE, SEGFAULT, GPFAULT}
 
@@ -283,7 +284,10 @@ class TestResult:
                 self.resolution.failed()
             if self.grub(pluto_log_filename, "EXPECTATION FAILED"):
                 self.issues.add(Issues.EXPECTATION, host_name)
-                # XXX: allow expection failures?
+                # self.resolution.failed() XXX: allow expection failures?
+            if self.grub(pluto_log_filename, "\(null\)"):
+                self.issues.add(Issues.PRINTF_NULL, host_name)
+                self.resolution.failed()
 
         # Check the raw console output for problems and that it
         # matches expected output.
@@ -318,6 +322,9 @@ class TestResult:
                 self.resolution.failed()
             if self.grub(raw_output_filename, r"GPFAULT"):
                 self.issues.add(Issues.GPFAULT, host_name)
+                self.resolution.failed()
+            if self.grub(raw_output_filename, r"\(null\)"):
+                self.issues.add(Issues.PRINTF_NULL, host_name)
                 self.resolution.failed()
 
             # Check that the host's raw output is complete.

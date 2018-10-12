@@ -15,7 +15,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -666,7 +666,7 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 			msg.modecfg_dns);
 	msg.modecfg_domains = conn->modecfg_domains;
 	starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" modecfgdomains=%s",
-		conn->name, msg.modecfg_domains = NULL ? "<unset>" :
+		conn->name, msg.modecfg_domains == NULL ? "<unset>" :
 			msg.modecfg_domains);
 	msg.modecfg_banner = conn->modecfg_banner;
 	starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" modecfgbanner=%s",

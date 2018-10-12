@@ -11,7 +11,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -41,6 +41,7 @@
 #include "vendor.h"
 #include "nat_traversal.h"
 #include "pluto_x509.h"
+#include "fd.h"
 
 /* STATE_AGGR_R0: HDR, SA, KE, Ni, IDii
  *           --> HDR, SA, KE, Nr, IDir, HASH_R/SIG_R
@@ -995,7 +996,7 @@ static crypto_req_cont_func aggr_outI1_continue;	/* type assertion */
  * RFC 2409 5.3: --> HDR, SA, [ HASH(1),] <Ni_b>Pubkey_r, <KE_b>Ke_i, <IDii_b>Ke_i [, <Cert-I_b>Ke_i ]
  */
 /* extern initiator_function aggr_outI1; */	/* type assertion */
-void aggr_outI1(int whack_sock,
+void aggr_outI1(fd_t whack_sock,
 		struct connection *c,
 		struct state *predecessor,
 		lset_t policy,

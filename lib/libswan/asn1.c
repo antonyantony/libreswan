@@ -5,7 +5,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -164,7 +164,7 @@ size_t asn1_length_signature(chunk_t *blob , chunk_t *sig_val)
 		sig_val->len = len_r;
 		/* XXX: need to check len_r and len_s fits in this */
 	        sig_val->ptr = alloc_bytes(len_r * 2, "ec points");
-		DBG(DBG_PARSING, DBG_log(" sig_val  len is %ld",sig_val->len));
+		DBG(DBG_PARSING, DBG_log(" sig_val  len is %zu",sig_val->len));
 		/* copy the values of r into signature */
 		memcpy(sig_val->ptr,blob->ptr,len_r);
 
@@ -184,7 +184,7 @@ size_t asn1_length_signature(chunk_t *blob , chunk_t *sig_val)
 			}
 			DBG(DBG_PARSING, DBG_log("  len_s is %d",len_s));
 			sig_val->len += len_s;
-			DBG(DBG_PARSING, DBG_log(" sig_val total len is %ld",sig_val->len));
+			DBG(DBG_PARSING, DBG_log(" sig_val total len is %zu",sig_val->len));
 			/* copy the values of r into signature */
 			memcpy(sig_val->ptr+len_r,blob->ptr,len_s);
 		}

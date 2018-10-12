@@ -19,7 +19,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -38,6 +38,7 @@
 #include "deltatime.h"
 #include "monotime.h"
 #include "reqid.h"
+#include "fd.h"
 
 #include <nss.h>
 #include <pk11pub.h>
@@ -302,7 +303,7 @@ struct state {
 						 */
 
 	struct connection *st_connection;       /* connection for this SA */
-	int st_whack_sock;                      /* fd for our Whack TCP socket.
+	fd_t st_whack_sock;                /* fd for our Whack TCP socket.
 						 * Single copy: close when
 						 * freeing struct.
 						 */
@@ -358,6 +359,17 @@ struct state {
 	struct msgid_list *st_used_msgids;	/* used-up msgids */
 
 	chunk_t st_rpacket;			/* Received packet - v1 only */
+
+	/*
+	 * The last successful state transition (edge, microcode).
+	 * Used when transitioning to this current state.
+	 */
+	const struct state_v1_microcode *st_v1_last_transition;
+#if 0
+	const struct state_v1_microcode *st_v1_next_transition;
+	const struct state_v2_microcode *st_v2_last_transition;
+	const struct state_v2_microcode *st_v2_next_transition;
+#endif
 
 	/* Initialization Vectors for IKE encryption */
 
@@ -739,7 +751,7 @@ extern void initialize_new_state(struct state *st,
 				 struct connection *c,
 				 lset_t policy,
 				 int try,
-				 int whack_sock);
+				 fd_t whack_sock);
 
 extern void show_traffic_status(const char *name);
 extern void show_states_status(void);

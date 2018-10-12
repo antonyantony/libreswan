@@ -9,7 +9,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -60,6 +60,7 @@ ifeq ($(USE_NETKEY),true)
 OBJS += addr_lookup.o
 endif
 
+OBJS += fd.o
 OBJS += kernel_alg.o
 OBJS += kernel_sadb.o
 
@@ -89,6 +90,7 @@ OBJS += monotime.o
 
 OBJS += debug.o
 OBJS += impair.o
+OBJS += keywords.o
 
 OBJS += libreswan_DBG_dump.o
 OBJS += libreswan_DBG_log.o

@@ -1,70 +1,83 @@
 # WEB make targets, for Libreswan
 #
-# Copyright (C) 2017 Andrew Cagney
+# Copyright (C) 2017-2018 Andrew Cagney
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
 # or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
 # for more details.
 
+# If the $(LSW_WEBDIR) directory exists, publish the results in
+# HTML/json form.
 #
-# If enabled WEB_SUMMARYDIR, or WEB_RESULTSDIR is is set), publish the
-# results in HTML/json form.
-#
-# The variable must be explicitly set via Makefile.inc.local, from the
-# command line, or from the environment.  Otherwise rules that invoke
-# "git" (for instance any rule requiring a definition of
-# $(WEB_RESULTSDIR)) are enabled.
+# Because web-page dependencies are very heavy (invoking git et.al.)
+# much of this code needs to be made conditional.
 
 LSW_WEBDIR ?= $(top_srcdir)/RESULTS
+WEB_SUMMARYDIR ?= $(LSW_WEBDIR)
+ifneq ($(wildcard $(WEB_SUMMARYDIR)),)
+WEB_ENABLED ?= true
+endif
 
-WEB_UTILSDIR = testing/utils
-WEB_SOURCEDIR = testing/web
+WEB_UTILSDIR ?= testing/utils
+WEB_SOURCEDIR ?= testing/web
 WEB_REPODIR ?= .
-
-ifndef WEB_SUMMARYDIR
-WEB_SUMMARYDIR := $(if $(wildcard $(LSW_WEBDIR)),$(LSW_WEBDIR))
-endif
-
-# This is verbose so it being invoked is easy to spot
+# these are verbose so multiple invocations can be spotted
 WEB_SUBDIR ?= $(shell set -x ; $(WEB_SOURCEDIR)/gime-git-description.sh $(WEB_REPODIR))
+
+# shortcuts to use when web is enabled, set up to evaluate once as
+# they can be a little expensive.  These make variable can only be
+# used inside of WEB_ENABLED blocks.
+
+ifdef WEB_ENABLED
+ifndef WEB_HASH
+WEB_HASH := $(shell set -x ; cd $(WEB_REPODIR) ; git show --no-patch --format=%H HEAD)
+endif
 ifndef WEB_RESULTSDIR
-WEB_RESULTSDIR := $(if $(WEB_SUMMARYDIR),$(WEB_SUMMARYDIR)/$(WEB_SUBDIR))
+WEB_RESULTSDIR := $(WEB_SUMMARYDIR)/$(WEB_SUBDIR)
+endif
+ifndef WEB_SOURCES
+WEB_SOURCES := $(wildcard $(addprefix $(WEB_SOURCEDIR)/, *.css *.js *.html))
+endif
+ifndef WEB_TIME
+WEB_TIME := $(shell $(WEB_SOURCEDIR)/now.sh)
+endif
 endif
 
 #
-# Rules for building web pages during test runs.
+# Force the creation and/or update of the web pages
 #
+# Since $(WEB_SUMMARYDIR) (aka $(LSW_WEBDIR)) is created (via a
+# dependency) before invoking the sub-$(MAKE), the sub-$(MAKE) will
+# always see a configuration where web pages are enabled.
+#
+# Order matters: the results directory is created first so that so
+# that the web-summarydir will pick up its contents.
+
+web web-page: | $(WEB_SUMMARYDIR)
+	$(MAKE) web-resultsdir web-summarydir
+
+$(WEB_SUMMARYDIR):
+	mkdir $(WEB_SUMMARYDIR)
+
+#
+# Build or update the web pages ready for a new test run
+#
+# For the results directory, just install the HTML / javascript files
+# (kvmrunner.py will fill in all the json files).  For the summary
+# directory, do a full update so that all the previous runs are
+# included.
 
 .PHONY: web-test-prep web-page web
-
-ifeq ($(wildcard $(LSW_WEBDIR)),)
 web-test-prep:
-else
-web-test-prep: web-resultsdir web-summarydir
+ifdef WEB_ENABLED
+web-test-prep: web-results-html web-summarydir
 endif
-
-# this invokes $(WEB_SUBDIR) a lot; easier to ignore than fix
-web web-page: | $(LSW_WEBDIR)
-	$(MAKE) web-summarydir \
-		WEB_SUMMARYDIR=$(LSW_WEBDIR) WEB_RESULTSDIR=$(LSW_WEBDIR)/$(WEB_SUBDIR)
-	$(MAKE) web-resultsdir \
-		WEB_SUMMARYDIR=$(LSW_WEBDIR) WEB_RESULTSDIR=$(LSW_WEBDIR)/$(WEB_SUBDIR)
-	$(WEB_UTILSDIR)/kvmresults.py \
-		--quick \
-		--test-kind '' \
-		--test-status '' \
-		--publish-status $(LSW_WEBDIR)/status.json \
-		--publish-results $(LSW_WEBDIR)/$(WEB_SUBDIR) \
-		testing/pluto
-
-$(LSW_WEBDIR):
-	mkdir $(LSW_WEBDIR)
 
 #
 # Update the web site
@@ -94,32 +107,28 @@ web-summarydir:
 web-resultsdir:
 
 #
-# Conditional rules for building the summary web page.  Requires
-# WEB_SUMMARYDIR.
+# Create or update just the summary web page.
+#
+# This is a cheap short-cut that, unlike "web", doesn't update the
+# sub-directory's html.
 #
 
-ifneq ($(WEB_SUMMARYDIR),)
-
-WEB_SOURCES = $(wildcard $(addprefix $(WEB_SOURCEDIR)/, *.css *.js *.html))
-# XXX: should this be evaluated once?
-WEB_TIME := $(shell $(WEB_SOURCEDIR)/now.sh)
-
-#
-# Update the summary html pages
-#
+ifdef WEB_ENABLED
 
 .PHONY: web-summary-html
-web-site web-summarydir web-summary-html: $(WEB_SUMMARYDIR)/summary.html
-$(WEB_SUMMARYDIR)/summary.html: $(WEB_SOURCES) | $(WEB_SUMMARYDIR)
-	: WEB_SUMMARYDIR=$(WEB_SUMMARYDIR)
-	: WEB_SOURCES=$(WEB_SOURCES)
-	cp $(filter-out $(WEB_SOURCEDIR)/summary.html, $(WEB_SOURCES)) $(WEB_SUMMARYDIR)
+web-site web-summarydir: web-summary-html
+web-summary-html: $(WEB_SUMMARYDIR)/index.html
+$(WEB_SUMMARYDIR)/index.html: $(WEB_SOURCES) | $(WEB_SUMMARYDIR)
+	cp $(WEB_SOURCES) $(WEB_SUMMARYDIR)
 	cp $(WEB_SOURCEDIR)/summary.html $(WEB_SUMMARYDIR)/index.html
-	cp $(WEB_SOURCEDIR)/summary.html $(WEB_SUMMARYDIR)/summary.html
+
+endif
 
 #
 # Update the pooled summaries from all the test runs
 #
+
+ifdef WEB_ENABLED
 
 .PHONY: web-summaries-json
 web-site web-summarydir web-summaries-json: $(WEB_SUMMARYDIR)/summaries.json
@@ -130,16 +139,22 @@ $(WEB_SUMMARYDIR)/summaries.json: $(wildcard $(WEB_SUMMARYDIR)/*-g*/summary.json
 	| $(WEB_SOURCEDIR)/json-summaries.sh $(WEB_REPODIR) - > $@.tmp
 	mv $@.tmp $@
 
+endif
+
 #
 # update the status.json
 #
 # no dependencies, just ensure it exists.
+
+ifdef WEB_ENABLED
 
 .PHONY: web-status-json
 web-site web-summarydir web-status-json: $(WEB_SUMMARYDIR)/status.json
 $(WEB_SUMMARYDIR)/status.json:
 	$(WEB_SOURCEDIR)/json-status.sh "initialized" > $@.tmp
 	mv $@.tmp $@
+
+endif
 
 #
 # Update the commits.json database
@@ -156,6 +171,8 @@ $(WEB_SUMMARYDIR)/status.json:
 # using a single make invocation.  Unfortunately the list can get so
 # long that it exceeds command line length limits, so a slow pipe is
 # used instead.
+
+ifdef WEB_ENABLED
 
 WEB_COMMITSDIR = $(WEB_SUMMARYDIR)/commits
 FIRST_COMMIT = $(shell $(WEB_SOURCEDIR)/earliest-commit.sh $(WEB_SUMMARYDIR) $(WEB_REPODIR))
@@ -186,15 +203,17 @@ $(WEB_COMMITSDIR)/%.json: $(WEB_SOURCEDIR)/json-commit.sh | $(WEB_COMMITSDIR)
 $(WEB_COMMITSDIR):
 	mkdir $(WEB_COMMITSDIR)
 
+endif
 
 #
-# update the html in all the result directories
+# Update the html in all the result directories
 #
-# Not part of web-summarydir
+# Not part of web-summarydir, web-resultsdir or web-results-html
+
+ifdef WEB_ENABLED
 
 WEB_RESULTS_HTML = $(wildcard $(WEB_SUMMARYDIR)/*-g*/results.html)
-.PHONY: web-results-html
-web-site web-results-html: $(WEB_RESULTS_HTML)
+web-site: $(WEB_RESULTS_HTML)
 
 $(WEB_SUMMARYDIR)/%/results.html: $(WEB_SOURCES)
 	$(MAKE) web-resultsdir \
@@ -207,23 +226,27 @@ endif
 # page.  Requires WEB_SUMMARYDIR or WEB_RESULTSDIR.
 #
 
+ifdef WEB_ENABLED
 
-ifneq  ($(WEB_RESULTSDIR),)
+.PHONY: web-resultsdir web-results-html web-results-json
+web-resultsdir: web-results-html web-results-json
+web-results-html: $(WEB_RESULTSDIR)/index.html
+web-results-json: $(WEB_RESULTSDIR)/summary.json
 
-.PHONY: web-resultsdir
-web-resultsdir: $(WEB_RESULTSDIR)/results.html $(WEB_RESULTSDIR)/summary.json
-
-$(WEB_RESULTSDIR)/results.html: $(WEB_SOURCES) | $(WEB_RESULTSDIR)
-	: WEB_RESULTSDIR=$(WEB_RESULTSDIR)
-	: WEB_SOURCES=$(WEB_SOURCES)
-	cp $(filter-out $(WEB_SOURCEDIR)/results.html, $(WEB_SOURCES)) $(WEB_RESULTSDIR)
+$(WEB_RESULTSDIR)/index.html: $(WEB_SOURCES) | $(WEB_RESULTSDIR)
+	cp $(WEB_SOURCES) $(WEB_RESULTSDIR)
 	cp $(WEB_SOURCEDIR)/results.html $(WEB_RESULTSDIR)/index.html
-	cp $(WEB_SOURCEDIR)/results.html $(WEB_RESULTSDIR)/results.html
-
-# a stub
 
 $(WEB_RESULTSDIR)/summary.json: | $(WEB_RESULTSDIR)
-	$(WEB_SOURCEDIR)/json-summary.sh $(WEB_TIME) > $@.tmp
+	$(WEB_UTILSDIR)/kvmresults.py \
+		--quick \
+		--test-kind '' \
+		--test-status '' \
+		--publish-summary $@.tmp \
+		--publish-status $(WEB_SUMMARYDIR)/status.json \
+		--publish-results $(WEB_RESULTSDIR) \
+		--publish-hash $(WEB_HASH) \
+		testing/pluto
 	mv $@.tmp $@
 
 $(WEB_RESULTSDIR): | $(WEB_SUMMARYDIR)
@@ -231,14 +254,14 @@ $(WEB_RESULTSDIR): | $(WEB_SUMMARYDIR)
 
 endif
 
-
 #
 # update the json in all the results directories; very slow so only
-# enabled when WEB_SCRATCH_REPODIR is set.
+# enabled when WEB_SCRATCH_REPODIR is set and things are not pointing
+# at this directory.
 #
 
-ifneq ($(WEB_SUMMARYDIR),)
-ifneq ($(WEB_SCRATCH_REPODIR),)
+ifdef WEB_ENABLED
+ifdef WEB_SCRATCH_REPODIR
 ifneq ($(abspath $(WEB_SCRATCH_REPODIR)),$(abspath .))
 
 .PHONY: web-results-json

@@ -85,8 +85,8 @@ static void test_enum(enum_names *enum_test, int i,
 		shunk_t trunc_name = shunk2(clone, strcspn(clone, "("));
 		passert(clone[trunc_name.len] == '(');
 		clone[trunc_name.len] = '*';
-		printf(PREFIX "match "PRISHUNK" [trunc]: ",
-		       SHUNKF(trunc_name));
+		printf(PREFIX "match "PRI_SHUNK" [trunc]: ",
+		       PRI_shunk(trunc_name));
 		int e = enum_match(enum_test, trunc_name);
 		pfree(clone);
 		if (e != i) {
@@ -325,7 +325,6 @@ int main(int argc UNUSED, char *argv[])
 
 	printf("lswlog_enum_lset_short:\n\n");
 	test_enum_lset("debug", &debug_names, DBG_CRYPT|DBG_CRYPT_LOW);
-	test_enum_lset("impair", &impair_names, IMPAIR_PROPOSAL_PARSER);
 	printf("\n");
 
 	report_leaks();

@@ -22,7 +22,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -1468,6 +1468,12 @@ void add_connection(const struct whack_message *wm)
 	if (!check_connection_end(&wm->right, &wm->left, wm) ||
 	    !check_connection_end(&wm->left, &wm->right, wm)) {
 		loglog(RC_FATAL, "Failed to load connection \"%s\": attempt to load incomplete connection",
+			wm->name);
+		return;
+	}
+
+	if (addrtypeof(&wm->left.client.addr) != addrtypeof(&wm->right.client.addr)) {
+		loglog(RC_FATAL, "Failed to load connection \"%s\": subnets must have the same address family",
 			wm->name);
 		return;
 	}

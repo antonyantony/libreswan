@@ -23,7 +23,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -571,7 +571,7 @@ struct state *new_state(void)
 	passert(&sas->st == &sas->ike.sa);
 	struct state *st = &sas->st;
 	*st = (struct state) {
-		.st_whack_sock = NULL_FD,	/* note: not 0 */
+		.st_whack_sock = null_fd,	/* note: not 0 */
 		.st_finite_state = &state_undefined,
 		.st_serialno = next_so++,
 	};
@@ -752,7 +752,7 @@ void rehash_state(struct state *st, const u_char *icookie,
  */
 void release_whack(struct state *st)
 {
-	close_any(st->st_whack_sock);
+	close_any(&st->st_whack_sock);
 }
 
 static void release_v2fragments(struct state *st)

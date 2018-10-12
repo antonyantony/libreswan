@@ -8,7 +8,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -23,6 +23,7 @@
 
 #include "lswcdefs.h"
 #include "lswlog.h"
+#include "fd.h"
 
 struct state;
 struct connection;
@@ -47,9 +48,9 @@ extern char *pluto_stats_binary;
  * If the context provides a whack file descriptor, messages
  * should be copied to it -- see whack_log()
  */
-extern int whack_log_fd;                        /* only set during whack_handle() */
+extern fd_t whack_log_fd;                        /* only set during whack_handle() */
 
-extern bool whack_prompt_for(int whackfd,
+extern bool whack_prompt_for(fd_t whackfd,
 			     const char *prompt1,
 			     const char *prompt2,
 			     bool echo,

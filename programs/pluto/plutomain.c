@@ -20,7 +20,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -37,6 +37,7 @@
 #include <sys/un.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <unistd.h>	/* for unlink(), write(), close(), access(), et.al. */
 
 #include "lswconf.h"
 #include "lswfips.h"
@@ -81,7 +82,12 @@
 
 static const char *pluto_name;	/* name (path) we were invoked with */
 
-pthread_t main_thread;
+static pthread_t main_thread;
+
+bool in_main_thread(void)
+{
+	return pthread_equal(pthread_self(), main_thread);
+}
 
 static char *rundir = NULL;
 char *pluto_listen = NULL;

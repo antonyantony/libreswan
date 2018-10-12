@@ -18,7 +18,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -785,27 +785,22 @@ static struct payload_summary ikev2_decode_payloads(struct msg_digest *md,
 			break;
 		}
 
-		/*
-		 * XXX: payload is a union, and this assumes that
-		 * isag_length doesn't move around.
-		 */
 		DBG(DBG_PARSING,
-		    DBG_log("processing payload: %s (len=%u)",
+		    DBG_log("processing payload: %s (len=%zu)",
 			    enum_show(&ikev2_payload_names, np),
-			    pd->payload.generic.isag_length));
+			    pbs_left(&pd->pbs)));
 
-		/* place this payload at the end of the chain for this type */
+		/*
+		 * Place payload at the end of the chain for this type.
+		 * This code appears in ikev1.c and ikev2.c.
+		 */
 		{
-			/*
-			 * Spell out that chain[] isn't overflowing.
-			 * Above explicitly rejected large NP values.
-			 */
+			/* np is a proper subscript for chain[] */
 			passert(np < elemsof(md->chain));
-			struct payload_digest **p;
+			struct payload_digest **p = &md->chain[np];
 
-			for (p = &md->chain[np]; *p != NULL;
-			     p = &(*p)->next)
-				;
+			while (*p != NULL)
+				p = &(*p)->next;
 			*p = pd;
 			pd->next = NULL;
 		}
@@ -2609,8 +2604,8 @@ static void success_v2_state_transition(struct msg_digest *md)
 	}
 
 	if (w == RC_SUCCESS) {
-		DBG(DBG_CONTROL, DBG_log("releasing whack for #%lu (sock=%d)",
-			st->st_serialno, st->st_whack_sock));
+		DBG(DBG_CONTROL, DBG_log("releasing whack for #%lu (sock="PRI_FD")",
+					 st->st_serialno, PRI_fd(st->st_whack_sock)));
 		release_whack(st);
 
 		/* XXX should call unpend again on parent SA */
@@ -2634,29 +2629,12 @@ static void success_v2_state_transition(struct msg_digest *md)
 		switch (kind) {
 		case EVENT_v2_RETRANSMIT:
 			delete_event(st);
-			if (DBGP(IMPAIR_RETRANSMITS)) {
-				libreswan_log("suppressing retransmit because IMPAIR_RETRANSMITS is set.");
-				if (st->st_rel_whack_event != NULL) {
-					pfreeany(st->st_rel_whack_event);
-					st->st_rel_whack_event = NULL;
-				}
-				event_schedule_s(EVENT_v2_RELEASE_WHACK,
-						 EVENT_RELEASE_WHACK_DELAY, st);
-				kind = EVENT_SA_REPLACE;
-				deltatime_t delay = ikev2_replace_delay(st, &kind);
-				DBG(DBG_LIFECYCLE,
-				    DBG_log("ikev2 case EVENT_v2_RETRANSMIT: for %jdms",
-					    deltamillisecs(delay)));
-				passert(kind != EVENT_v2_RETRANSMIT);
-				event_schedule(kind, delay, st);
-
-			}  else {
-				DBG(DBG_LIFECYCLE,
-				    DBG_log("success_v2_state_transition scheduling EVENT_v2_RETRANSMIT of c->r_interval=%jdms",
-					    deltamillisecs(c->r_interval)));
-				start_retransmits(st, EVENT_v2_RETRANSMIT);
-			}
+			DBGF(DBG_LIFECYCLE,
+			     "success_v2_state_transition scheduling EVENT_v2_RETRANSMIT of c->r_interval=%jdms",
+			     deltamillisecs(c->r_interval));
+			start_retransmits(st, EVENT_v2_RETRANSMIT);
 			break;
+
 		case EVENT_SA_REPLACE: /* IKE or Child SA replacement event */
 		{
 			deltatime_t delay = ikev2_replace_delay(st, &kind);
@@ -2870,12 +2848,6 @@ void complete_v2_state_transition(struct msg_digest **mdp,
 		whack_log(RC_FATAL,
 			  "encountered fatal error in state %s",
 			  from_state_name);
-		release_whack(st);
-		if (IS_CHILD_SA(st)) {
-			struct state *pst = state_with_serialno(st->st_clonedfrom);
-
-			release_whack(pst);
-		}
 		release_pending_whacks(st, "fatal error");
 		delete_state(st);
 		md->st = st = NULL;

@@ -13,6 +13,7 @@
 #include "lswalloc.h"
 #include "whack.h"
 #include "lswlog.h"
+#include "rcv_whack.h"
 
 #include "readwhackmsg.h"
 
@@ -80,7 +81,7 @@ void readwhackmsg(char *infile)
 		 * okay, we have buflen bytes in b1, so turn it into a whack
 		 * message, and call whack_handle.
 		 */
-		whack_process(NULL_FD, &m1);
+		whack_process(null_fd, &m1);
 	}
 
 	if (ferror(record)) {

@@ -4,6 +4,7 @@
 #include "pluto_crypt.h"
 #include "ikev1_continuations.h"
 #include "packet.h"		/* for pb_stream */
+#include "fd.h"
 
 /* ikev1.c */
 
@@ -53,7 +54,7 @@ extern bool ikev1_ship_KE(struct state *st,
 /* **MAIN MODE FUNCTIONS** in ikev1_main.c */
 
 /* extern initiator_function main_outI1; */
-extern void main_outI1(int whack_sock,
+extern void main_outI1(fd_t whack_sock,
 		       struct connection *c,
 		       struct state *predecessor,
 		       lset_t policy,
@@ -64,7 +65,7 @@ extern void main_outI1(int whack_sock,
 		       );
 
 /* extern initiator_function aggr_outI1; */
-extern void aggr_outI1(int whack_sock,
+extern void aggr_outI1(fd_t whack_sock,
 		       struct connection *c,
 		       struct state *predecessor,
 		       lset_t policy,
@@ -127,6 +128,7 @@ bool ikev1_encrypt_message(pb_stream *pbs, struct state *st);
 bool ikev1_close_message(pb_stream *pbs, const struct state *st);
 
 typedef stf_status ikev1_state_transition_fn(struct state *st, struct msg_digest *md);
+
 extern ikev1_state_transition_fn main_inI1_outR1;
 extern ikev1_state_transition_fn main_inR1_outI2;
 extern ikev1_state_transition_fn main_inI2_outR2;

@@ -5,7 +5,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -46,6 +46,26 @@ static int lswlog_debugf_nop(const char *format UNUSED, ...)
 }
 
 int (*lswlog_debugf)(const char *format, ...) = lswlog_debugf_nop;
+
+/*
+ * Constructor
+ */
+
+struct lswlog *lswlog(struct lswlog *buf, char *array,
+		      size_t sizeof_array)
+{
+	*buf = (struct lswlog) {
+		.array = array,
+		.len = 0,
+		.bound = sizeof_array - 2,
+		.roof = sizeof_array - 1,
+		.dots = "...",
+	};
+	buf->array[buf->bound] = buf->array[buf->len] = '\0';
+	buf->array[buf->roof] = LSWBUF_CANARY;
+	check_lswbuf(buf);
+	return buf;
+}
 
 /*
  * Determine where, within LOG's message buffer, to write the string.

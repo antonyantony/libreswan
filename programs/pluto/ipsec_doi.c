@@ -16,7 +16,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -200,7 +200,7 @@ static initiator_function *pick_initiator(struct connection *c,
 	}
 }
 
-void ipsecdoi_initiate(int whack_sock,
+void ipsecdoi_initiate(fd_t whack_sock,
 		       struct connection *c,
 		       lset_t policy,
 		       unsigned long try,
@@ -234,7 +234,7 @@ void ipsecdoi_initiate(int whack_sock,
 				  );
 		} else {
 			/* fizzle: whack_sock will be unused */
-			close_any(whack_sock);
+			close_any(&whack_sock);
 		}
 	} else if (HAS_IPSEC_POLICY(policy)) {
 		if (!IS_ISAKMP_SA_ESTABLISHED(st->st_state)) {
@@ -474,7 +474,7 @@ void initialize_new_state(struct state *st,
 			  struct connection *c,
 			  lset_t policy,
 			  int try,
-			  int whack_sock)
+			  fd_t whack_sock)
 {
 	st->st_connection = c;	/* surely safe: must be a new state */
 

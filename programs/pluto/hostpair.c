@@ -12,7 +12,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -143,6 +143,18 @@ struct host_pair *find_host_pair(const ip_address *myaddr,
 		hisport = pluto_port;
 
 	for (prev = NULL, p = host_pairs; p != NULL; prev = p, p = p->next) {
+		if (p->connections != NULL && (p->connections->kind == CK_INSTANCE) &&
+			(p->connections->spd.that.id.kind == ID_NULL))
+		{
+			DBG(DBG_CONTROLMORE, {
+				char ci[CONN_INST_BUF];
+				DBG_log("find_host_pair: ignore CK_INSTANCE with ID_NULL hp:\"%s\"%s",
+					p->connections->name,
+					fmt_conn_instance(p->connections, ci));
+                       });
+                       continue;
+               }
+
 		DBG(DBG_CONTROLMORE, {
 			ipstr_buf b1;
 			ipstr_buf b2;
@@ -168,7 +180,7 @@ struct host_pair *find_host_pair(const ip_address *myaddr,
 	return p;
 }
 
-void remove_host_pair(struct host_pair *hp)
+static void remove_host_pair(struct host_pair *hp)
 {
 	list_rm(struct host_pair, next, hp, host_pairs);
 }

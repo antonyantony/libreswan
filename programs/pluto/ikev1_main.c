@@ -19,7 +19,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -95,7 +95,7 @@
  * Note: this is not called from demux.c
  */
 /* extern initiator_function main_outI1; */	/* type assertion */
-void main_outI1(int whack_sock,
+void main_outI1(fd_t whack_sock,
 		struct connection *c,
 		struct state *predecessor,
 		lset_t policy,
@@ -829,24 +829,29 @@ stf_status main_inR1_outI2(struct state *st, struct msg_digest *md)
 bool ikev1_justship_KE(chunk_t *g,
 		pb_stream *outs, uint8_t np)
 {
-	if (IMPAIR(SEND_NO_KE_PAYLOAD)) {
+	switch (impair_ke_payload) {
+	case SEND_NORMAL:
+		return ikev1_out_generic_chunk(np, &isakmp_keyex_desc, outs, *g,
+				"keyex value");
+	case SEND_OMIT:
 		libreswan_log("IMPAIR: sending no KE (g^x) payload");
 		return true;
-	} else if (IMPAIR(SEND_ZERO_KE_PAYLOAD)) {
-		pb_stream z;
-
-		libreswan_log("IMPAIR: sending bogus KE (g^x) == 0 value to break DH calculations");
-		/* Only used to test sending/receiving bogus g^x */
-		return ikev1_out_generic(np, &isakmp_keyex_desc, outs, &z) &&
-			out_zero(g->len, &z, "fake g^x") &&
-			(close_output_pbs(&z), TRUE);
-	} else if (IMPAIR(SEND_EMPTY_KE_PAYLOAD)) {
+	case SEND_EMPTY:
 		libreswan_log("IMPAIR: sending empty KE (g^x)");
 		return ikev1_out_generic_chunk(0, &isakmp_keyex_desc, outs,
 					       empty_chunk, "empty KE");
-	} else {
-		return ikev1_out_generic_chunk(np, &isakmp_keyex_desc, outs, *g,
-				"keyex value");
+	case SEND_ROOF:
+	default:
+	{
+		pb_stream z;
+		uint8_t byte = impair_ke_payload - SEND_ROOF;
+		libreswan_log("IMPAIR: sending bogus KE (g^x) == %u value to break DH calculations",
+			      byte);
+		/* Only used to test sending/receiving bogus g^x */
+		return ikev1_out_generic(np, &isakmp_keyex_desc, outs, &z) &&
+			out_repeated_byte(byte, g->len, &z, "fake g^x") &&
+			(close_output_pbs(&z), TRUE);
+	}
 	}
 }
 
@@ -1277,6 +1282,10 @@ static stf_status main_inR2_outI3_continue_tail(struct msg_digest *md,
 			ISAKMP_NEXT_HASH : ISAKMP_NEXT_SIG;
 
 	{
+		/*
+		 * id_hd should be struct isakmp_id, but struct isakmp_ipsec_id
+		 * allows build_id_payload() to work for both phases.
+		 */
 		struct isakmp_ipsec_id id_hd;
 		chunk_t id_b;
 

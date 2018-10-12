@@ -19,7 +19,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -84,6 +84,7 @@
 #include "retry.h"
 #include "ipsecconf/confread.h"		/* for struct starter_end */
 #include "addr_lookup.h"
+#include "impair.h"
 
 #include "crypt_symkey.h" /* for release_symkey */
 struct mobike {
@@ -339,9 +340,9 @@ bool emit_wire_iv(const struct state *st, pb_stream *pbs)
 	return out_raw(ivbuf, wire_iv_size, pbs, "IV");
 }
 
-static stf_status add_st_send_list(struct state *st, struct state *pst)
+static stf_status add_st_to_ike_sa_send_list(struct state *st, struct ike_sa *ike)
 {
-	msgid_t unack = pst->st_msgid_nextuse - pst->st_msgid_lastack - 1;
+	msgid_t unack = ike->sa.st_msgid_nextuse - ike->sa.st_msgid_lastack - 1;
 	stf_status e = STF_OK;
 	char  *what;
 
@@ -359,15 +360,15 @@ static stf_status add_st_send_list(struct state *st, struct state *pst)
 		delete_event(st);
 		event_schedule_s(EVENT_SA_REPLACE, MAXIMUM_RESPONDER_WAIT, st);
 		loglog(RC_LOG_SERIOUS, "message id deadlock? %s using parent #%lu unacknowledged %u next message id=%u ike exchange window %u",
-			what, pst->st_serialno, unack,
-			pst->st_msgid_nextuse,
-			pst->st_connection->ike_window);
-		for (p = pst->send_next_ix; (p != NULL && p->next != NULL);
+			what, ike->sa.st_serialno, unack,
+			ike->sa.st_msgid_nextuse,
+			ike->sa.st_connection->ike_window);
+		for (p = ike->sa.send_next_ix; (p != NULL && p->next != NULL);
 				p = p->next) {
 		}
 
 		if (p == NULL) {
-			pst->send_next_ix = n;
+			ike->sa.send_next_ix = n;
 		} else {
 			p->next = n;
 		}
@@ -375,14 +376,16 @@ static stf_status add_st_send_list(struct state *st, struct state *pst)
 	DBG(DBG_CONTROLMORE,
 		DBG_log("#%lu %s using parent #%lu unacknowledged %u next message id=%u ike exchange window %u",
 			st->st_serialno,
-			what, pst->st_serialno, unack,
-			pst->st_msgid_nextuse,
-			pst->st_connection->ike_window));
+			what, ike->sa.st_serialno, unack,
+			ike->sa.st_msgid_nextuse,
+			ike->sa.st_connection->ike_window));
 	return e;
 }
 
 
 static crypto_req_cont_func ikev2_crypto_continue;	/* forward decl and type assertion */
+
+static crypto_req_cont_func ikev2_rekey_dh_continue;	/* forward decl and type assertion */
 
 static stf_status ikev2_rekey_dh_start(struct pluto_crypto_req *r,
 				       struct msg_digest *md)
@@ -407,10 +410,19 @@ static stf_status ikev2_rekey_dh_start(struct pluto_crypto_req *r,
 		start_dh_v2(st, "DHv2 for child sa", role,
 			    pst->st_skey_d_nss, /* only IKE has SK_d */
 			    pst->st_oakley.ta_prf, /* for IKE/ESP/AH */
-			    ikev2_crypto_continue);
+			    ikev2_rekey_dh_continue);
 		return STF_SUSPEND;
 	}
 	return STF_OK;
+}
+
+static void ikev2_rekey_dh_continue(struct state *st,
+				    struct msg_digest **mdp,
+				    struct pluto_crypto_req *r)
+{
+	DBGF(DBG_CONTROLMORE, "%s calling ikev2_crypto_continue for #%lu %s",
+	     __func__, st->st_serialno, st->st_state_name);
+	ikev2_crypto_continue(st, mdp, r);
 }
 
 
@@ -432,21 +444,18 @@ static void ikev2_crypto_continue(struct state *st,
 	stf_status e = STF_OK;
 	bool only_shared = FALSE;
 
-	DBG(DBG_CRYPT | DBG_CONTROL,
-	    DBG_log("ikev2_crypto_continue for #%lu", st->st_serialno));
+	DBGF(DBG_CRYPT | DBG_CONTROL, "%s for #%lu %s",
+	     __func__, st->st_serialno, st->st_state_name);
 
 	/* and a parent? */
-	struct state *pst = st;
-	if (IS_CHILD_SA(st)) {
-		pst = state_with_serialno(st->st_clonedfrom);
-		if (pst == NULL) {
-			PEXPECT_LOG("IKEv2 crypto continue failed because sponsoring child state #%lu has no parent state #%lu",
-				    st->st_serialno, st->st_clonedfrom);
-			/* XXX: release what? */
-			return;
-		}
+	struct ike_sa *ike = ike_sa(st);
+	if (ike == NULL) {
+		PEXPECT_LOG("sponsoring child state #%lu has no parent state #%lu",
+			    st->st_serialno, st->st_clonedfrom);
+		/* XXX: release what? */
+		return;
 	}
-	passert(pst != NULL);
+	passert(ike != NULL);
 
 	if (*mdp == NULL) {
 		*mdp = fake_md(st);
@@ -459,13 +468,13 @@ static void ikev2_crypto_continue(struct state *st,
 		if (r->pcr_type == pcr_build_ke_and_nonce)
 			unpack_KE_from_helper(st, r, &st->st_gi);
 
-		e = add_st_send_list(st, pst);
+		e = add_st_to_ike_sa_send_list(st, ike);
 		break;
 
 	case STATE_V2_REKEY_IKE_I0:
 		unpack_nonce(&st->st_ni, r);
 		unpack_KE_from_helper(st, r, &st->st_gi);
-		e = add_st_send_list(st, pst);
+		e = add_st_to_ike_sa_send_list(st, ike);
 		break;
 
 	case STATE_V2_REKEY_CHILD_I:
@@ -508,116 +517,6 @@ static void ikev2_crypto_continue(struct state *st,
 
 	passert(*mdp != NULL);
 	complete_v2_state_transition(mdp, e);
-}
-
-/*
- * We need an md because the crypto continuation mechanism requires one
- * but we don't have one because we are not responding to an
- * incoming packet.
- * Solution: build a fake one.  How much do we need to fake?
- * Note: almost identical code appears at the end of aggr_outI1.
- *
- * XXX: This code does a crypto continue using an indirect dispatch
- * through the FSM.  Beyond making the code flow confusing is this
- * useful?  For instance, since SA_INIT has only one code path, it can
- * directly request ke and nonce with its dedicated continue function
- * - no need to jump through all these hoops.
- */
-
-static stf_status ikev2_crypto_start(struct msg_digest *md, struct state *st)
-{
-	const struct state *pst = state_with_serialno(st->st_clonedfrom);
-
-	switch (st->st_state) {
-	case STATE_V2_REKEY_IKE_R:
-		request_ke_and_nonce("IKE rekey KE response gir", st,
-				     st->st_oakley.ta_dh,
-				     ikev2_crypto_continue);
-		return STF_SUSPEND;
-
-	case STATE_V2_CREATE_R:
-		/*
-		 * ??? if we don't have an md (see above) why are we referencing it?
-		 * ??? clang 6.0.0 warns md might be NULL
-		 */
-		if (md->chain[ISAKMP_NEXT_v2KE] != NULL) {
-			request_ke_and_nonce("Child Responder KE and nonce nr",
-					     st, st->st_oakley.ta_dh,
-					     ikev2_crypto_continue);
-		} else {
-			request_nonce("Child Responder nonce nr",
-				      st, ikev2_crypto_continue);
-		}
-		return STF_SUSPEND;
-
-	case STATE_V2_REKEY_CHILD_R:
-		/*
-		 * ??? if we don't have an md (see above) why are we referencing it?
-		 * ??? clang 6.0.0 warns md might be NULL
-		 */
-		if (md->chain[ISAKMP_NEXT_v2KE] != NULL) {
-			request_ke_and_nonce("Child Rekey Responder KE and nonce nr",
-					     st, st->st_oakley.ta_dh,
-					     ikev2_crypto_continue);
-		} else {
-			request_nonce("Child Rekey Responder nonce nr",
-				      st, ikev2_crypto_continue);
-		}
-		return STF_SUSPEND;
-
-	case STATE_V2_REKEY_CHILD_I0:
-		if (st->st_pfs_group == NULL) {
-			request_nonce("Child Rekey Initiator nonce ni",
-				      st, ikev2_crypto_continue);
-		} else {
-			request_ke_and_nonce("Child Rekey Initiator KE and nonce ni",
-					     st, st->st_pfs_group,
-					     ikev2_crypto_continue);
-		}
-		return STF_SUSPEND;
-
-	case STATE_V2_CREATE_I0:
-		if (st->st_pfs_group == NULL) {
-			request_nonce("Child Initiator nonce ni",
-				      st, ikev2_crypto_continue);
-		} else {
-			request_ke_and_nonce("Child Initiator KE and nonce ni",
-					     st, st->st_pfs_group,
-					     ikev2_crypto_continue);
-		}
-		return STF_SUSPEND;
-
-	case STATE_V2_REKEY_CHILD_I:
-		start_dh_v2(st, "ikev2 Child Rekey SA initiator pfs=yes",
-			    ORIGINAL_INITIATOR, NULL, st->st_oakley.ta_prf,
-			    ikev2_crypto_continue);
-		return STF_SUSPEND;
-
-	case STATE_V2_CREATE_I:
-		start_dh_v2(st, "ikev2 Child SA initiator pfs=yes",
-			    ORIGINAL_INITIATOR, NULL, st->st_oakley.ta_prf,
-			    ikev2_crypto_continue);
-		return STF_SUSPEND;
-
-	case STATE_V2_REKEY_IKE_I0:
-		request_ke_and_nonce("IKE REKEY Initiator KE and nonce ni",
-				     st, st->st_oakley.ta_dh,
-				     ikev2_crypto_continue);
-		return STF_SUSPEND;
-
-	case STATE_V2_REKEY_IKE_I:
-		/* initiate calculation of g^xy for rekey */
-		start_dh_v2(st, "DHv2 for IKE sa rekey initiator",
-				ORIGINAL_INITIATOR,
-				pst->st_skey_d_nss, /* only IKE has SK_d */
-				pst->st_oakley.ta_prf, /* for IKE/ESP/AH */
-				ikev2_crypto_continue);
-
-		return STF_SUSPEND;
-
-	default:
-		bad_case(st->st_state);
-	}
 }
 
 /*
@@ -864,7 +763,7 @@ static crypto_req_cont_func ikev2_parent_outI1_continue;
 
 /* extern initiator_function ikev2_parent_outI1; */	/* type assertion */
 
-void ikev2_parent_outI1(int whack_sock,
+void ikev2_parent_outI1(fd_t whack_sock,
 		       struct connection *c,
 		       struct state *predecessor,
 		       lset_t policy,
@@ -879,7 +778,7 @@ void ikev2_parent_outI1(int whack_sock,
 	if (drop_new_exchanges()) {
 		/* Only drop outgoing opportunistic connections */
 		if (c->policy & POLICY_OPPORTUNISTIC) {
-			close_any(whack_sock);
+			close_any(&whack_sock);
 			return;
 		}
 	}
@@ -973,7 +872,7 @@ void ikev2_parent_outI1(int whack_sock,
 bool emit_v2KE(chunk_t *g, const struct oakley_group_desc *group,
 	       pb_stream *outs)
 {
-	if (IMPAIR(SEND_NO_KE_PAYLOAD)) {
+	if (impair_ke_payload == SEND_OMIT) {
 		libreswan_log("IMPAIR: omitting KE payload");
 		return true;
 	}
@@ -987,12 +886,14 @@ bool emit_v2KE(chunk_t *g, const struct oakley_group_desc *group,
 	if (!out_struct(&v2ke, &ikev2_ke_desc, outs, &kepbs))
 		return FALSE;
 
-	if (IMPAIR(SEND_ZERO_KE_PAYLOAD)) {
-		libreswan_log("IMPAIR: sending bogus KE (g^x) == 0 value to break DH calculations");
+	if (impair_ke_payload >= SEND_ROOF) {
+		uint8_t byte = impair_ke_payload - SEND_ROOF;
+		libreswan_log("IMPAIR: sending bogus KE (g^x) == %u value to break DH calculations",
+			      byte);
 		/* Only used to test sending/receiving bogus g^x */
-		if (!out_zero(g->len, &kepbs, "ikev2 impair KE (g^x) == 0"))
+		if (!out_repeated_byte(byte, g->len, &kepbs, "ikev2 impair KE (g^x) == 0"))
 			return FALSE;
-	} else if (IMPAIR(SEND_EMPTY_KE_PAYLOAD)) {
+	} else if (impair_ke_payload == SEND_EMPTY) {
 		libreswan_log("IMPAIR: sending an empty KE value");
 		if (!out_zero(0, &kepbs, "ikev2 impair KE (g^x) == empty"))
 			return FALSE;
@@ -1074,7 +975,7 @@ static stf_status ikev2_parent_outI1_common(struct msg_digest *md UNUSED,
 		}
 	}
 	/*
-	 * http://tools.ietf.org/html/rfc5996#section-2.6
+	 * https://tools.ietf.org/html/rfc5996#section-2.6
 	 * reply with the anti DDOS cookie if we received one (remote is under attack)
 	 */
 	if (st->st_dcookie.ptr != NULL) {
@@ -1511,7 +1412,7 @@ stf_status ikev2_parent_inI1outR1(struct state *null_st, struct msg_digest *md)
 	memcpy(st->st_icookie, md->hdr.isa_icookie, COOKIE_SIZE);
 	/* initialize_new_state expects valid icookie/rcookie values, so create it now */
 	get_cookie(FALSE, st->st_rcookie, &md->sender);
-	initialize_new_state(st, c, policy, 0, NULL_FD);
+	initialize_new_state(st, c, policy, 0, null_fd);
 	update_ike_endpoints(st, md);
 	st->st_ikev2 = TRUE;
 	change_state(st, STATE_PARENT_R1);
@@ -2283,12 +2184,12 @@ static void construct_enc_iv(const char *name,
  * Adding to the confusion, ESP requires a minimum of 4-byte alignment
  * and IKE is free to use the ESP code for padding - we don't.
  */
-static bool ikev2_padup_pre_encrypt(struct state *st,
+static bool ikev2_padup_pre_encrypt(const struct state *st,
 				    pb_stream *e_pbs_cipher) MUST_USE_RESULT;
-static bool ikev2_padup_pre_encrypt(struct state *st,
+static bool ikev2_padup_pre_encrypt(const struct state *st,
 				    pb_stream *e_pbs_cipher)
 {
-	struct state *pst = st;
+	const struct state *pst = st;
 
 	if (IS_CHILD_SA(st))
 		pst = state_with_serialno(st->st_clonedfrom);
@@ -2323,11 +2224,11 @@ static bool ikev2_padup_pre_encrypt(struct state *st,
 	return TRUE;
 }
 
-uint8_t *ikev2_authloc(struct state *st,
+uint8_t *ikev2_authloc(const struct state *st,
 		       pb_stream *e_pbs)
 {
 	unsigned char *b12;
-	struct state *pst = st;
+	const struct state *pst = st;
 
 	if (IS_CHILD_SA(st)) {
 		pst = state_with_serialno(st->st_clonedfrom);
@@ -3081,6 +2982,82 @@ static stf_status ikev2_send_auth(struct connection *c,
 }
 
 /*
+ * start_encrypted_payload:
+ *
+ * Starts SK/SKF payload, inserts IV, creates PBS for encrypted portion of payload.
+ *
+ * To keep track of the part of the output packet that will be
+ * encrypted, we wrap it in a PBS.  This PBS is a little odd
+ * since backpatching obligations are really those of its parent.
+ */
+
+static uint8_t *start_encrypted_payload(
+	const struct state *st,
+	const void *e,
+	struct_desc *ed,
+	pb_stream *rbody,	/* body of reply */
+	pb_stream *sk_pbs,	/* body of SK payload (created by this routine) */
+	pb_stream *enc_pbs)	/* portion of payload to be encrypted (created by this routine) */
+{
+	if (!out_struct(e, ed, rbody, sk_pbs))
+		return NULL;
+
+	/* insert IV */
+
+	uint8_t *const iv = sk_pbs->cur;
+
+	if (!emit_wire_iv(st, sk_pbs))
+		return NULL;
+
+	const unsigned char fake_struct;	/* C doesn't allow 0-length objects */
+
+	if (!out_struct(&fake_struct, &ikev2_encrypted_portion, sk_pbs, enc_pbs))
+		return NULL;
+
+	move_pbs_previous_np(enc_pbs, sk_pbs);	/* backpatching obligation */
+	return iv;
+}
+
+static uint8_t *start_SK_payload(
+	const struct state *st,
+	enum next_payload_types_ikev2 np,
+	pb_stream *rbody,	/* body of reply */
+	pb_stream *sk_pbs,	/* body of SK payload (created by this routine) */
+	pb_stream *enc_pbs)	/* portion of payload to be encrypted (created by this routine) */
+{
+	/* create an Encryption payload header (SK) */
+	const struct ikev2_generic e = {
+		.isag_np = np,
+		.isag_critical = build_ikev2_critical(false),
+	};
+
+	return start_encrypted_payload(st,
+		&e, &ikev2_sk_desc,
+		rbody, sk_pbs, enc_pbs);
+}
+
+static uint8_t *end_encrypted_payload(
+	const struct state *st,
+	pb_stream *rbody,	/* body of reply */
+	pb_stream *sk_pbs,	/* body of SK payload */
+	pb_stream *enc_pbs)	/* portion of payload to be encrypted */
+{
+	if (!ikev2_padup_pre_encrypt(st, enc_pbs))
+		return NULL;
+
+	move_pbs_previous_np(sk_pbs, enc_pbs);	/* backpatching obligation */
+	close_output_pbs(enc_pbs);
+
+	uint8_t *const authloc = ikev2_authloc(st, sk_pbs);
+	if (authloc == NULL)
+		return authloc;
+
+	close_output_pbs(sk_pbs);
+	close_output_pbs(rbody);
+	return authloc;
+}
+
+/*
  * fragment contents:
  * - sometimes:	NON_ESP_MARKER (RFC3948) (NON_ESP_MARKER_SIZE) (4)
  * - always:	isakmp header (NSIZEOF_isakmp_hdr) (28)
@@ -3092,7 +3069,7 @@ static stf_status ikev2_send_auth(struct connection *c,
 static stf_status ikev2_record_outbound_fragment(
 	struct msg_digest *md,
 	struct isakmp_hdr *hdr,
-	struct ikev2_generic *oe,
+	enum next_payload_types_ikev2 np,
 	struct v2_ike_tfrag **fragp,
 	chunk_t *payload,	/* read-only */
 	unsigned int count, unsigned int total,
@@ -3117,45 +3094,18 @@ static stf_status ikev2_record_outbound_fragment(
 			&rbody))
 		return STF_INTERNAL_ERROR;
 
-	/* insert an Encryption Fragment payload header (SKF) */
 	pb_stream e_pbs;
-
-	{
-		struct ikev2_skf e = {
-			.isaskf_np = count == 1 ? oe->isag_np : 0,
-			.isaskf_critical = oe->isag_critical,
-			.isaskf_number = count,
-			.isaskf_total = total,
-		};
-
-		if (!out_struct(&e, &ikev2_skf_desc, &rbody, &e_pbs))
-			return STF_INTERNAL_ERROR;
-
-		/*
-		 * the np field is not at all what the backpatch logic
-		 * expects so we suppress its check.
-		 */
-		rbody.previous_np = NULL;
-	}
-
-	/* insert IV */
-	uint8_t *iv = e_pbs.cur;
-
-	if (!emit_wire_iv(st, &e_pbs))
-		return STF_INTERNAL_ERROR;
-	passert(frag_stream.start <= iv);
-
-	/*
-	 * Note where cleartext starts by inserting an extra layer of
-	 * PBS that has no header!
-	 * Any First NP backpatching must look through this layer
-	 * (but there isn't any).
-	 */
 	pb_stream e_pbs_cipher;
-	const unsigned char fake_struct;	/* C doesn't allow 0-length objects */
 
-	if (!out_struct(&fake_struct, &ikev2_encrypted_portion, &e_pbs, &e_pbs_cipher))
-		return STF_INTERNAL_ERROR;
+	const struct ikev2_skf e = {
+		.isaskf_np = count == 1 ? np : 0,
+		.isaskf_critical = build_ikev2_critical(false),
+		.isaskf_number = count,
+		.isaskf_total = total,
+	};
+	uint8_t *iv = start_encrypted_payload(st,
+			&e, &ikev2_skf_desc,
+			&rbody, &e_pbs, &e_pbs_cipher);
 
 	uint8_t *encstart = e_pbs_cipher.cur;
 	passert(frag_stream.start <= iv && iv <= encstart);
@@ -3164,30 +3114,21 @@ static stf_status ikev2_record_outbound_fragment(
 		     "cleartext fragment"))
 		return STF_INTERNAL_ERROR;
 
-	/*
-	 * need to extend the packet so that we will know how big it is
-	 * since the length is under the integrity check
-	 */
-	if (!ikev2_padup_pre_encrypt(st, &e_pbs_cipher))
+	uint8_t *authloc = end_encrypted_payload(
+			st,
+			&rbody, &e_pbs, &e_pbs_cipher);
+
+	if (authloc == NULL)
 		return STF_INTERNAL_ERROR;
 
-	close_output_pbs(&e_pbs_cipher);
+	passert(frag_stream.start <= iv && iv <= encstart && encstart <= authloc);
 
-	{
-		uint8_t *authloc = ikev2_authloc(st, &e_pbs);
-		if (authloc == NULL)
-			return STF_INTERNAL_ERROR;
-		passert(frag_stream.start <= iv && iv <= encstart && encstart <= authloc);
+	close_output_pbs(&frag_stream);
 
-		close_output_pbs(&e_pbs);
-		close_output_pbs(&rbody);
-		close_output_pbs(&frag_stream);
-
-		stf_status ret = ikev2_encrypt_msg(ike_sa(st), frag_stream.start,
-						   iv, encstart, authloc);
-		if (ret != STF_OK)
-			return ret;
-	}
+	stf_status ret = ikev2_encrypt_msg(ike_sa(st), frag_stream.start,
+					   iv, encstart, authloc);
+	if (ret != STF_OK)
+		return ret;
 
 	*fragp = alloc_thing(struct v2_ike_tfrag, "v2_ike_tfrag");
 	(*fragp)->next = NULL;
@@ -3199,7 +3140,7 @@ static stf_status ikev2_record_outbound_fragment(
 static stf_status ikev2_record_outbound_fragments(
 	struct msg_digest *md,
 	struct isakmp_hdr *hdr,
-	struct ikev2_generic *e,
+	enum next_payload_types_ikev2 np,
 	chunk_t *payload, /* read-only */
 	const char *desc)
 {
@@ -3250,7 +3191,7 @@ static stf_status ikev2_record_outbound_fragments(
 		offset += cipher.len;
 		count++;
 		ret = ikev2_record_outbound_fragment(
-			md, hdr, e, fragp, &cipher, count, nfrags, desc);
+			md, hdr, np, fragp, &cipher, count, nfrags, desc);
 
 		if (ret != STF_OK || offset == payload->len)
 			break;
@@ -3370,6 +3311,7 @@ static stf_status ikev2_parent_inR1outI2_tail(struct state *pst, struct msg_dige
 		.isa_xchg = ISAKMP_v2_AUTH,
 		.isa_flags = ISAKMP_FLAGS_v2_IKE_I,	/* original initiator; all other flags clear */
 		.isa_msgid = cst->st_msgid,
+		.isa_length = 0, /* filled in when pbs is closed */
 	};
 
 	memcpy(hdr.isa_icookie, cst->st_icookie, COOKIE_SIZE);
@@ -3392,35 +3334,14 @@ static stf_status ikev2_parent_inR1outI2_tail(struct state *pst, struct msg_dige
 	}
 
 	/* insert an Encryption payload header (SK) */
+
 	pb_stream e_pbs;
-
-	struct ikev2_generic e = {
-		.isag_np = ISAKMP_NEXT_v2IDi,
-		.isag_critical = build_ikev2_critical(false),
-	};
-
-	if (!out_struct(&e, &ikev2_sk_desc, &rbody, &e_pbs))
-		return STF_INTERNAL_ERROR;
-
-	/* insert IV */
-
-	uint8_t *const iv = e_pbs.cur;
-	passert(reply_stream.start <= iv);
-
-	if (!emit_wire_iv(cst, &e_pbs))
-		return STF_INTERNAL_ERROR;
-
-	/*
-	 * Note where cleartext starts by inserting an extra layer of
-	 * PBS that has no header!
-	 * Any First NP backpatching must look through this layer.
-	 */
 	pb_stream e_pbs_cipher;
-	const unsigned char fake_struct;	/* C doesn't allow 0-length objects */
 
-	if (!out_struct(&fake_struct, &ikev2_encrypted_portion, &e_pbs, &e_pbs_cipher))
+	uint8_t *const iv = start_SK_payload(cst, ISAKMP_NEXT_v2IDi, &rbody, &e_pbs, &e_pbs_cipher);
+
+	if (iv == NULL)
 		return STF_INTERNAL_ERROR;
-	move_pbs_previous_np(&e_pbs_cipher, &e_pbs);	/* backpatching obligation */
 
 	uint8_t *const encstart = e_pbs_cipher.cur;
 	passert(reply_stream.start <= iv && iv <= encstart);
@@ -3730,31 +3651,16 @@ static stf_status ikev2_parent_inR1outI2_tail(struct state *pst, struct msg_dige
 
 	const unsigned int len = pbs_offset(&e_pbs_cipher);
 
-	/*
-	 * need to extend the packet so that we will know how big it is
-	 * since the length is under the integrity check
-	 */
-	if (!ikev2_padup_pre_encrypt(cst, &e_pbs_cipher))
-		return STF_INTERNAL_ERROR;
-
-	move_pbs_previous_np(&e_pbs, &e_pbs_cipher);	/* backpatching obligation */
-	close_output_pbs(&e_pbs_cipher);
-
-	uint8_t *const authloc = ikev2_authloc(cst, &e_pbs);
+	uint8_t *const authloc = end_encrypted_payload(cst, &rbody, &e_pbs, &e_pbs_cipher);
 	if (authloc == NULL)
 		return STF_INTERNAL_ERROR;
-	passert(reply_stream.start <= iv && iv <= encstart && encstart <= authloc);
-
-	close_output_pbs(&e_pbs);
-	close_output_pbs(&rbody);
-	close_output_pbs(&reply_stream);
 
 	if (should_fragment_ike_msg(cst, pbs_offset(&reply_stream), TRUE)) {
 		chunk_t payload;
 
 		setchunk(payload, e_pbs_cipher.start, len);
 		stf_status ret = ikev2_record_outbound_fragments(
-			md, &hdr, &e, &payload,
+			md, &hdr, ISAKMP_NEXT_v2IDi, &payload,
 			"reply fragment for ikev2_parent_outR1_I2");
 		pst->st_msgid_lastreplied = md->msgid_received;
 		return ret;
@@ -4167,7 +4073,6 @@ static stf_status ikev2_parent_inI2outR2_auth_tail(struct state *st,
 {
 	struct connection *const c = st->st_connection;
 	unsigned char idhash_out[MAX_DIGEST_LEN];
-	unsigned int np;
 
 	if (!pam_status) {
 		/*
@@ -4254,35 +4159,20 @@ static stf_status ikev2_parent_inI2outR2_auth_tail(struct state *st,
 
 		/* insert an Encryption payload header */
 		pb_stream e_pbs;
-		struct ikev2_generic e = {
-			.isag_np = IMPAIR(ADD_UNKNOWN_PAYLOAD_TO_AUTH_SK) ?
-					ISAKMP_NEXT_v2UNKNOWN :
-				(notifies != 0) ?
-					ISAKMP_NEXT_v2N :
-					ISAKMP_NEXT_v2IDr,
-			.isag_critical = ISAKMP_PAYLOAD_NONCRITICAL,
-		};
-
-		if (!out_struct(&e, &ikev2_sk_desc, &rbody, &e_pbs))
-			return STF_INTERNAL_ERROR;
-
-		/* insert IV */
-		uint8_t *iv = e_pbs.cur;
-		passert(reply_stream.start <= iv);
-		if (!emit_wire_iv(st, &e_pbs))
-			return STF_INTERNAL_ERROR;
-
-		/*
-		 * Note where cleartext starts by inserting an extra layer of
-		 * PBS that has no header!
-		 * Any First NP backpatching must look through this layer.
-		 */
 		pb_stream e_pbs_cipher;
-		const unsigned char fake_struct;	/* C doesn't allow 0-length objects */
+		enum next_payload_types_ikev2 sk_np =
+			IMPAIR(ADD_UNKNOWN_PAYLOAD_TO_AUTH_SK) ?
+				ISAKMP_NEXT_v2UNKNOWN :
+			notifies != 0 ?
+				ISAKMP_NEXT_v2N :
+				ISAKMP_NEXT_v2IDr;
 
-		if (!out_struct(&fake_struct, &ikev2_encrypted_portion, &e_pbs, &e_pbs_cipher))
+		uint8_t *iv = start_SK_payload(
+				st, sk_np,
+				&rbody, &e_pbs, &e_pbs_cipher);
+
+		if (iv == NULL)
 			return STF_INTERNAL_ERROR;
-		move_pbs_previous_np(&e_pbs_cipher, &e_pbs);	/* backpatching obligation */
 
 		uint8_t *encstart = e_pbs_cipher.cur;
 		passert(reply_stream.start <= iv && iv <= encstart);
@@ -4382,6 +4272,8 @@ static stf_status ikev2_parent_inI2outR2_auth_tail(struct state *st,
 		}
 
 		/* authentication good, see if there is a child SA being proposed */
+		unsigned int auth_np;
+
 		if (md->chain[ISAKMP_NEXT_v2SA] == NULL ||
 		    md->chain[ISAKMP_NEXT_v2TSi] == NULL ||
 		    md->chain[ISAKMP_NEXT_v2TSr] == NULL) {
@@ -4392,10 +4284,10 @@ static stf_status ikev2_parent_inI2outR2_auth_tail(struct state *st,
 			} else {
 				DBG(DBG_CONTROLMORE, DBG_log("No CHILD SA proposals received"));
 			}
-			np = ISAKMP_NEXT_v2NONE;
+			auth_np = ISAKMP_NEXT_v2NONE;
 		} else {
 			DBG(DBG_CONTROLMORE, DBG_log("CHILD SA proposals received"));
-			np = (c->pool != NULL && md->chain[ISAKMP_NEXT_v2CP] != NULL) ?
+			auth_np = (c->pool != NULL && md->chain[ISAKMP_NEXT_v2CP] != NULL) ?
 				ISAKMP_NEXT_v2CP : ISAKMP_NEXT_v2SA;
 		}
 
@@ -4405,7 +4297,7 @@ static stf_status ikev2_parent_inI2outR2_auth_tail(struct state *st,
 		/* now send AUTH payload */
 		{
 			stf_status authstat = ikev2_send_auth(c, st,
-							      ORIGINAL_RESPONDER, np,
+							      ORIGINAL_RESPONDER, auth_np,
 							      idhash_out,
 							      &e_pbs_cipher, NULL);
 							      /* ??? NULL - don't calculate additional NULL_AUTH ??? */
@@ -4414,7 +4306,7 @@ static stf_status ikev2_parent_inI2outR2_auth_tail(struct state *st,
 				return authstat;
 		}
 
-		if (np == ISAKMP_NEXT_v2SA || np == ISAKMP_NEXT_v2CP) {
+		if (auth_np == ISAKMP_NEXT_v2SA || auth_np == ISAKMP_NEXT_v2CP) {
 			/* must have enough to build an CHILD_SA */
 			stf_status ret = ikev2_child_sa_respond(md, &e_pbs_cipher,
 								ISAKMP_v2_AUTH);
@@ -4439,28 +4331,18 @@ static stf_status ikev2_parent_inI2outR2_auth_tail(struct state *st,
 
 		unsigned int len = pbs_offset(&e_pbs_cipher);
 
-		if (!ikev2_padup_pre_encrypt(cst, &e_pbs_cipher))
-			return STF_INTERNAL_ERROR;
+		uint8_t *authloc = end_encrypted_payload(cst, &rbody, &e_pbs, &e_pbs_cipher);
 
-		move_pbs_previous_np(&e_pbs, &e_pbs_cipher);	/* backpatching obligation */
-		close_output_pbs(&e_pbs_cipher);
-
-		uint8_t *authloc = ikev2_authloc(cst, &e_pbs);
-		if (authloc == NULL)
-			return STF_INTERNAL_ERROR;
-		passert(reply_stream.start <= iv && iv <= encstart && encstart <= authloc);
-
-		close_output_pbs(&e_pbs);
-		close_output_pbs(&rbody);
 		close_output_pbs(&reply_stream);
 
 		if (should_fragment_ike_msg(cst, pbs_offset(&reply_stream),
-						TRUE)) {
+						TRUE))
+		{
 			chunk_t payload;
 
 			setchunk(payload, e_pbs_cipher.start, len);
 			stf_status ret = ikev2_record_outbound_fragments(
-				md, &hdr, &e, &payload,
+				md, &hdr, sk_np, &payload,
 				"reply fragment for ikev2_parent_inI2outR2_tail");
 			st->st_msgid_lastreplied = md->msgid_received;
 			return ret;
@@ -4563,7 +4445,7 @@ stf_status ikev2_process_child_sa_pl(struct msg_digest *md,
 			loglog(RC_LOG_SERIOUS,
 			       "expecting %s but remote's accepted proposal includes %s",
 			       st->st_pfs_group == NULL ? "no DH" : st->st_pfs_group->common.fqn,
-			       accepted_dh == NULL ? "no DH" : accepted_dh->common.fqn);
+			       accepted_dh->common.fqn);
 			return STF_FAIL + v2N_NO_PROPOSAL_CHOSEN;
 		}
 		st->st_pfs_group = accepted_dh;
@@ -4646,7 +4528,7 @@ static stf_status ikev2_process_ts_respnse(struct msg_digest *md)
 		bestfit_p = -1;
 		bestfit_pr = -1;
 
-		/* Check TSi/TSr http://tools.ietf.org/html/rfc5996#section-2.9 */
+		/* Check TSi/TSr https://tools.ietf.org/html/rfc5996#section-2.9 */
 		DBG(DBG_CONTROLMORE,
 		    DBG_log("TS: check narrowing - we are responding to I2"));
 
@@ -5599,7 +5481,12 @@ static notification_t process_ike_rekey_sa_pl(struct msg_digest *md, struct stat
 	return STF_OK;
 }
 
-/* initiator received Rekey IKE SA (RFC 7296 1.3.3) response */
+/*
+ * initiator received Rekey IKE SA (RFC 7296 1.3.3) response
+ */
+
+static crypto_req_cont_func ikev2_child_ike_inR_continue;
+
 stf_status ikev2_child_ike_inR(struct state *st /* child state */,
 				   struct msg_digest *md)
 {
@@ -5611,13 +5498,30 @@ stf_status ikev2_child_ike_inR(struct state *st /* child state */,
 	RETURN_STF_FAILURE(accept_v2_nonce(md, &st->st_nr, "Nr"));
 	RETURN_STF_FAILURE_STATUS(process_ike_rekey_sa_pl_response(md, pst, st));
 
-	DBG(DBG_CONTROLMORE,
-			DBG_log("Calling ikev2_crypto_start() from %s in state %s",
-				__func__, st->st_state_name));
-	return ikev2_crypto_start(md, st);
+	/* initiate calculation of g^xy for rekey */
+	start_dh_v2(st, "DHv2 for IKE sa rekey initiator",
+		    ORIGINAL_INITIATOR,
+		    pst->st_skey_d_nss, /* only IKE has SK_d */
+		    pst->st_oakley.ta_prf, /* for IKE/ESP/AH */
+		    ikev2_child_ike_inR_continue);
+	return STF_SUSPEND;
 }
 
-/* initiator received a create Child SA Response (RFC 7296 1.3.1, 1.3.2) */
+static void ikev2_child_ike_inR_continue(struct state *st,
+					 struct msg_digest **mdp,
+					 struct pluto_crypto_req *r)
+{
+	DBGF(DBG_CONTROLMORE, "%s calling ikev2_crypto_continue for #%lu %s",
+	     __func__, st->st_serialno, st->st_state_name);
+	ikev2_crypto_continue(st, mdp, r);
+}
+
+/*
+ * initiator received a create Child SA Response (RFC 7296 1.3.1, 1.3.2)
+ */
+
+static crypto_req_cont_func ikev2_child_inR_continue;
+
 stf_status ikev2_child_inR(struct state *st, struct msg_digest *md)
 {
 	RETURN_STF_FAILURE(accept_v2_nonce(md, &st->st_nr, "Nr"));
@@ -5629,13 +5533,40 @@ stf_status ikev2_child_inR(struct state *st, struct msg_digest *md)
 
 	RETURN_STF_FAILURE(accept_child_sa_KE(md, st, st->st_oakley));
 
-	DBG(DBG_CONTROLMORE,
-	    DBG_log("Calling ikev2_crypto_start() from %s in state %s",
-		    __func__, st->st_state_name));
-	return ikev2_crypto_start(md, st);
+	/*
+	 * XXX: other than logging, these two cases are identical.
+	 */
+	switch (st->st_state) {
+	case STATE_V2_CREATE_I:
+		start_dh_v2(st, "ikev2 Child SA initiator pfs=yes",
+			    ORIGINAL_INITIATOR, NULL, st->st_oakley.ta_prf,
+			    ikev2_child_inR_continue);
+		return STF_SUSPEND;
+	case STATE_V2_REKEY_CHILD_I:
+		start_dh_v2(st, "ikev2 Child Rekey SA initiator pfs=yes",
+			    ORIGINAL_INITIATOR, NULL, st->st_oakley.ta_prf,
+			    ikev2_child_inR_continue);
+		return STF_SUSPEND;
+	default:
+		bad_case(st->st_state);
+	}
 }
 
-/* processing a new Child SA (RFC 7296 1.3.1 or 1.3.3) request */
+static void ikev2_child_inR_continue(struct state *st,
+				     struct msg_digest **mdp,
+				     struct pluto_crypto_req *r)
+{
+	DBGF(DBG_CONTROLMORE, "%s calling ikev2_crypto_continue for #%lu %s",
+	     __func__, st->st_serialno, st->st_state_name);
+	ikev2_crypto_continue(st, mdp, r);
+}
+
+/*
+ * processing a new Child SA (RFC 7296 1.3.1 or 1.3.3) request
+ */
+
+static crypto_req_cont_func ikev2_child_inIoutR_continue;
+
 stf_status ikev2_child_inIoutR(struct state *st /* child state */,
 			       struct msg_digest *md)
 {
@@ -5663,14 +5594,57 @@ stf_status ikev2_child_inIoutR(struct state *st /* child state */,
 					ISAKMP_v2_CREATE_CHILD_SA));
 	}
 
-	DBG(DBG_CONTROLMORE,
-	    DBG_log("Calling ikev2_crypto_start() from %s in state %s",
-		    __func__, st->st_state_name));
-
-	return ikev2_crypto_start(md, st);
+	/*
+	 * XXX: a quick eyeball suggests that the only difference
+	 * between these two cases is the description.
+	 *
+	 * ??? if we don't have an md (see above) why are we referencing it?
+	 * ??? clang 6.0.0 warns md might be NULL
+	 *
+	 * XXX: 'see above' is lost; this is a responder state
+	 * which _always_ has an MD.
+	 */
+	switch (st->st_state) {
+	case STATE_V2_CREATE_R:
+		if (md->chain[ISAKMP_NEXT_v2KE] != NULL) {
+			request_ke_and_nonce("Child Responder KE and nonce nr",
+					     st, st->st_oakley.ta_dh,
+					     ikev2_child_inIoutR_continue);
+		} else {
+			request_nonce("Child Responder nonce nr",
+				      st, ikev2_child_inIoutR_continue);
+		}
+		return STF_SUSPEND;
+	case STATE_V2_REKEY_CHILD_R:
+		if (md->chain[ISAKMP_NEXT_v2KE] != NULL) {
+			request_ke_and_nonce("Child Rekey Responder KE and nonce nr",
+					     st, st->st_oakley.ta_dh,
+					     ikev2_child_inIoutR_continue);
+		} else {
+			request_nonce("Child Rekey Responder nonce nr",
+				      st, ikev2_child_inIoutR_continue);
+		}
+		return STF_SUSPEND;
+	default:
+		bad_case(st->st_state);
+	}
 }
 
-/* processsing a new Rekey IKE SA (RFC 7296 1.3.2) request */
+static void ikev2_child_inIoutR_continue(struct state *st,
+					 struct msg_digest **mdp,
+					 struct pluto_crypto_req *r)
+{
+	DBGF(DBG_CONTROLMORE, "%s calling ikev2_crypto_continue for #%lu %s",
+	     __func__, st->st_serialno, st->st_state_name);
+	ikev2_crypto_continue(st, mdp, r);
+}
+
+/*
+ * processsing a new Rekey IKE SA (RFC 7296 1.3.2) request
+ */
+
+static crypto_req_cont_func ikev2_child_ike_inIoutR_continue;
+
 stf_status ikev2_child_ike_inIoutR(struct state *st /* child state */,
 				   struct msg_digest *md)
 {
@@ -5689,10 +5663,19 @@ stf_status ikev2_child_ike_inIoutR(struct state *st /* child state */,
 
 	RETURN_STF_FAILURE_STATUS(process_ike_rekey_sa_pl(md, pst, st));
 
-	DBG(DBG_CONTROLMORE,
-	    DBG_log("Calling ikev2_crypto_start() from %s in state %s",
-		    __func__, st->st_state_name));
-	return ikev2_crypto_start(md, st);
+	request_ke_and_nonce("IKE rekey KE response gir", st,
+			     st->st_oakley.ta_dh,
+			     ikev2_child_ike_inIoutR_continue);
+	return STF_SUSPEND;
+}
+
+static void ikev2_child_ike_inIoutR_continue(struct state *st,
+					     struct msg_digest **mdp,
+					     struct pluto_crypto_req *r)
+{
+	DBGF(DBG_CONTROLMORE, "%s calling ikev2_crypto_continue for #%lu %s",
+	     __func__, st->st_serialno, st->st_state_name);
+	ikev2_crypto_continue(st, mdp, r);
 }
 
 static stf_status ikev2_child_out_tail(struct msg_digest *md)
@@ -5746,33 +5729,12 @@ static stf_status ikev2_child_out_tail(struct msg_digest *md)
 
 	/* insert an Encryption payload header */
 	pb_stream e_pbs;
-
-	{
-		struct ikev2_generic e = {
-			.isag_np = ISAKMP_NEXT_v2SA,
-			.isag_critical = ISAKMP_PAYLOAD_NONCRITICAL,
-		};
-		if (!out_struct(&e, &ikev2_sk_desc, &rbody, &e_pbs))
-			return STF_INTERNAL_ERROR;
-	}
-
-	/* IV */
-	uint8_t *iv = e_pbs.cur;
-	if (!emit_wire_iv(pst, &e_pbs))
-		return STF_INTERNAL_ERROR;
-	passert(reply_stream.start <= iv);
-
-	/*
-	 * Note where cleartext starts by inserting an extra layer of
-	 * PBS that has no header!
-	 * Any First NP backpatching must look through this layer.
-	 */
 	pb_stream e_pbs_cipher;
-	const unsigned char fake_struct;	/* C doesn't allow 0-length objects */
 
-	if (!out_struct(&fake_struct, &ikev2_encrypted_portion, &e_pbs, &e_pbs_cipher))
+	uint8_t *iv = start_SK_payload(pst, ISAKMP_NEXT_v2SA, &rbody, &e_pbs, &e_pbs_cipher);
+
+	if (iv == NULL)
 		return STF_INTERNAL_ERROR;
-	move_pbs_previous_np(&e_pbs_cipher, &e_pbs);	/* backpatching obligation */
 
 	uint8_t *encstart = e_pbs_cipher.cur;
 	passert(reply_stream.start <= iv && iv <= encstart);
@@ -5804,31 +5766,20 @@ static stf_status ikev2_child_out_tail(struct msg_digest *md)
 		return ret; /* abort building the response message */
 	}
 
-	if (!ikev2_padup_pre_encrypt(pst, &e_pbs_cipher))
+	uint8_t *authloc = end_encrypted_payload(pst, &rbody, &e_pbs, &e_pbs_cipher);
+	if (authloc == NULL)
 		return STF_INTERNAL_ERROR;
 
-	move_pbs_previous_np(&e_pbs, &e_pbs_cipher);	/* backpatching obligation */
-	close_output_pbs(&e_pbs_cipher);
+	close_output_pbs(&reply_stream);
+	ret = ikev2_encrypt_msg(ike_sa(pst), reply_stream.start,
+				iv, encstart, authloc);
 
-	{
-		uint8_t *authloc = ikev2_authloc(pst, &e_pbs);
-		if (authloc == NULL)
-			return STF_INTERNAL_ERROR;
-		passert(reply_stream.start <= iv && iv <= encstart && encstart <= authloc);
-
-		close_output_pbs(&e_pbs);
-		close_output_pbs(&rbody);
-		close_output_pbs(&reply_stream);
-		ret = ikev2_encrypt_msg(ike_sa(pst), reply_stream.start,
-					iv, encstart, authloc);
-
-		if (ret != STF_OK)
-			return ret;
-	}
+	if (ret != STF_OK)
+		return ret;
 
 	/*
 	 * CREATE_CHILD_SA request and response are small 300 - 750 bytes.
-	 * should we support fragmenting? may be one day.
+	 * ??? Should we support fragmenting?  Maybe one day.
 	 */
 	record_outbound_ike_msg(pst, &reply_stream,
 				"packet from ikev2_child_out_cont");
@@ -6307,6 +6258,8 @@ stf_status process_encrypted_informational_ikev2(struct state *st,
 	/*
 	 * Variables for generating response.
 	 * NOTE: only meaningful if "responding" is true!
+	 * These declarations must be placed so early because they must be in scope for
+	 * all of the several chunks of code that handle responding.
 	 */
 
 	unsigned char *iv = NULL;	/* initialized to silence GCC */
@@ -6315,7 +6268,6 @@ stf_status process_encrypted_informational_ikev2(struct state *st,
 	pb_stream rbody;
 	pb_stream e_pbs;
 	pb_stream e_pbs_cipher;
-
 
 	if (responding) {
 		/* make sure HDR is at start of a clean buffer */
@@ -6352,41 +6304,15 @@ stf_status process_encrypted_informational_ikev2(struct state *st,
 
 		/* insert an Encryption payload header */
 
-		{
-			struct ikev2_generic e;
-
-			/*
-			 * IKE SA DELETE response is NONE
-			 * IPsec SA DELETE response is DELETE
-			 * Neither can mix with MOBIKE
-			 */
-			e.isag_np =
-				del_ike ? ISAKMP_NEXT_v2NONE :
+		iv = start_SK_payload(
+			st,
+			del_ike ? ISAKMP_NEXT_v2NONE :
 				ndp != 0 ? ISAKMP_NEXT_v2D :
 				send_mobike_resp ? ISAKMP_NEXT_v2N :
-				ISAKMP_NEXT_v2NONE;
-
-			e.isag_critical = ISAKMP_PAYLOAD_NONCRITICAL;
-
-			if (!out_struct(&e, &ikev2_sk_desc, &rbody, &e_pbs))
-				return STF_INTERNAL_ERROR;
-		}
-
-		/* insert IV */
-		iv = e_pbs.cur;
-		if (!emit_wire_iv(st, &e_pbs))
+				ISAKMP_NEXT_v2NONE,
+			&rbody, &e_pbs, &e_pbs_cipher);
+		if (iv == NULL)
 			return STF_INTERNAL_ERROR;
-
-		/*
-		 * Note where cleartext starts by inserting an extra layer of
-		 * PBS that has no header!
-		 * Any First NP backpatching must look through this layer.
-		 */
-		const unsigned char fake_struct;	/* C doesn't allow 0-length objects */
-
-		if (!out_struct(&fake_struct, &ikev2_encrypted_portion, &e_pbs, &e_pbs_cipher))
-			return STF_INTERNAL_ERROR;
-		move_pbs_previous_np(&e_pbs_cipher, &e_pbs);	/* backpatching obligation */
 
 		encstart = e_pbs_cipher.cur;
 
@@ -6563,31 +6489,23 @@ stf_status process_encrypted_informational_ikev2(struct state *st,
 		 * Close up the packet and send it.
 		 */
 
-		if (!ikev2_padup_pre_encrypt(st, &e_pbs_cipher))
+		uint8_t *authloc = end_encrypted_payload(st, &rbody, &e_pbs, &e_pbs_cipher);
+		if (authloc == NULL)
 			return STF_INTERNAL_ERROR;
 
-		move_pbs_previous_np(&e_pbs, &e_pbs_cipher);	/* backpatching obligation */
-		close_output_pbs(&e_pbs_cipher);
+		close_output_pbs(&reply_stream);
 
-		{
-			unsigned char *authloc = ikev2_authloc(st, &e_pbs);
-
-			passert(authloc != NULL);
-
-			close_output_pbs(&e_pbs);
-			close_output_pbs(&rbody);
-			close_output_pbs(&reply_stream);
-
-			stf_status ret =
-				ikev2_encrypt_msg(ike_sa(st), reply_stream.start,
-						  iv, encstart, authloc);
-			if (ret != STF_OK)
-				return ret;
-		}
+		stf_status ret =
+			ikev2_encrypt_msg(ike_sa(st), reply_stream.start,
+					  iv, encstart, authloc);
+		if (ret != STF_OK)
+			return ret;
 
 		struct mobike mobike_remote;
 
 		mobike_switch_remote(md, &mobike_remote);
+
+		/* ??? should we support fragmenting?  Maybe one day. */
 		record_and_send_v2_ike_msg(st, &reply_stream,
 					   "reply packet for process_encrypted_informational_ikev2");
 		st->st_msgid_lastreplied = md->msgid_received;
@@ -6657,7 +6575,7 @@ static stf_status add_mobike_payloads(struct state *st, pb_stream *pbs)
 void ikev2_rekey_ike_start(struct state *st)
 {
 	struct pending p;
-	p.whack_sock = NULL_FD;
+	p.whack_sock = null_fd;
 	p.isakmp_sa = st;
 	p.connection = st->st_connection;
 	p.policy = LEMPTY;
@@ -6800,12 +6718,52 @@ void ikev2_initiate_child_sa(struct pending *p)
 	reset_globals();
 }
 
+static crypto_req_cont_func ikev2_child_outI_continue;
+
 void ikev2_child_outI(struct state *st)
 {
-	DBG(DBG_CONTROLMORE,
-	    DBG_log("Calling ikev2_crypto_start() from %s in state %s",
-		    __func__, st->st_state_name));
-	ikev2_crypto_start(NULL, st);
+	switch (st->st_state) {
+
+	case STATE_V2_REKEY_CHILD_I0:
+		if (st->st_pfs_group == NULL) {
+			request_nonce("Child Rekey Initiator nonce ni",
+				      st, ikev2_child_outI_continue);
+		} else {
+			request_ke_and_nonce("Child Rekey Initiator KE and nonce ni",
+					     st, st->st_pfs_group,
+					     ikev2_child_outI_continue);
+		}
+		break; /* return STF_SUSPEND; */
+
+	case STATE_V2_CREATE_I0:
+		if (st->st_pfs_group == NULL) {
+			request_nonce("Child Initiator nonce ni",
+				      st, ikev2_child_outI_continue);
+		} else {
+			request_ke_and_nonce("Child Initiator KE and nonce ni",
+					     st, st->st_pfs_group,
+					     ikev2_child_outI_continue);
+		}
+		break; /* return STF_SUSPEND; */
+
+	case STATE_V2_REKEY_IKE_I0:
+		request_ke_and_nonce("IKE REKEY Initiator KE and nonce ni",
+				     st, st->st_oakley.ta_dh,
+				     ikev2_child_outI_continue);
+		break; /* return STF_SUSPEND; */
+
+	default:
+		bad_case(st->st_state);
+	}
+}
+
+static void ikev2_child_outI_continue(struct state *st,
+				      struct msg_digest **mdp,
+				      struct pluto_crypto_req *r)
+{
+	DBGF(DBG_CONTROLMORE, "%s calling ikev2_crypto_continue for #%lu %s",
+	     __func__, st->st_serialno, st->st_state_name);
+	ikev2_crypto_continue(st, mdp, r);
 }
 
 /*

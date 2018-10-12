@@ -13,7 +13,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -43,6 +43,7 @@ enum field_type {
 	ft_len,			/* length of this struct and any following crud */
 	ft_fcp,			/* message's first contained payload type field */
 	ft_pnp,			/* payload's next payload type field */
+	ft_lss,			/* Last Substructure field */
 	ft_lv,			/* length/value field of attribute */
 	ft_enum,		/* value from an enumeration */
 	ft_loose_enum,		/* value from an enumeration with only some names known */
@@ -72,7 +73,17 @@ typedef const struct {
 	field_desc *fields;
 	size_t size;
 	int pt;	/* this payload type */
+	unsigned nsst; /* Nested Substructure Type */
 } struct_desc;
+
+/*
+ * Something to fixup later.
+ */
+struct fixup {
+	uint8_t *loc;
+	struct_desc *sd;
+	field_desc *fp; /* name .fp from packet.c */
+};
 
 /*
  * The formatting of input and output of packets is done through
@@ -112,7 +123,31 @@ struct packet_byte_stream {
 	uint8_t *previous_np;	/* always one octet */
 	field_desc *previous_np_field;
 	struct_desc *previous_np_struct;
+
+	/*
+	 * For patching Last Substructure field.
+	 *
+	 * IKEv2 has nested substructures.  An SA Payload contains
+	 * Proposal Substructures, and a Proposal Substructure
+	 * contains Transform Substructures.
+	 *
+	 * When emitting a the substructure, the Last Substruc[ture]
+	 * field is set to either that substructure's type (non-last)
+	 * or zero (last).
+	 *
+	 * This is separate to the Next Payload field and the payload
+	 * "chain" - the SA payload is both linked into the payload
+	 * "chain" (.PT) and requires a specific sub-structure (.SST).
+	 *
+	 * IKEv1 is functionally equivalent (IKEv2 changed some names
+	 * and re-wrote the text so that it was clear that this is how
+	 * things really work).
+	 *
+	 * XXX: IKEv1 should use this mechanism.
+	 */
+	struct fixup previous_ss;
 };
+
 typedef struct packet_byte_stream pb_stream;
 
 extern const pb_stream empty_pbs;
@@ -173,6 +208,7 @@ extern bool ikev1_out_generic_raw(uint8_t np, struct_desc *sd,
 #define ikev1_out_generic_chunk(np, sd, outs, ch, name) \
 	ikev1_out_generic_raw((np), (sd), (outs), (ch).ptr, (ch).len, (name))
 extern bool out_zero(size_t len, pb_stream *outs, const char *name) MUST_USE_RESULT;
+extern bool out_repeated_byte(uint8_t, size_t len, pb_stream *outs, const char *name) MUST_USE_RESULT;
 extern bool out_raw(const void *bytes, size_t len, pb_stream *outs,
 		    const char *name) MUST_USE_RESULT;
 #define out_chunk(ch, outs, name) out_raw((ch).ptr, (ch).len, (outs), (name))

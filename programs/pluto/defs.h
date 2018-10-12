@@ -7,7 +7,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -75,10 +75,6 @@ extern bool all_zero(const unsigned char *m, size_t len);
 #define DISCARD_CONST(vartype, varname) ((vartype)(uintptr_t)(varname))
 #endif
 
-/*
- * So code can determine if it isn't running on the main thread; or
- * that its thread is valid.
- */
-extern pthread_t main_thread;
+extern bool in_main_thread(void);	/* in plutomain.c */
 
 #endif /* _DEFS_H */

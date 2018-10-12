@@ -8,7 +8,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -135,13 +135,13 @@ struct lswlog;
  * assumed to be present and the tool being run.
  *
  *                           PLUTO
- *              SEVERITY  WHACK  PREFIX   TOOLS
+ *              SEVERITY  WHACK  PREFIX    TOOLS    PREFIX
  *   default    WARNING    yes    state     -v
  *   log        WARNING     -     state     -v
  *   debug      DEBUG       -     "| "     debug?
- *   error      ERR         -    ERROR     yes
- *   whack         -       yes    NNN      n/a?
- *   file          -        -      -        -
+ *   error      ERR         -    ERROR     STDERR  PROG:_...
+ *   whack         -       yes    NNN      STDOUT  ...
+ *   file          -        -      -         -
  *
  * The streams will then add additional prefixes as required.  For
  * instance, the log_whack stream will prefix a timestamp when sending
@@ -212,6 +212,10 @@ extern int libreswan_log(const char *fmt, ...) PRINTF_LIKE(1);
  * XXX: See programs/pluto/log.h for interface; should only be used in
  * pluto.  This code assumes that it is being called from the main
  * thread.
+ *
+ * LSWLOG_INFO() sends stuff just to "whack" (or for a tool STDERR?).
+ * XXX: there is no prefix, bug?  Should it send stuff out with level
+ * RC_COMMENT?
  */
 
 #define LSWLOG_WHACK(RC, BUF)						\
@@ -219,6 +223,9 @@ extern int libreswan_log(const char *fmt, ...) PRINTF_LIKE(1);
 		whack_log_pre(RC, BUF),					\
 		lswlog_to_whack_stream(BUF))
 
+/* XXX: should be stdout?!? */
+#define LSWLOG_INFO(BUF)					\
+	LSWLOG_(true, BUF, , lswlog_to_whack_stream(buf))
 
 /*
  * Log the message to the main log stream, and (at level RC_LOG) to
@@ -317,7 +324,6 @@ void lswlog_dbg_pre(struct lswlog *buf);
 #define LSWDBGP(DEBUG, BUF) LSWDBG_(DBGP(DEBUG), BUF)
 #define LSWLOG_DEBUG(BUF) LSWDBG_(true, BUF)
 
-
 /*
  * Impair pluto's behaviour.
  *
@@ -392,17 +398,8 @@ size_t lswlog_bytes(struct lswlog *log, const uint8_t *bytes,
 /* primitive to point the LSWBUF at and initialize ARRAY.  */
 #define LSWBUF_ARRAY_(ARRAY, SIZEOF_ARRAY, BUF)				\
 	/* point BUF at LSWLOG at ARRAY */				\
-	for (struct lswlog lswlog = { .array = ARRAY,			\
-				.len = 0,				\
-				.bound = SIZEOF_ARRAY - 2,		\
-				.roof = SIZEOF_ARRAY - 1,		\
-				.dots = "...", },			\
-		     *BUF = &lswlog;					\
-	     lswlog_p; lswlog_p = false)				\
-		/* initialize ARRAY */					\
-		for (ARRAY[lswlog.len] = ARRAY[lswlog.bound] = '\0',	\
-			     ARRAY[lswlog.roof] = LSWBUF_CANARY;	\
-		     lswlog_p; lswlog_p = false)
+	for (struct lswlog lswlog_, *BUF = lswlog(&lswlog_, ARRAY, SIZEOF_ARRAY); \
+	     lswlog_p; lswlog_p = false)
 
 /* primitive to construct an LSWBUF on the stack.  */
 #define LSWBUF_(BUF)							\
@@ -626,6 +623,10 @@ void libreswan_bad_case(const char *expression, long value,
  * saved.
  *
  * XXX: Is error stream really the right place for this?
+ *
+ * LSWLOG_ERROR() sends an arbitrary message to the error stream (in
+ * tools that's STDERR).  XXX: Should LSWLOG_ERRNO() and LSWERR() be
+ * merged.  XXX: should LSWLOG_ERROR() use a different prefix?
  */
 
 void lswlog_errno_prefix(struct lswlog *buf, const char *prefix);
@@ -643,6 +644,10 @@ void lswlog_errno_suffix(struct lswlog *buf, int e);
 #define LSWLOG_ERRNO(ERRNO, BUF)					\
 	LSWLOG_ERRNO_("ERROR: ", ERRNO, BUF)
 
+#define LSWLOG_ERROR(BUF)			\
+	LSWLOG_(true, BUF,			\
+		lswlog_log_prefix(BUF),		\
+		lswlog_to_error_stream(buf))
 
 /*
  * ARRAY, a previously allocated array, containing the accumulated
@@ -685,6 +690,8 @@ struct lswlog {
 	size_t roof;
 	const char *dots;
 };
+
+struct lswlog *lswlog(struct lswlog *buf, char *array, size_t sizeof_array);
 
 /*
  * To debug, set this to printf or similar.

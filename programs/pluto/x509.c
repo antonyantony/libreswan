@@ -18,7 +18,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -830,7 +830,7 @@ static lsw_cert_ret pluto_process_certs(struct state *st,
  * Decode the CERT payload of Phase 1.
  */
 /* todo:
- * http://tools.ietf.org/html/rfc4945
+ * https://tools.ietf.org/html/rfc4945
  *  3.3.4. PKCS #7 Wrapped X.509 Certificate
  *
  *  This type defines a particular encoding, not a particular certificate
@@ -921,7 +921,7 @@ lsw_cert_ret ike_decode_cert(struct msg_digest *md)
 /*
  * Decode the CR payload of Phase 1.
  *
- *  http://tools.ietf.org/html/rfc4945
+ *  https://tools.ietf.org/html/rfc4945
  *  3.2.4. PKCS #7 wrapped X.509 certificate
  *
  *  This ID type defines a particular encoding (not a particular
@@ -1219,37 +1219,37 @@ bool ikev2_build_and_ship_CR(enum ike_cert_type type,
 /*
  * For IKEv2, returns TRUE if we should be sending a cert
  */
-bool ikev2_send_cert_decision(struct state *st)
+bool ikev2_send_cert_decision(const struct state *st)
 {
-	struct connection *c = st->st_connection;
-	cert_t cert = c->spd.this.cert;
+	const struct connection *c = st->st_connection;
+	const struct end *this = &c->spd.this;
 
 	DBG(DBG_X509, DBG_log("IKEv2 CERT: send a certificate?"));
 
+	bool sendit = FALSE;
+
 	if (st->st_peer_wants_null) {
-	} else if (!(c->policy & (POLICY_ECDSA|POLICY_RSASIG))) {
+		/* ??? should we log something?  All others do. */
+	} else if (LDISJOINT(c->policy, POLICY_ECDSA | POLICY_RSASIG)) {
 		DBG(DBG_X509,
-			DBG_log("IKEv2 CERT: policy does not have ECDSA: %s",
+			DBG_log("IKEv2 CERT: policy does not have RSASIG or ECDSA: %s",
 				prettypolicy(c->policy & POLICY_ID_AUTH_MASK)));
-	/*} else if (!(c->policy & POLICY_RSASIG)) {
-		DBG(DBG_X509,
-			DBG_log("IKEv2 CERT: policy does not have RSASIG: %s",
-				prettypolicy(c->policy & POLICY_ID_AUTH_MASK)));*/
-	} else if (cert.ty == CERT_NONE || cert.u.nss_cert == NULL) {
+	} else if (this->cert.ty == CERT_NONE || this->cert.u.nss_cert == NULL) {
 		DBG(DBG_X509,
 			DBG_log("IKEv2 CERT: no certificate to send"));
-	} else if ((c->spd.this.sendcert == CERT_SENDIFASKED &&
-	     st->hidden_variables.st_got_certrequest) ||
-	    c->spd.this.sendcert == CERT_ALWAYSSEND)
+	} else if (this->sendcert == CERT_SENDIFASKED &&
+		   st->hidden_variables.st_got_certrequest)
 	{
-		DBG(DBG_X509, DBG_log("IKEv2 CERT: OK to send a certificate"));
-
-		return TRUE;
+		DBG(DBG_X509, DBG_log("IKEv2 CERT: OK to send requested certificate"));
+		sendit = TRUE;
+	} else if (this->sendcert == CERT_ALWAYSSEND) {
+		DBG(DBG_X509, DBG_log("IKEv2 CERT: OK to send a certificate (always)"));
+		sendit = TRUE;
 	} else {
 		DBG(DBG_X509,
-			DBG_log("IKEv2 CERT: no cert requested or told not to send"));
+			DBG_log("IKEv2 CERT: no cert requested or we don't want to send"));
 	}
-	return FALSE;
+	return sendit;
 }
 
 stf_status ikev2_send_certreq(struct state *st, struct msg_digest *md,
@@ -1373,10 +1373,10 @@ stf_status ikev2_send_cert(struct state *st, pb_stream *outpbs)
 					send_full_chain ? TRUE : FALSE);
 	}
 
+#if 0
 	if (chain_len == 0)
 		send_authcerts = FALSE;
 
-#if 0
  need to make that function v2 aware and move it
 
 	doi_log_cert_thinking(st->st_oakley.auth,

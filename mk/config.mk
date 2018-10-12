@@ -9,7 +9,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -234,7 +234,7 @@ BISONOSFLAGS?=
 NSSFLAGS?=$(shell pkg-config --cflags nss)
 # We don't want to link against every library pkg-config --libs nss
 # returns
-NSS_LDFLAGS ?= -lnss3 -lfreebl -lnssutil3
+NSS_LDFLAGS ?= -lnss3 -lnssutil3
 NSS_SMIME_LDFLAGS ?= -lsmime3
 NSS_UTIL_LDFLAGS ?= -lnssutil3
 NSPR_LDFLAGS ?= -lnspr4
@@ -477,7 +477,7 @@ TRANSFORM_VARIABLES = sed -e "s:@IPSECVERSION@:$(IPSECVERSION):g" \
 POOL?=/vol/pool
 # support types are fedora and ubuntu
 OSTYPE?=fedora
-OSMEDIA?=http://download.fedoraproject.org/pub/fedora/linux/releases/21/Server/x86_64/os/
+OSMEDIA?=http://download.fedoraproject.org/pub/fedora/linux/releases/28/Server/x86_64/os/
 
 # Ubuntu media
 # OSTYPE?=ubuntu

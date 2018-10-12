@@ -6,14 +6,14 @@
  * Copyright (C) 2012 Philippe Vouters <philippe.vouters@laposte.net>
  * Copyright (C) 2013 David McCullough <ucdevel@gmail.com>
  * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
- * Copyright (C) 2016-2017, Andrew Cagney
+ * Copyright (C) 2016-2018, Andrew Cagney
  * Copyright (C) 2017-2018 Sahana Prasad <sahana.prasad07@gmail.com>
  * Copyright (C) 2017 Vukasin Karadzic <vukasin.karadzic@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -382,17 +382,12 @@ enum {
 	IMPAIR_MAJOR_VERSION_BUMP_IX,
 	IMPAIR_MINOR_VERSION_BUMP_IX,
 
-	IMPAIR_RETRANSMITS_IX,
 	IMPAIR_TIMEOUT_ON_RETRANSMIT_IX,
 	IMPAIR_DELETE_ON_RETRANSMIT_IX,
 	IMPAIR_SUPPRESS_RETRANSMITS_IX,
 
 	IMPAIR_SEND_BOGUS_PAYLOAD_FLAG_IX,
 	IMPAIR_SEND_BOGUS_ISAKMP_FLAG_IX,
-
-	IMPAIR_SEND_NO_KE_PAYLOAD_IX,
-	IMPAIR_SEND_EMPTY_KE_PAYLOAD_IX,
-	IMPAIR_SEND_ZERO_KE_PAYLOAD_IX,
 
 	IMPAIR_SEND_NO_DELETE_IX,
 	IMPAIR_SEND_NO_IKEV2_AUTH_IX,
@@ -444,17 +439,12 @@ enum {
 #define IMPAIR_MAJOR_VERSION_BUMP	LELEM(IMPAIR_MAJOR_VERSION_BUMP_IX)
 #define IMPAIR_MINOR_VERSION_BUMP	LELEM(IMPAIR_MINOR_VERSION_BUMP_IX)
 
-#define IMPAIR_RETRANSMITS	LELEM(IMPAIR_RETRANSMITS_IX)
 #define IMPAIR_TIMEOUT_ON_RETRANSMIT	LELEM(IMPAIR_TIMEOUT_ON_RETRANSMIT_IX)
 #define IMPAIR_DELETE_ON_RETRANSMIT	LELEM(IMPAIR_DELETE_ON_RETRANSMIT_IX)
 #define IMPAIR_SUPPRESS_RETRANSMITS	LELEM(IMPAIR_SUPPRESS_RETRANSMITS_IX)
 
 #define IMPAIR_SEND_BOGUS_PAYLOAD_FLAG	LELEM(IMPAIR_SEND_BOGUS_PAYLOAD_FLAG_IX)
 #define IMPAIR_SEND_BOGUS_ISAKMP_FLAG	LELEM(IMPAIR_SEND_BOGUS_ISAKMP_FLAG_IX)
-
-#define IMPAIR_SEND_NO_KE_PAYLOAD	LELEM(IMPAIR_SEND_NO_KE_PAYLOAD_IX)
-#define IMPAIR_SEND_EMPTY_KE_PAYLOAD	LELEM(IMPAIR_SEND_EMPTY_KE_PAYLOAD_IX)
-#define IMPAIR_SEND_ZERO_KE_PAYLOAD	LELEM(IMPAIR_SEND_ZERO_KE_PAYLOAD_IX)
 
 #define IMPAIR_SEND_NO_DELETE	LELEM(IMPAIR_SEND_NO_DELETE_IX)
 #define IMPAIR_SEND_NO_IKEV2_AUTH	LELEM(IMPAIR_SEND_NO_IKEV2_AUTH_IX)

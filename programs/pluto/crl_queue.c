@@ -5,7 +5,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -35,6 +35,7 @@ static generalName_t *deep_clone_general_names(generalName_t *orig)
 		*new = alloc_thing(generalName_t, "crl_queue: general name");
 		(*new)->kind = orig->kind;
 		(*new)->name = clone_chunk(orig->name, "crl_queue: general name name");
+		(*new)->next = NULL;
 		orig = orig->next;
 		new = &(*new)->next;
 	}

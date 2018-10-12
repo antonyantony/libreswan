@@ -9,7 +9,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -215,6 +215,12 @@ static bool out_attr(int type,
 static bool ikev1_verify_esp(const struct connection *c,
 			     const struct trans_attrs *ta)
 {
+	if (!(c->policy & POLICY_ENCRYPT)) {
+		DBGF(DBG_PARSING,
+		     "ignoring ESP proposal as POLICY_ENCRYPT unset");
+		return false;       /* try another */
+	}
+
 	/*
 	 * Check encryption.
 	 *
@@ -318,9 +324,14 @@ static bool ikev1_verify_esp(const struct connection *c,
 	return false;
 }
 
-static bool ikev1_verify_ah(const struct trans_attrs *ta,
-			    const struct alg_info_esp *alg_info)
+static bool ikev1_verify_ah(const struct connection *c,
+			    const struct trans_attrs *ta)
 {
+	if (!(c->policy & POLICY_AUTHENTICATE)) {
+		DBGF(DBG_PARSING,
+		     "ignoring AH proposal as POLICY_AUTHENTICATE unset");
+		return false;       /* try another */
+	}
 	if (ta->ta_encrypt != NULL) {
 		PEXPECT_LOG("AH IPsec Transform refused: contains unexpected encryption %s",
 			    ta->ta_encrypt->common.fqn);
@@ -340,13 +351,13 @@ static bool ikev1_verify_ah(const struct trans_attrs *ta,
 			    ta->ta_dh->common.fqn);
 		return false;
 	}
-	if (alg_info == NULL) {
+	if (c->alg_info_esp == NULL) {
 		DBG(DBG_CONTROL,
 		    DBG_log("AH IPsec Transform verified unconditionally; no alg_info to check against"));
 		return true;
 	}
 
-	FOR_EACH_ESP_INFO(alg_info, esp_info) {	/* really AH */
+	FOR_EACH_ESP_INFO(c->alg_info_esp, esp_info) {	/* really AH */
 		if (esp_info->integ == ta->ta_integ) {
 			DBG(DBG_CONTROL,
 			    DBG_log("ESP IPsec Transform verified; matches alg_info entry"));
@@ -767,16 +778,78 @@ bool ikev1_out_sa(pb_stream *outs,
 				 * lengths (and if it is wrong it is
 				 * deliberate).  I.e., don't try to
 				 * also handle it here.
+				 *
+				 * OTOH, do completely override
+				 * key-lengths when so impaired.
 				 */
+				enum send_impairment impair_key_length_attribute =
+					(oakley_mode ? impair_ike_key_length_attribute
+					 : impair_child_key_length_attribute);
+				long key_length_to_impair = -1;
 				for (unsigned an = 0; an != t->attr_cnt; an++) {
 					const struct db_attr *a = &t->attrs[an];
-
+					/*
+					 * Strip out or duplicate
+					 * key-length attibute?
+					 */
+					if (impair_key_length_attribute > 0 &&
+					    (oakley_mode ? a->type.oakley == OAKLEY_KEY_LENGTH
+					     :  a->type.ipsec == KEY_LENGTH)) {
+						key_length_to_impair = a->val;
+						libreswan_log("IMPAIR: stripping key-length");
+						continue;
+					}
 					if (!out_attr(oakley_mode ? a->type.oakley : a->type.ipsec ,
 						      a->val,
 						      attr_desc,
 						      attr_val_descs,
 						      &trans_pbs))
 						goto fail;
+				}
+				/*
+				 * put back a key-length?
+				 */
+				switch (impair_key_length_attribute) {
+				case SEND_NORMAL:
+					break;
+				case SEND_EMPTY:
+					/*
+					 * XXX: how? IKEv2 sends a
+					 * long form packet of no
+					 * length.
+					 */
+					libreswan_log("IMPAIR: key-length-attribute:empty not implemented");
+					break;
+				case SEND_OMIT:
+					libreswan_log("IMPAIR: not sending key-length attribute");
+					break;
+				case SEND_DUPLICATE:
+					if (key_length_to_impair >= 0) {
+						libreswan_log("IMPAIR: duplicating key-length");
+						for (unsigned dup = 0; dup < 2; dup++) {
+							if (!out_attr(oakley_mode ? OAKLEY_KEY_LENGTH : KEY_LENGTH,
+								      key_length_to_impair,
+								      attr_desc,
+								      attr_val_descs,
+								      &trans_pbs))
+								goto fail;
+						}
+					} else {
+						libreswan_log("IMPAIR: no key-length to duplicate");
+					}
+					break;
+				case SEND_ROOF:
+				default:
+				{
+					unsigned keylen = impair_key_length_attribute - SEND_ROOF;
+					libreswan_log("IMPAIR: sending key-length attribute value %u",
+						      keylen);
+					if (!out_attr(oakley_mode ? OAKLEY_KEY_LENGTH : KEY_LENGTH,
+						      keylen, attr_desc, attr_val_descs,
+						      &trans_pbs))
+						goto fail;
+					break;
+				}
 				}
 				close_output_pbs(&trans_pbs);
 			}
@@ -1438,11 +1511,11 @@ rsasig_common:
 				break;
 
 			case OAKLEY_KEY_LENGTH | ISAKMP_ATTR_AF_TV:
-				if (!LHAS(seen_attrs,
-					  OAKLEY_ENCRYPTION_ALGORITHM)) {
+				if (!LHAS(seen_attrs, OAKLEY_ENCRYPTION_ALGORITHM)) {
 					ugh = "OAKLEY_KEY_LENGTH attribute not preceded by OAKLEY_ENCRYPTION_ALGORITHM attribute";
 					break;
 				}
+				/* because the encrypt algorithm wasn't valid? */
 				if (ta.ta_encrypt == NULL) {
 					ugh = "NULL encrypter with seen OAKLEY_ENCRYPTION_ALGORITHM";
 					break;
@@ -1450,14 +1523,8 @@ rsasig_common:
 				/*
 				 * check if this keylen is compatible
 				 * with specified alg_info_ike.
-				 *
-				 * XXX: The val!=0 guard comes from
-				 * the old ike_alg_enc_ok() function
-				 * which only checked the key bit
-				 * length, when val was non-zero.
-				 * Should val==0 check be added?
 				 */
-				if (val != 0 && !encrypt_has_key_bit_length(ta.ta_encrypt, val)) {
+				if (!encrypt_has_key_bit_length(ta.ta_encrypt, val)) {
 					ugh = "peer proposed key_len not valid for encrypt algo setup specified";
 					break;
 				}
@@ -2041,6 +2108,16 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 			break;
 
 		case KEY_LENGTH | ISAKMP_ATTR_AF_TV:
+			if (attrs->transattrs.ta_encrypt == NULL) {
+				loglog(RC_LOG_SERIOUS,
+				       "IKEv1 key-length attribute without encryption algorithm");
+				return false;
+			}
+			if (!encrypt_has_key_bit_length(attrs->transattrs.ta_encrypt, val)) {
+				loglog(RC_LOG_SERIOUS,
+				       "IKEv1 key-length attribute without encryption algorithm");
+				return false;
+			}
 			attrs->transattrs.enckeylen = val;
 			break;
 
@@ -2542,8 +2619,7 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 				continue; /* we didn't find a nice one */
 
 			/* Check AH proposal with configuration */
-			if (!ikev1_verify_ah(&ah_attrs.transattrs,
-					     c->alg_info_esp)) {
+			if (!ikev1_verify_ah(c, &ah_attrs.transattrs)) {
 				continue;
 			}
 			ah_attrs.spi = ah_spi;

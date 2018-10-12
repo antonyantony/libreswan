@@ -14,7 +14,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -100,7 +100,7 @@ void retransmit_v1_msg(struct state *st)
 
 		/* ??? DBG and real-world code mixed */
 		if (!DBGP(DBG_WHACKWATCH)) {
-			if (st->st_whack_sock != NULL_FD) {
+			if (fd_p(st->st_whack_sock)) {
 				/*
 				 * Release whack because the observer
 				 * will get bored.
@@ -204,7 +204,7 @@ void retransmit_v2_msg(struct state *st)
 			"starting keying attempt %ld of at most %ld",
 			try, try_limit);
 
-		if (st->st_whack_sock != NULL_FD) {
+		if (fd_p(st->st_whack_sock)) {
 			/*
 			 * Release whack because the observer will
 			 * get bored.
@@ -271,17 +271,20 @@ bool ikev2_schedule_retry(struct state *st)
 		} else {
 			lswlogf(buf, "at most %ld", try_limit);
 		}
-		if (st->st_whack_sock != NULL_FD) {
+		if (fd_p(st->st_whack_sock)) {
 			lswlogs(buf, ", but releasing whack");
 		}
 	}
 
 	/*
-	 * XXX: Need to release both the parent and the child!  Why?
+	 * release_pending_whacks() will release ST (and ST's parent
+	 * if it exists and has the same whack).  For instance, when
+	 * the AUTH exchange somehow digs a hole where the child sa
+	 * gets a timeout.
+	 *
+	 * XXX: The child SA 'diging a hole' is likely a bug.
 	 */
 	release_pending_whacks(st, "scheduling a retry");
-	struct state *pst = IS_CHILD_SA(st) ? state_with_serialno(st->st_clonedfrom) : st;
-	release_whack(pst);
 
 	/*
 	 * XXX: Should the parent or child get re-scheduled?  Does it

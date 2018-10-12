@@ -11,7 +11,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -30,7 +30,7 @@
  * Deal with RFC Resource Records as defined in rfc3110 (nee rfc2537).
  */
 
-err_t rsa_pubkey_to_rfc_resource_record(chunk_t exponent, chunk_t modulus, chunk_t *rr)
+static err_t rsa_pubkey_to_rfc_resource_record(chunk_t exponent, chunk_t modulus, chunk_t *rr)
 {
 	*rr = empty_chunk;
 
@@ -66,7 +66,7 @@ err_t rsa_pubkey_to_rfc_resource_record(chunk_t exponent, chunk_t modulus, chunk
 	return NULL;
 }
 
-err_t rfc_resource_record_to_rsa_pubkey(chunk_t rr, chunk_t *e, chunk_t *n)
+static err_t rfc_resource_record_to_rsa_pubkey(chunk_t rr, chunk_t *e, chunk_t *n)
 {
 	*e = empty_chunk;
 	*n = empty_chunk;
@@ -164,14 +164,14 @@ err_t rsa_pubkey_to_base64(chunk_t exponent, chunk_t modulus, char **base64_rr)
 	return NULL;
 }
 
-#if 0
+#if 0	/* not used (yet?).  Good thing since it isn't implemented. */
 err_t base64_to_rsa_pubkey(const char *rr, chunk_t *exponent, chunk_t *modulus)
 {
 	return "not implemented";
 }
 #endif
 
-#if 0
+#if 0	/* not used (yet?) */
 err_t pack_RSA_public_key(const struct RSA_public_key *rsa, chunk_t *rr)
 {
 	return rsa_pubkey_to_rfc_resource_record(rsa->e, rsa->n, rr);
