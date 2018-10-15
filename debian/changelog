@@ -1,3 +1,10 @@
+libreswan (3.27-2) unstable; urgency=medium
+
+  * avoid Curve25519 when building against nss that does not support it
+  * backport patch from upstream to clean up ia64 build
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Mon, 15 Oct 2018 13:21:24 -0400
+
 libreswan (3.27-1) unstable; urgency=medium
 
   * New upstream release.
