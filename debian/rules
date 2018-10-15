@@ -23,6 +23,7 @@ CV25519_AVAILABILITY=$(shell if grep -q SEC_OID_CURVE25519 /usr/include/nss/seco
 
 override_dh_auto_build:
 	$(MAKE) programs \
+		ARCH=$(DEB_HOST_ARCH) \
 		IPSECVERSION=$(DEB_VERSION_UPSTREAM) \
 		INC_USRLOCAL=/usr \
 		FINALLIBEXECDIR=/usr/lib/ipsec \
@@ -42,6 +43,7 @@ override_dh_auto_build:
 override_dh_auto_install-arch:
 	# Add here commands to install the package into debian/libreswan
 	$(MAKE) install \
+		ARCH=$(DEB_HOST_ARCH) \
 		INC_USRLOCAL=/usr \
 		FINALLIBEXECDIR=/usr/lib/ipsec \
 		INC_MANDIR=share/man \
