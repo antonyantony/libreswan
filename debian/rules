@@ -19,6 +19,8 @@ else
   ENABLE_LIBCAP_NG = USE_LIBCAP_NG=false
 endif
 
+CV25519_AVAILABILITY=$(shell if grep -q SEC_OID_CURVE25519 /usr/include/nss/secoidt.h; then echo true; else echo false; fi)
+
 override_dh_auto_build:
 	$(MAKE) programs \
 		IPSECVERSION=$(DEB_VERSION_UPSTREAM) \
@@ -32,6 +34,7 @@ override_dh_auto_build:
 		USE_FIPSCHECK=false \
 		$(ENABLE_LIBCAP_NG) \
 		$(ENABLE_SELINUX) \
+		USE_DH31=$(CV25519_AVAILABILITY) \
 		USE_KLIPS=false \
 		USE_DNSSEC=true \
 		DEFAULT_DNSSEC_ROOTKEY_FILE=/usr/share/dns/root.key
