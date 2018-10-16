@@ -1,3 +1,9 @@
+libreswan (3.27-4) unstable; urgency=medium
+
+  * order object files for reproducible linking
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Tue, 16 Oct 2018 10:27:14 -0400
+
 libreswan (3.27-3) unstable; urgency=medium
 
   * explicitly set ARCH for reproducibility
