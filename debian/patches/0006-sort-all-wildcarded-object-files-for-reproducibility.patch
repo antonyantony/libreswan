@@ -1,0 +1,56 @@
+From: Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+Date: Tue, 16 Oct 2018 10:22:40 -0400
+Subject: sort all wildcarded object files for reproducibility
+
+Without this sort, the linker may assemble the final object files in
+the order in which their source files are found in the filesystem (or
+however make chooses to interpret the $(wildcard ...) function).
+
+By sorting the results lexicographically, we aim to assemble
+byte-identical output files, regardless of the filesystem order or
+other possible non-determinism introduced by make.
+---
+ programs/algparse/Makefile | 2 +-
+ programs/cavp/Makefile     | 2 +-
+ programs/spi/Makefile      | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/programs/algparse/Makefile b/programs/algparse/Makefile
+index f42b9f6..5aa55d1 100644
+--- a/programs/algparse/Makefile
++++ b/programs/algparse/Makefile
+@@ -22,7 +22,7 @@ OBJS += $(PROGRAM).o
+ # XXX: For the moment build things by pulling in chunks of pluto.
+ # What, if anything, should be moved to libswan or another library?
+ #
+-PLUTOOBJS += $(filter-out ike_alg_test.o, $(patsubst %.c,%.o,$(notdir $(wildcard $(top_srcdir)/programs/pluto/ike_alg*.c))))
++PLUTOOBJS += $(filter-out ike_alg_test.o, $(patsubst %.c,%.o,$(notdir $(sort $(wildcard $(top_srcdir)/programs/pluto/ike_alg*.c)))))
+ PLUTOOBJS += crypt_symkey.o
+ PLUTOOBJS += crypt_hash.o
+ PLUTOOBJS += crypt_prf.o
+diff --git a/programs/cavp/Makefile b/programs/cavp/Makefile
+index e7860ce..88156eb 100644
+--- a/programs/cavp/Makefile
++++ b/programs/cavp/Makefile
+@@ -41,7 +41,7 @@ OBJS += acvp.o
+ # What, if anything, should be moved to libswan or another library?
+ #
+ CFLAGS += -I$(top_srcdir)/programs/pluto
+-PLUTOOBJS += $(patsubst %.c,%.o,$(notdir $(wildcard $(top_srcdir)/programs/pluto/ike_alg*.c)))
++PLUTOOBJS += $(patsubst %.c,%.o,$(notdir $(sort $(wildcard $(top_srcdir)/programs/pluto/ike_alg*.c))))
+ PLUTOOBJS += crypt_symkey.o
+ PLUTOOBJS += crypt_hash.o
+ PLUTOOBJS += test_buffer.o
+diff --git a/programs/spi/Makefile b/programs/spi/Makefile
+index 9faac62..f7b2078 100644
+--- a/programs/spi/Makefile
++++ b/programs/spi/Makefile
+@@ -25,7 +25,7 @@ OBJS += $(PROGRAM).o
+ # What, if anything, should be moved to libswan or another library?
+ #
+ CFLAGS += -I$(top_srcdir)/programs/pluto
+-PLUTOOBJS += $(patsubst %.c,%.o,$(notdir $(wildcard $(top_srcdir)/programs/pluto/ike_alg*.c)))
++PLUTOOBJS += $(patsubst %.c,%.o,$(notdir $(sort $(wildcard $(top_srcdir)/programs/pluto/ike_alg*.c))))
+ PLUTOOBJS += crypt_symkey.o
+ PLUTOOBJS += crypt_hash.o
+ PLUTOOBJS += test_buffer.o
