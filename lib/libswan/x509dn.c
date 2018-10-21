@@ -48,67 +48,70 @@
 static void hex_str(chunk_t bin, chunk_t *str);	/* forward */
 
 /* coding of X.501 distinguished name */
-typedef struct {
+typedef const struct {
 	const char *name;
-	chunk_t oid;
-	u_char type;
+	const unsigned char *oid_ptr;
+	size_t oid_len;
+	asn1_t type;
 } x501rdn_t;
 
 /* X.501 acronyms for well known object identifiers (OIDs) */
-static u_char oid_ND[] = { 0x02, 0x82, 0x06, 0x01, 0x0A, 0x07, 0x14 };
-static u_char oid_UID[] = { 0x09, 0x92, 0x26, 0x89, 0x93, 0xF2, 0x2C, 0x64,
+static const unsigned char oid_ND[] = { 0x02, 0x82, 0x06, 0x01, 0x0A, 0x07, 0x14 };
+static const unsigned char oid_UID[] = { 0x09, 0x92, 0x26, 0x89, 0x93, 0xF2, 0x2C, 0x64,
 				0x01, 0x01 };
-static u_char oid_DC[] = { 0x09, 0x92, 0x26, 0x89, 0x93, 0xF2, 0x2C, 0x64,
+static const unsigned char oid_DC[] = { 0x09, 0x92, 0x26, 0x89, 0x93, 0xF2, 0x2C, 0x64,
 				0x01, 0x19 };
-static u_char oid_CN[] = { 0x55, 0x04, 0x03 };
-static u_char oid_S[] = { 0x55, 0x04, 0x04 };
-static u_char oid_SN[] = { 0x55, 0x04, 0x05 };
-static u_char oid_C[] = { 0x55, 0x04, 0x06 };
-static u_char oid_L[] = { 0x55, 0x04, 0x07 };
-static u_char oid_ST[] = { 0x55, 0x04, 0x08 };
-static u_char oid_O[] = { 0x55, 0x04, 0x0A };
-static u_char oid_OU[] = { 0x55, 0x04, 0x0B };
-static u_char oid_T[] = { 0x55, 0x04, 0x0C };
-static u_char oid_D[] = { 0x55, 0x04, 0x0D };
-static u_char oid_N[] = { 0x55, 0x04, 0x29 };
-static u_char oid_G[] = { 0x55, 0x04, 0x2A };
-static u_char oid_I[] = { 0x55, 0x04, 0x2B };
-static u_char oid_ID[] = { 0x55, 0x04, 0x2D };
-static u_char oid_E[] = { 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09,
+static const unsigned char oid_CN[] = { 0x55, 0x04, 0x03 };
+static const unsigned char oid_S[] = { 0x55, 0x04, 0x04 };
+static const unsigned char oid_SN[] = { 0x55, 0x04, 0x05 };
+static const unsigned char oid_C[] = { 0x55, 0x04, 0x06 };
+static const unsigned char oid_L[] = { 0x55, 0x04, 0x07 };
+static const unsigned char oid_ST[] = { 0x55, 0x04, 0x08 };
+static const unsigned char oid_O[] = { 0x55, 0x04, 0x0A };
+static const unsigned char oid_OU[] = { 0x55, 0x04, 0x0B };
+static const unsigned char oid_T[] = { 0x55, 0x04, 0x0C };
+static const unsigned char oid_D[] = { 0x55, 0x04, 0x0D };
+static const unsigned char oid_N[] = { 0x55, 0x04, 0x29 };
+static const unsigned char oid_G[] = { 0x55, 0x04, 0x2A };
+static const unsigned char oid_I[] = { 0x55, 0x04, 0x2B };
+static const unsigned char oid_ID[] = { 0x55, 0x04, 0x2D };
+static const unsigned char oid_E[] = { 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09,
 				0x01 };
-static u_char oid_UN[] = { 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09,
+static const unsigned char oid_UN[] = { 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09,
 				0x02 };
-static u_char oid_TCGID[] = { 0x2B, 0x06, 0x01, 0x04, 0x01, 0x89, 0x31, 0x01,
+static const unsigned char oid_TCGID[] = { 0x2B, 0x06, 0x01, 0x04, 0x01, 0x89, 0x31, 0x01,
 				0x01, 0x02, 0x02, 0x4B };
 
 static const x501rdn_t x501rdns[] = {
-	{ "ND", { oid_ND, 7 }, ASN1_PRINTABLESTRING },
-	{ "UID", { oid_UID, 10 }, ASN1_PRINTABLESTRING },
-	{ "DC", { oid_DC, 10 }, ASN1_PRINTABLESTRING },
-	{ "CN", { oid_CN, 3 }, ASN1_PRINTABLESTRING },
-	{ "S", { oid_S, 3 }, ASN1_PRINTABLESTRING },
-	{ "SN", { oid_SN, 3 }, ASN1_PRINTABLESTRING },
-	{ "serialNumber", { oid_SN, 3 }, ASN1_PRINTABLESTRING },
-	{ "C", { oid_C, 3 }, ASN1_PRINTABLESTRING },
-	{ "L", { oid_L, 3 }, ASN1_PRINTABLESTRING },
-	{ "ST", { oid_ST, 3 }, ASN1_PRINTABLESTRING },
-	{ "O", { oid_O, 3 }, ASN1_PRINTABLESTRING },
-	{ "OU", { oid_OU, 3 }, ASN1_PRINTABLESTRING },
-	{ "T", { oid_T, 3 }, ASN1_PRINTABLESTRING },
-	{ "D", { oid_D, 3 }, ASN1_PRINTABLESTRING },
-	{ "N", { oid_N, 3 }, ASN1_PRINTABLESTRING },
-	{ "G", { oid_G, 3 }, ASN1_PRINTABLESTRING },
-	{ "I", { oid_I, 3 }, ASN1_PRINTABLESTRING },
-	{ "ID", { oid_ID, 3 }, ASN1_PRINTABLESTRING },
-	{ "E", { oid_E, 9 }, ASN1_IA5STRING },
-	{ "Email", { oid_E, 9 }, ASN1_IA5STRING },
-	{ "emailAddress", { oid_E, 9 }, ASN1_IA5STRING },
-	{ "UN", { oid_UN, 9 }, ASN1_IA5STRING },
-	{ "unstructuredName", { oid_UN, 9 }, ASN1_IA5STRING },
-	{ "TCGID", { oid_TCGID, 12 }, ASN1_PRINTABLESTRING }
-};
+#	define OC(oid) oid, sizeof(oid)
 
-#define X501_RDN_ROOF elemsof(x501rdns)
+	{ "ND", OC(oid_ND), ASN1_PRINTABLESTRING },
+	{ "UID", OC(oid_UID), ASN1_PRINTABLESTRING },
+	{ "DC", OC(oid_DC), ASN1_PRINTABLESTRING },
+	{ "CN", OC(oid_CN), ASN1_PRINTABLESTRING },
+	{ "S", OC(oid_S), ASN1_PRINTABLESTRING },
+	{ "SN", OC(oid_SN), ASN1_PRINTABLESTRING },
+	{ "serialNumber", OC(oid_SN), ASN1_PRINTABLESTRING },
+	{ "C", OC(oid_C), ASN1_PRINTABLESTRING },
+	{ "L", OC(oid_L), ASN1_PRINTABLESTRING },
+	{ "ST", OC(oid_ST), ASN1_PRINTABLESTRING },
+	{ "O", OC(oid_O), ASN1_PRINTABLESTRING },
+	{ "OU", OC(oid_OU), ASN1_PRINTABLESTRING },
+	{ "T", OC(oid_T), ASN1_PRINTABLESTRING },
+	{ "D", OC(oid_D), ASN1_PRINTABLESTRING },
+	{ "N", OC(oid_N), ASN1_PRINTABLESTRING },
+	{ "G", OC(oid_G), ASN1_PRINTABLESTRING },
+	{ "I", OC(oid_I), ASN1_PRINTABLESTRING },
+	{ "ID", OC(oid_ID), ASN1_PRINTABLESTRING },
+	{ "E", OC(oid_E), ASN1_IA5STRING },
+	{ "Email", OC(oid_E), ASN1_IA5STRING },
+	{ "emailAddress", OC(oid_E), ASN1_IA5STRING },
+	{ "UN", OC(oid_UN), ASN1_IA5STRING },
+	{ "unstructuredName", OC(oid_UN), ASN1_IA5STRING },
+	{ "TCGID", OC(oid_TCGID), ASN1_PRINTABLESTRING }
+
+#	undef OC
+};
 
 static void format_chunk(chunk_t *ch, const char *format, ...) PRINTF_LIKE(2);
 
@@ -378,247 +381,151 @@ int dntoa_or_null(char *dst, size_t dstlen, chunk_t dn, const char *null_dn)
 }
 
 /*
- * function for use in atodn() that escapes a character in
- * in the leftid/rightid string. Needed for '//' and ',,'
- * escapes for OID fields
- */
-static void escape_char(char *str, char esc)
-{
-	char *src, *dst;
-	int once = 0;
-
-	src = dst = str;
-	while (*src != '\0' && once == 0) {
-		*dst = *src;
-		src++;
-		if (*dst++ == esc && *src == esc) {
-			src++;
-			once = 1;
-		}
-	}
-	while (*src != '\0') {
-		*dst = *src;
-		src++;
-		dst++;
-	}
-	*dst = '\0';
-}
-
-/*
  * Converts an LDAP-style human-readable ASCII-encoded
- * ASN.1 distinguished name into binary DER-encoded format
+ * ASN.1 distinguished name into binary DER-encoded format.
+ * *dn is the result, allocated by temporary_cyclic_buffer.
+ *
+ * Structure of the output:
+ *
+ * ASN_SEQUENCE {
+ *	for each Relative DN {
+ *		ASN1_SET {
+ *			ASN1_SEQUENCE {
+ *				ASN1_OID {
+ *					op->oid
+ *				}
+ *				op->type|ASN1_PRINTABLESTRING {
+ *					name
+ *				}
+ *			}
+ *		}
+ *	}
+ * }
  */
-err_t atodn(char *src, chunk_t *dn)
+err_t atodn(const char *src, chunk_t *dn)
 {
-	/* finite state machine for atodn */
+	DBGF(DBG_X509, "ASCII to DN <= \"%s\"", src);
 
-	typedef enum {
-		SEARCH_OID = 0,
-		READ_OID = 1,
-		SEARCH_NAME = 2,
-		READ_NAME = 3,
-		UNKNOWN_OID = 4
-	} state_t;
+	/* stack of unfilled lengths */
+	unsigned char *(patchpoint[5]);	/* only 4 are actually needed */
+	unsigned char **ppp = patchpoint;
 
-	u_char oid_len_buf[ASN1_MAX_LEN_LEN];
-	u_char name_len_buf[ASN1_MAX_LEN_LEN];
-	u_char rdn_seq_len_buf[ASN1_MAX_LEN_LEN];
-	u_char rdn_set_len_buf[ASN1_MAX_LEN_LEN];
-	u_char dn_seq_len_buf[ASN1_MAX_LEN_LEN];
+	/* space for result */
+	dn->ptr = temporary_cyclic_buffer();	/* nasty! */
 
-	chunk_t asn1_oid_len = { oid_len_buf, 0 };
-	chunk_t asn1_name_len = { name_len_buf, 0 };
-	chunk_t asn1_rdn_seq_len = { rdn_seq_len_buf, 0 };
-	chunk_t asn1_rdn_set_len = { rdn_set_len_buf, 0 };
-	chunk_t asn1_dn_seq_len = { dn_seq_len_buf, 0 };
-	chunk_t oid = empty_chunk;
-	chunk_t name = empty_chunk;
+	unsigned char *dn_ptr = dn->ptr;	/* growth point */
+	unsigned char *dn_redline = dn_ptr + IDTOA_BUF;
 
-	int whitespace = 0;
-	int rdn_seq_len = 0;
-	int rdn_set_len = 0;
-	int dn_seq_len = 0;
-	int pos = 0;
+#	define START_OBJ() { *ppp++ = dn_ptr; }
 
-	err_t ugh = NULL;
-
-	/* leave room for prefix */
-	u_char *dn_ptr = dn->ptr + 1 + ASN1_MAX_LEN_LEN;
+	/* note: on buffer overflow this returns from atodn */
+#	define EXTEND_OBJ(ptr, len) { \
+		if (dn_redline - dn_ptr < (ptrdiff_t)(len)) \
+			return "DN too big"; \
+		memcpy(dn_ptr, (ptr), (len)); \
+		dn_ptr += (len); \
+	}
 
 	/*
-	 * Concatenate the contents of a chunk onto dn.
-	 * The destination pointer is incremented by the length.
-	 * Pray that there is enough space.
+	 * insert type and operand length before the operand already in the buffer
+	 * Note: on buffer overflow this returns from atodn
 	 */
-#	define addchunk(chunk) { \
-			memcpy(dn_ptr, (chunk).ptr, (chunk).len); \
-			dn_ptr += (chunk).len; \
+#	define END_OBJ(ty) { \
+		size_t len = dn_ptr - *--ppp; \
+		unsigned char len_buf[ASN1_MAX_LEN_LEN + 1] = { ty }; \
+		chunk_t obj_len = { len_buf + 1, 0 }; \
+		code_asn1_length(len, &obj_len); \
+		if (dn_redline - dn_ptr < (ptrdiff_t)obj_len.len + 1) \
+			return "DN overflow"; \
+		memmove(*ppp + obj_len.len + 1, *ppp, len); \
+		memcpy(*ppp, len_buf, obj_len.len + 1); \
+		dn_ptr += obj_len.len + 1; \
+	}
+
+	START_OBJ();	/* 0 ASN1_SEQUENCE */
+
+	for (;;) {
+		/* for each Relative DN */
+
+		/* ??? are multiple '/' and ',' OK? */
+		src += strspn(src, " /,");	/* skip any separators */
+		if (*src == '\0')
+			break;	/* finished! */
+
+		/* parse OID */
+
+		START_OBJ();	/* 1 ASN1_SET */
+		START_OBJ();	/* 2 ASN1_SEQUENCE */
+
+		size_t ol = strcspn(src, " =");	/* length of OID name */
+
+		x501rdn_t *op;	/* OID description */
+
+		for (op = x501rdns; ; op++) {
+			if (op == &x501rdns[elemsof(x501rdns)]) {
+				DBGF(DBG_X509, "unknown OID: \"%.*s\"",
+					(int)ol, src);
+				return "unknown OID in ID_DER_ASN1_DN";
+			}
+			if (strlen(op->name) == ol && strncaseeq(op->name, src, ol)) {
+				break;	/* found */
+			}
 		}
-#	define addtychunk(ty, chunk) { \
-		*dn_ptr++ = ty; \
-		addchunk(chunk); \
+
+		src += ol;
+
+		START_OBJ();	/* 3 ASN1_OID */
+		EXTEND_OBJ(op->oid_ptr, op->oid_len);
+		END_OBJ(ASN1_OID);	/* 3 */
+
+		/* parse name */
+
+		/* ??? are multiple '=' OK? */
+		src += strspn(src, " =");	/* skip any separators */
+
+		START_OBJ();	/* 3 op->type or ASN1_T61STRING */
+
+		for (;;) {
+			size_t nl = strcspn(src, ",/");
+
+			EXTEND_OBJ(src, nl);
+			src += nl;
+
+			if (src[0] == '\0' || src[0] != src[1])
+				break;	/* end of name */
+			/*
+			 * doubled: a form of escape.
+			 * Insert a single copy of the char.
+			 */
+			EXTEND_OBJ(src, 1);
+			src += 2;	/* skip both copies */
 		}
 
-	state_t state = SEARCH_OID;
+		/* remove trailing SPaces from name operand */
 
-	do {
-		switch (state) {
-		case SEARCH_OID:
-			if (*src != ' ' && *src != '/' && *src != ',') {
-				oid.ptr = (unsigned char *)src;
-				oid.len = 1;
-				state = READ_OID;
-			}
-			break;
-		case READ_OID:
-			if (*src != ' ' && *src != '=') {
-				oid.len++;
-			} else {
-				for (pos = 0; pos < (int)X501_RDN_ROOF;
-					pos++) {
-					if (strlen(x501rdns[pos].name) ==
-						oid.len &&
-						strncaseeq(x501rdns[pos].name,
-							(char *)oid.ptr,
-							oid.len))
-						break;	/* found a valid OID */
-				}
-				if (pos == X501_RDN_ROOF) {
-					ugh = "unknown OID in ID_DER_ASN1_DN";
-					state = UNKNOWN_OID;
-					break;
-				}
-				code_asn1_length(x501rdns[pos].oid.len,
-						&asn1_oid_len);
+		unsigned char *ns = ppp[-1];	/* name operand start */
 
-				/* reset oid and change state */
-				oid = empty_chunk;
-				state = SEARCH_NAME;
-			}
-			break;
-		case SEARCH_NAME:
-			if (*src != ' ' && *src != '=') {
-				name.ptr = (unsigned char *)src;
-				name.len = 1;
-				whitespace = 0;
-				state = READ_NAME;
-			}
-			break;
-		case READ_NAME:
-			if (*src != ',' && *src != '/' && *src != '\0') {
-				name.len++;
-				if (*src == ' ')
-					whitespace++;
-				else
-					whitespace = 0;
-			} else {
-				if (*src == ',') {
-					if (*++src == ',') {
-						src--;
-						name.len++;
-						escape_char(src, ',');
-						break;
-					} else {
-						src--;
-					}
-				}
-				if (*src == '/') {
-					if (*++src == '/') {
-						src--;
-						name.len++;
-						escape_char(src, '/');
-						break;
-					} else {
-						src--;
-					}
-				}
+		while (dn_ptr > ns && dn_ptr[-1] == ' ')
+			dn_ptr--;
 
-				name.len -= whitespace;
-				code_asn1_length(name.len, &asn1_name_len);
+		asn1_t t = op->type == ASN1_PRINTABLESTRING &&
+			!is_printablestring(chunk(ns, dn_ptr - ns)) ?
+				ASN1_T61STRING : op->type;
 
-				/*
-				 * compute the length of the relative
-				 * distinguished name sequence
-				 */
-				rdn_seq_len = 1 + asn1_oid_len.len +
-					x501rdns[pos].oid.len +
-					1 + asn1_name_len.len + name.len;
-				code_asn1_length(rdn_seq_len,
-						&asn1_rdn_seq_len);
+		END_OBJ(t);	/* 3 name */
 
-				/*
-				 * compute the length of the relative
-				 * distinguished name set
-				 */
-				rdn_set_len = 1 + asn1_rdn_seq_len.len +
-					rdn_seq_len;
-				code_asn1_length(rdn_set_len,
-						&asn1_rdn_set_len);
+		END_OBJ(ASN1_SEQUENCE);	/* 2 */
+		END_OBJ(ASN1_SET);	/* 1 */
+	}
 
-				/* encode the relative distinguished name */
-				if (IDTOA_BUF < dn_ptr - dn->ptr +
-				    1 + asn1_rdn_set_len.len + /* set */
-				    1 + asn1_rdn_seq_len.len + /* sequence */
-				    1 + asn1_oid_len.len + /* oid len */
-				    x501rdns[pos].oid.len + /* oid */
-				    1 + asn1_name_len.len + name.len /* type name */
-				    ) {
-					/* no room! */
-					ugh = "DN is too big";
-					state = UNKNOWN_OID;
-					/*
-					 * I think that it is safe to continue
-					 * (but perhaps pointless)
-					 */
-				} else {
-					addtychunk(ASN1_SET, asn1_rdn_set_len);
-					addtychunk(ASN1_SEQUENCE, asn1_rdn_seq_len);
-					addtychunk(ASN1_OID, asn1_oid_len);
-					addchunk(x501rdns[pos].oid);
-					/*
-					 * encode the ASN.1 character string
-					 * type of the name
-					 */
-					asn1_t nt =
-						x501rdns[pos].type == ASN1_PRINTABLESTRING &&
-						!is_printablestring(name) ?
-							ASN1_T61STRING :
-							x501rdns[pos].type;
-					addtychunk(nt, asn1_name_len);
-					addchunk(name);
+	END_OBJ(ASN1_SEQUENCE);	/* 0 */
+	dn->len = dn_ptr - dn->ptr;
+	DBG_cond_dump_chunk(DBG_X509, "ASCII to DN =>", *dn);
+	return NULL;
 
-					/*
-					 * accumulate the length of the
-					 * distinguished name sequence
-					 */
-					dn_seq_len += 1 +
-						asn1_rdn_set_len.len +
-						rdn_set_len;
-
-					/* reset name and change state */
-					name = empty_chunk;
-					state = SEARCH_OID;
-				}
-			}
-			break;
-		case UNKNOWN_OID:
-			break;
-		}
-	} while (*src++ != '\0');
-
-	/*
-	 * complete the distinguished name sequence: prefix it with
-	 * ASN1_SEQUENCE and length
-	 */
-	code_asn1_length((size_t)dn_seq_len, &asn1_dn_seq_len);
-	dn->ptr += ASN1_MAX_LEN_LEN + 1 - 1 - asn1_dn_seq_len.len;
-	dn->len = 1 + asn1_dn_seq_len.len + dn_seq_len;
-	dn_ptr = dn->ptr;
-	*dn_ptr++ = ASN1_SEQUENCE;
-	addchunk(asn1_dn_seq_len);
-	return ugh;
-#	undef addtychunk
-#	undef addchunk
+#	undef START_OBJ
+#	undef EXTEND_OBJ
+#	undef END_OBJ
 }
 
 /*
