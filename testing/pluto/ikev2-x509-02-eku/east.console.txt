@@ -1,7 +1,7 @@
-/testing/guestbin/swan-prep --x509
-Preparing X.509 files
+ipsec pluto --version |grep 'IPsec profile' > /dev/null || exit "pluto not compiled with HAS_NSS_IPSEC_PROFILE"
 east #
- certutil -D -n west -d sql:/etc/ipsec.d
+ /testing/guestbin/swan-prep --x509
+Preparing X.509 files
 east #
  ipsec start
 Redirecting to: systemctl start ipsec.service
@@ -56,6 +56,7 @@ hashsha2                                                     P,,
 nic                                                          P,,  
 north                                                        P,,  
 road                                                         P,,  
+west                                                         P,,  
 west-ec                                                      P,,  
 east #
 east #

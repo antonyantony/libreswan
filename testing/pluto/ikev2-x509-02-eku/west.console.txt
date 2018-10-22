@@ -1,4 +1,4 @@
-/testing/guestbin/swan-prep --x509
+/testing/guestbin/swan-prep --x509 --x509name west-eku
 Preparing X.509 files
 west #
  certutil -D -n east -d sql:/etc/ipsec.d
@@ -100,7 +100,7 @@ hashsha2                                                     P,,
 nic                                                          P,,  
 north                                                        P,,  
 road                                                         P,,  
-west                                                         u,u,u
+west-eku                                                     u,u,u
 west #
 west #
  ../bin/check-for-core.sh
