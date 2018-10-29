@@ -86,6 +86,7 @@
 #include "addr_lookup.h"
 #include "impair.h"
 #include "ikev2_message.h"
+#include "ikev2_ts.h"
 
 #include "crypt_symkey.h" /* for release_symkey */
 struct mobike {
@@ -498,7 +499,8 @@ static void ikev2_crypto_continue(struct state *st,
 	}
 
 	passert(*mdp != NULL);
-	complete_v2_state_transition(mdp, e);
+	/* replace (*mdp)->st with st ... */
+	complete_v2_state_transition((*mdp)->st, mdp, e);
 }
 
 /*
@@ -901,7 +903,9 @@ void ikev2_parent_outI1_continue(struct state *st, struct msg_digest **mdp,
 	if (*mdp == NULL) {
 		*mdp = fake_md(st);
 	}
-	complete_v2_state_transition(mdp, ikev2_parent_outI1_common(*mdp, st));
+	stf_status e = ikev2_parent_outI1_common(*mdp, st);
+	/* replace (*mdp)->st with st ... */
+	complete_v2_state_transition((*mdp)->st, mdp, e);
 }
 
 static stf_status ikev2_parent_outI1_common(struct msg_digest *md UNUSED,
@@ -1349,7 +1353,8 @@ static void ikev2_parent_inI1outR1_continue(struct state *st,
 
 	passert(*mdp != NULL);
 	stf_status e = ikev2_parent_inI1outR1_continue_tail(st, *mdp, r);
-	complete_v2_state_transition(mdp, e);
+	/* replace (*mdp)->st with st ... */
+	complete_v2_state_transition((*mdp)->st, mdp, e);
 }
 
 /*
@@ -1988,7 +1993,8 @@ static void ikev2_parent_inR1outI2_continue(struct state *st,
 
 	passert(*mdp != NULL);
 	stf_status e = ikev2_parent_inR1outI2_tail(st, *mdp, r);
-	complete_v2_state_transition(mdp, e);
+	/* replace (*mdp)->st with st ... */
+	complete_v2_state_transition((*mdp)->st, mdp, e);
 }
 
 /* Misleading name, also used for NULL sized type's */
@@ -2727,23 +2733,20 @@ static stf_status ikev2_parent_inR1outI2_tail(struct state *pst, struct msg_dige
 
 static xauth_callback_t ikev2_pam_continue;	/* type assertion */
 
-static void ikev2_pam_continue(struct state *st UNUSED,
+static void ikev2_pam_continue(struct state *st,
 			       struct msg_digest **mdp,
 			       const char *name UNUSED,
 			       bool success)
 {
 	stf_status stf;
 	if (success) {
-		/*
-		 * This is a hardcoded continue; convert this to micro
-		 * state.
-		 */
 		stf = ikev2_parent_inI2outR2_auth_tail(st, *mdp, success);
 	} else {
 		stf = STF_FAIL + v2N_AUTHENTICATION_FAILED;
 	}
 
-	complete_v2_state_transition(mdp, stf);
+	/* replace (*mdp)->st with st ... */
+	complete_v2_state_transition((*mdp)->st, mdp, stf);
 }
 
 /*
@@ -2837,7 +2840,8 @@ static void ikev2_ike_sa_process_auth_request_no_skeyid_continue(struct state *s
 		 */
 		DBG(DBG_CONTROL, DBG_log("aborting IKE SA: DH failed"));
 		send_v2_notification_from_md(*mdp, v2N_INVALID_SYNTAX, NULL);
-		complete_v2_state_transition(mdp, STF_FATAL);
+		/* replace (*mdp)->st with st ... */
+		complete_v2_state_transition((*mdp)->st, mdp, STF_FATAL);
 		return;
 	}
 
@@ -3494,150 +3498,6 @@ static stf_status ikev2_process_cp_respnse(struct msg_digest *md)
 			return STF_FAIL + v2N_NO_PROPOSAL_CHOSEN;
 		}
 	}
-
-	return STF_OK;
-}
-/* check TS payloads, response */
-static stf_status ikev2_process_ts_respnse(struct msg_digest *md)
-{
-	struct state *st = md->st;
-	struct connection *c = st->st_connection;
-
-	/* check TS payloads */
-	{
-		int bestfit_n, bestfit_p, bestfit_pr;
-		int best_tsi_i, best_tsr_i;
-		bestfit_n = -1;
-		bestfit_p = -1;
-		bestfit_pr = -1;
-
-		/* Check TSi/TSr https://tools.ietf.org/html/rfc5996#section-2.9 */
-		DBG(DBG_CONTROLMORE,
-		    DBG_log("TS: check narrowing - we are responding to I2"));
-
-
-		DBG(DBG_CONTROLMORE,
-		    DBG_log("TS: parse initiator traffic selectors"));
-		struct payload_digest *const tsi_pd = md->chain[ISAKMP_NEXT_v2TSi];
-		/* ??? is 16 an undocumented limit - IKEv2 has no limit */
-		struct traffic_selector tsi[16];
-		const int tsi_n = ikev2_parse_ts(tsi_pd, tsi, elemsof(tsi));
-
-		DBG(DBG_CONTROLMORE,
-		    DBG_log("TS: parse responder traffic selectors"));
-		struct payload_digest *const tsr_pd = md->chain[ISAKMP_NEXT_v2TSr];
-		/* ??? is 16 an undocumented limit - IKEv2 has no limit */
-		struct traffic_selector tsr[16];
-		const int tsr_n = ikev2_parse_ts(tsr_pd, tsr, elemsof(tsr));
-
-		if (tsi_n < 0 || tsr_n < 0)
-			return STF_FAIL + v2N_TS_UNACCEPTABLE;
-
-		DBG(DBG_CONTROLMORE, DBG_log("Checking TSi(%d)/TSr(%d) selectors, looking for exact match",
-			tsi_n, tsr_n));
-
-		{
-			const struct spd_route *sra = &c->spd;
-			int bfit_n = ikev2_evaluate_connection_fit(
-				c, sra, ORIGINAL_INITIATOR,
-				tsi, tsr,
-				tsi_n, tsr_n);
-
-			if (bfit_n > bestfit_n) {
-				DBG(DBG_CONTROLMORE,
-				    DBG_log("prefix fitness found a better match c %s",
-					    c->name));
-
-				int bfit_p = ikev2_evaluate_connection_port_fit(
-					c, sra, ORIGINAL_INITIATOR,
-					tsi, tsr,
-					tsi_n, tsr_n,
-					&best_tsi_i, &best_tsr_i);
-
-				if (bfit_p > bestfit_p) {
-					DBG(DBG_CONTROLMORE,
-					    DBG_log("port fitness found better match c %s, tsi[%d],tsr[%d]",
-						    c->name, best_tsi_i, best_tsr_i));
-
-					int bfit_pr = ikev2_evaluate_connection_protocol_fit(
-						c, sra, ORIGINAL_INITIATOR,
-						tsi, tsr,
-						tsi_n, tsr_n,
-						&best_tsi_i, &best_tsr_i);
-
-					if (bfit_pr > bestfit_pr) {
-						DBG(DBG_CONTROLMORE,
-						    DBG_log("protocol fitness found better match c %s, tsi[%d], tsr[%d]",
-							    c->name, best_tsi_i,
-							    best_tsr_i));
-						bestfit_p = bfit_p;
-						bestfit_n = bfit_n;
-					} else {
-						DBG(DBG_CONTROLMORE,
-						    DBG_log("protocol fitness rejected c %s",
-							    c->name));
-					}
-				} else {
-					DBG(DBG_CONTROLMORE,
-							DBG_log("port fitness rejected c %s",
-								c->name));
-				}
-			} else {
-				DBG(DBG_CONTROLMORE,
-				    DBG_log("prefix fitness rejected c %s",
-					    c->name));
-			}
-		}
-
-		if (bestfit_n > 0 && bestfit_p > 0) {
-			DBG(DBG_CONTROLMORE,
-			    DBG_log("found an acceptable TSi/TSr Traffic Selector"));
-			memcpy(&st->st_ts_this, &tsi[best_tsi_i],
-			       sizeof(struct traffic_selector));
-			memcpy(&st->st_ts_that, &tsr[best_tsr_i],
-			       sizeof(struct traffic_selector));
-			ikev2_print_ts(&st->st_ts_this);
-			ikev2_print_ts(&st->st_ts_that);
-
-			ip_subnet tmp_subnet_i;
-			ip_subnet tmp_subnet_r;
-			rangetosubnet(&st->st_ts_this.net.start,
-				      &st->st_ts_this.net.end, &tmp_subnet_i);
-			rangetosubnet(&st->st_ts_that.net.start,
-				      &st->st_ts_that.net.end, &tmp_subnet_r);
-
-			c->spd.this.client = tmp_subnet_i;
-			c->spd.this.port = st->st_ts_this.startport;
-			c->spd.this.protocol = st->st_ts_this.ipprotoid;
-			setportof(htons(c->spd.this.port),
-				  &c->spd.this.host_addr);
-			setportof(htons(c->spd.this.port),
-				  &c->spd.this.client.addr);
-
-			c->spd.this.has_client =
-				!(subnetishost(&c->spd.this.client) &&
-				addrinsubnet(&c->spd.this.host_addr,
-					  &c->spd.this.client));
-
-			c->spd.that.client = tmp_subnet_r;
-			c->spd.that.port = st->st_ts_that.startport;
-			c->spd.that.protocol = st->st_ts_that.ipprotoid;
-			setportof(htons(c->spd.that.port),
-				  &c->spd.that.host_addr);
-			setportof(htons(c->spd.that.port),
-				  &c->spd.that.client.addr);
-
-			c->spd.that.has_client =
-				!(subnetishost(&c->spd.that.client) &&
-				addrinsubnet(&c->spd.that.host_addr,
-					  &c->spd.that.client));
-		} else {
-			DBG(DBG_CONTROLMORE,
-			    DBG_log("reject responder TSi/TSr Traffic Selector"));
-			/* prevents parent from going to I3 */
-			return STF_FAIL + v2N_TS_UNACCEPTABLE;
-		}
-	} /* end of TS check block */
 
 	return STF_OK;
 }
@@ -4779,7 +4639,8 @@ void ikev2_child_send_next(struct state *st)
 
 	struct msg_digest *md = unsuspend_md(st);
 	e = ikev2_child_out_tail(md);
-	complete_v2_state_transition(&md, e);
+	/* replace (*mdp)->st with st ... */
+	complete_v2_state_transition(md->st, &md, e);
 	release_any_md(&md);
 	reset_globals();
 }
