@@ -424,7 +424,7 @@ static struct msg_digest *fake_md(struct state *st)
 	fake_md->from_state = STATE_IKEv2_BASE;
 	fake_md->hdr.isa_msgid = v2_INVALID_MSGID;
 	/* asume first microcode is valid */
-	fake_md->svm = st->st_finite_state->fs_microcode;
+	fake_md->svm = st->st_finite_state->fs_v2_transitions;
 	return fake_md;
 }
 
@@ -4459,11 +4459,10 @@ stf_status ikev2_child_inIoutR(struct state *st /* child state */,
 	RETURN_STF_FAILURE_STATUS(ikev2_rekey_child_resp(md));
 
 	if (st->st_ipsec_pred == SOS_NOBODY) {
+		/* state m/c created CHILD SA */
 		passert(st != NULL);
-		passert(IS_CHILD_SA(st));
-		pexpect(st == md->st);
-		if (!v2_process_ts_request_create_child(md, &st,
-							ISAKMP_v2_CREATE_CHILD_SA)) {
+		passert(st == md->st);
+		if (!v2_process_ts_request(pexpect_child_sa(st), md)) {
 			return STF_FAIL + v2N_TS_UNACCEPTABLE;
 		}
 	}
