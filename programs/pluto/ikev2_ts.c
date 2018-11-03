@@ -333,7 +333,6 @@ static bool v2_parse_ts(const char *role,
 
 		ts->ipprotoid = ts1.isat1_ipprotoid;
 
-		/* should be converted to host byte order for local processing */
 		ts->startport = ts1.isat1_startport;
 		ts->endport = ts1.isat1_endport;
 		if (ts->startport > ts->endport) {
@@ -368,7 +367,9 @@ static bool v2_parse_tss(const struct msg_digest *md,
  * Check if our policy's protocol (proto) matches the Traffic Selector
  * protocol (ts_proto).
  */
-static int ikev2_match_protocol(uint8_t end_proto, uint8_t ts_proto,
+
+static int ikev2_match_protocol(const struct end *end,
+				const struct traffic_selector *ts,
 				enum narrowing narrowing,
 				const char *which, int index)
 {
@@ -377,19 +378,19 @@ static int ikev2_match_protocol(uint8_t end_proto, uint8_t ts_proto,
 
 	switch (narrowing) {
 	case END_EQUALS_TS:
-		if (end_proto == ts_proto) {
+		if (end->protocol == ts->ipprotoid) {
 			f = 255;	/* ??? odd value */
 			m = "exact";
 		}
 		break;
 	case END_NARROWER_THAN_TS:
-		if (ts_proto == 0) { /* wild-card */
+		if (ts->ipprotoid == 0) { /* wild-card */
 			f = 1;
 			m = "superset";
 		}
 		break;
 	case END_WIDER_THAN_TS:
-		if (end_proto == 0) { /* wild-card */
+		if (end->protocol == 0) { /* wild-card */
 			f = 1;
 			m = "subset";
 		}
@@ -398,9 +399,9 @@ static int ikev2_match_protocol(uint8_t end_proto, uint8_t ts_proto,
 		bad_case(narrowing);
 	}
 	DBGF(DBG_MASK, MATCH_PREFIX "protocol %s%d %s %s[%d].ipprotoid %s%d: %s fitness %d",
-	     end_proto == 0 ? "*" : "", end_proto,
+	     end->protocol == 0 ? "*" : "", end->protocol,
 	     narrowing_string(narrowing),
-	     which, index, ts_proto == 0 ? "*" : "", ts_proto,
+	     which, index, ts->ipprotoid == 0 ? "*" : "", ts->ipprotoid,
 	     m, f);
 	return f;
 }
@@ -412,7 +413,7 @@ static int ikev2_match_protocol(uint8_t end_proto, uint8_t ts_proto,
  * any change should be done to both.
  */
 static int ikev2_evaluate_connection_protocol_fit(enum narrowing narrowing,
-						  const struct ends *e,
+						  const struct ends *end,
 						  const struct traffic_selectors *tsi,
 						  const struct traffic_selectors *tsr,
 						  int *best_tsi_i,
@@ -425,8 +426,8 @@ static int ikev2_evaluate_connection_protocol_fit(enum narrowing narrowing,
 	for (unsigned tsi_ni = 0; tsi_ni < tsi->nr; tsi_ni++) {
 		const struct traffic_selector *tni = &tsi->ts[tsi_ni];
 
-		int fitrange_i = ikev2_match_protocol(e->i->protocol, tni->ipprotoid,
-						      narrowing, "tsi", tsi_ni);
+		int fitrange_i = ikev2_match_protocol(end->i, tni, narrowing,
+						      "TSi", tsi_ni);
 
 		if (fitrange_i == 0)
 			continue;	/* save effort! */
@@ -434,8 +435,8 @@ static int ikev2_evaluate_connection_protocol_fit(enum narrowing narrowing,
 		for (unsigned tsr_ni = 0; tsr_ni < tsr->nr; tsr_ni++) {
 			const struct traffic_selector *tnr = &tsr->ts[tsr_ni];
 
-			int fitrange_r = ikev2_match_protocol(e->r->protocol, tnr->ipprotoid,
-							      narrowing, "tsr", tsr_ni);
+			int fitrange_r = ikev2_match_protocol(end->r, tnr, narrowing,
+							      "TSr", tsr_ni);
 
 			if (fitrange_r == 0)
 				continue;	/* save effort! */
@@ -467,13 +468,13 @@ static int ikev2_evaluate_connection_protocol_fit(enum narrowing narrowing,
  * If subset_ok, narrowing our port range to ts port range is OK (initiator narrowing).
  * Returns 0 if no match; otherwise number of ports within match
  */
-static int ikev2_match_port_range(uint16_t end_port,
+static int ikev2_match_port_range(const struct end *end,
 				  const struct traffic_selector *ts,
 				  enum narrowing narrowing,
 				  const char *which, int index)
 {
-	uint16_t end_low = end_port;
-	uint16_t end_high = end_port == 0 ? 65535 : end_port;
+	uint16_t end_low = end->port;
+	uint16_t end_high = end->port == 0 ? 65535 : end->port;
 	int f = 0;	/* strength of match */
 	const char *m = "no";
 
@@ -511,7 +512,7 @@ static int ikev2_match_port_range(uint16_t end_port,
  * any change should be done to both.
  */
 static int ikev2_evaluate_connection_port_fit(enum narrowing narrowing,
-					      const struct ends *e,
+					      const struct ends *end,
 					      const struct traffic_selectors *tsi,
 					      const struct traffic_selectors *tsr,
 					      int *best_tsi_i,
@@ -524,8 +525,8 @@ static int ikev2_evaluate_connection_port_fit(enum narrowing narrowing,
 	for (unsigned tsi_ni = 0; tsi_ni < tsi->nr; tsi_ni++) {
 		const struct traffic_selector *tni = &tsi->ts[tsi_ni];
 
-		int fitrange_i = ikev2_match_port_range(e->i->port, tni, narrowing,
-							"tsi", tsi_ni);
+		int fitrange_i = ikev2_match_port_range(end->i, tni, narrowing,
+							"TSi", tsi_ni);
 
 		if (fitrange_i == 0)
 			continue;	/* save effort! */
@@ -533,8 +534,8 @@ static int ikev2_evaluate_connection_port_fit(enum narrowing narrowing,
 		for (unsigned tsr_ni = 0; tsr_ni < tsr->nr; tsr_ni++) {
 			const struct traffic_selector *tnr = &tsr->ts[tsr_ni];
 
-			int fitrange_r = ikev2_match_port_range(e->r->port, tnr, narrowing,
-								"tsr", tsr_ni);
+			int fitrange_r = ikev2_match_port_range(end->r, tnr, narrowing,
+								"TSr", tsr_ni);
 
 			if (fitrange_r == 0)
 				continue;	/* no match */
@@ -555,6 +556,77 @@ static int ikev2_evaluate_connection_port_fit(enum narrowing narrowing,
 	}
 	DBG(DBG_CONTROL, DBG_log("    port_fitness %d", bestfit_p));
 	return bestfit_p;
+}
+
+/*
+ * Does TS fit inside of END?
+ *
+ * Given other code flips the comparison depending initiator or
+ * responder, is this right?
+ *
+ * NOTE: Our parser/config only allows 1 CIDR, however IKEv2 ranges
+ *       can be non-CIDR for now we really support/limit ourselves to
+ *       a single CIDR
+ *
+ * XXX: what exactly is CIDR?
+ */
+
+static int match_address_range(const struct end *end,
+			       const struct traffic_selector *ts,
+			       enum narrowing narrowing,
+			       const char *which, int index)
+{
+	/*
+	 * Pre-compute possible fit --- sum of bits gives how good a
+	 * fit this is.
+	 */
+	int ts_range = iprange_bits(ts->net.start, ts->net.end);
+	int maskbits = end->client.maskbits;
+	int fitbits = maskbits + ts_range;
+
+	int f = 0;
+	const char *m = "no";
+
+	/*
+	 * NOTE: Our parser/config only allows 1 CIDR, however IKEv2
+	 *       ranges can be non-CIDR for now we really
+	 *       support/limit ourselves to a single CIDR
+	 *
+	 * XXX: so what is CIDR?
+	 */
+	switch (narrowing) {
+	case END_EQUALS_TS:
+	case END_NARROWER_THAN_TS:
+		PASSERT_FAIL("%s", "what should happen here?");
+	case END_WIDER_THAN_TS:
+		/* i.e., TS <= END */
+		if (addrinsubnet(&ts->net.start, &end->client) &&
+		    addrinsubnet(&ts->net.end, &end->client)) {
+			m = "yes";
+			f = fitbits;
+		}
+		break;
+	default:
+		bad_case(narrowing);
+	}
+
+	/*
+	 * comparing for ports for finding better local policy
+	 *
+	 * XXX: why do this?
+	 */
+	/* ??? arbitrary modification to objective function */
+	DBGF(DBG_MASK, MATCH_PREFIX "end->port %d ts->startport %d ts->endport %d",
+	     end->port, ts->startport, ts->endport);
+	if (end->port != 0 &&
+	    ts->startport == end->port &&
+	    ts->endport == end->port)
+		f = f << 1;
+
+	DBGF(DBG_MASK, MATCH_PREFIX "maskbits=%u addr=? %s %s[%u] ts_range=%u: %s fitness %d",
+	     maskbits, narrowing_string(narrowing),
+	     which, index, ts_range, m, f);
+	return f;
 }
 
 /*
@@ -585,86 +657,32 @@ static int ikev2_evaluate_connection_fit(const struct connection *d,
 	for (unsigned tsi_ni = 0; tsi_ni < tsi->nr; tsi_ni++) {
 		const struct traffic_selector *tni = &tsi->ts[tsi_ni];
 
+		/* choice hardwired! */
+		int fit_i = match_address_range(e->i, tni,
+						END_WIDER_THAN_TS,
+						"TSi", tsi_ni);
+		if (fit_i <= 0) {
+			continue;
+		}
+
 		for (unsigned tsr_ni = 0; tsr_ni < tsr->nr; tsr_ni++) {
 			const struct traffic_selector *tnr = &tsr->ts[tsr_ni];
 
-			/* does it fit at all? */
-
-			DBG(DBG_CONTROLMORE, {
-				char bi[RANGETOT_BUF];
-				char br[RANGETOT_BUF];
-
-				rangetot(&tni->net, 0, bi, sizeof(bi));
-				rangetot(&tnr->net, 0, br, sizeof(br));
-				DBG_log("    tsi[%u]=%s proto=%d portrange %d-%d, tsr[%u]=%s proto=%d portrange %d-%d",
-					tsi_ni,
-					bi,
-					tni->ipprotoid,
-					tni->startport,
-					tni->endport,
-					tsr_ni,
-					br,
-					tnr->ipprotoid,
-					tnr->startport,
-					tnr->endport);
-			});
 			/* do addresses fit into the policy? */
 
-			/*
-			 * NOTE: Our parser/config only allows 1 CIDR, however IKEv2 ranges can be non-CIDR
-			 *       for now we really support/limit ourselves to a single CIDR
-			 */
-			if (addrinsubnet(&tni->net.start, &e->i->client) &&
-			    addrinsubnet(&tni->net.end, &e->i->client) &&
-			    addrinsubnet(&tnr->net.start,  &e->r->client) &&
-			    addrinsubnet(&tnr->net.end, &e->r->client)) {
-				/*
-				 * now, how good a fit is it? --- sum of bits gives
-				 * how good a fit this is.
-				 */
-				int ts_range1 = iprange_bits(
-					tni->net.start, tni->net.end);
-				int maskbits1 = e->i->client.maskbits;
-				int fitbits1 = maskbits1 + ts_range1;
-
-				int ts_range2 = iprange_bits(
-					tnr->net.start, tnr->net.end);
-				int maskbits2 = e->r->client.maskbits;
-				int fitbits2 = maskbits2 + ts_range2;
-
-				/* ??? this objective function is odd and arbitrary */
-				int fitbits = (fitbits1 << 8) + fitbits2;
-
-				/*
-				 * comparing for ports
-				 * for finding better local policy
-				 */
-				/* ??? arbitrary modification to objective function */
-				DBG(DBG_CONTROL,
-				    DBG_log("e->i->port %d tsi->startport %d  tsi->endport %d",
-					    e->i->port,
-					    tni->startport,
-					    tni->endport));
-
-				if (e->i->port != 0 &&
-				    tni->startport == e->i->port &&
-				    tni->endport == e->i->port)
-					fitbits = fitbits << 1;
-
-				if (e->r->port != 0 &&
-				    tnr->startport == e->r->port &&
-				    tnr->endport == e->r->port)
-					fitbits = fitbits << 1;
-
-				DBG(DBG_CONTROLMORE,
-					    DBG_log("      has ts_range1=%u maskbits1=%u ts_range2=%u maskbits2=%u fitbits=%d <> %d",
-						    ts_range1, maskbits1,
-						    ts_range2, maskbits2,
-						    fitbits, bestfit));
-
-				if (fitbits > bestfit)
-					bestfit = fitbits;
+			/* choice hardwired! */
+			int fit_r = match_address_range(e->r, tnr,
+							END_WIDER_THAN_TS,
+							"TSr", tsr_ni);
+			if (fit_r <= 0) {
+				continue;
 			}
+
+			/* ??? this objective function is odd and arbitrary */
+			int fitbits = (fit_i << 8) + fit_r;
+
+			if (fitbits > bestfit)
+				bestfit = fitbits;
 		}
 	}
 
