@@ -2,9 +2,12 @@ ifndef top_srcdir
 include ../../mk/dirs.mk
 endif
 
-UNITDIR=$(shell pkg-config systemd --variable=systemdsystemunitdir)
-SYSTEMDFILE=ipsec.service
-SYSTEMDDIR=$(DESTDIR)$(UNITDIR)
+SYSTEMUNITDIR=$(shell pkg-config systemd --variable=systemdsystemunitdir)
+UNITFILE=ipsec.service
+UNITDIR=$(DESTDIR)$(SYSTEMUNITDIR)
+SYSTEMTMPFILESDIR=$(shell pkg-config systemd --variable=tmpfilesdir)
+TMPFILESCONFIG=libreswan.conf
+TMPFILESDIR=$(DESTDIR)$(SYSTEMTMPFILESDIR)
 
 include $(top_srcdir)/Makefile.inc
 
@@ -15,23 +18,33 @@ include $(top_srcdir)/Makefile.inc
 # like local-base and installsystemdservice are allowed to run in
 # parallel)
 
-local-base: $(builddir)/$(SYSTEMDFILE)
+local-base: $(builddir)/$(UNITFILE) $(builddir)/$(TMPFILESCONFIG)
 
 local-install-base: installsystemdservice oldinitdcheck postcheck
 
-installsystemdservice: local-base | $(SYSTEMDDIR)
-	$(INSTALL) $(INSTCONFFLAGS) $(builddir)/$(SYSTEMDFILE) $(SYSTEMDDIR)
-	@if test $(SYSTEMDDIR) = $(UNITDIR) ; then \
+installtmpfilesconfig: local-base | $(TMPFILESDIR)
+	$(INSTALL) $(INSTCONFFLAGS) $(builddir)/$(TMPFILESCONFIG) $(TMPFILESDIR)
+	@if test $(TMPFILESDIR) = $(SYSTEMTMPFILESDIR) ; then \
+		echo running: systemd-tmpfiles --create $(TMPFILESDIR)/$(TMPFILESCONFIG); \
+		systemd-tmpfiles --create $(TMPFILESDIR)/$(TMPFILESCONFIG); \
+	fi
+
+installsystemdservice: local-base | $(UNITDIR)
+	$(INSTALL) $(INSTCONFFLAGS) $(builddir)/$(UNITFILE) $(UNITDIR)
+	@if test $(UNITDIR) = $(SYSTEMUNITDIR) ; then \
 		echo running: systemctl --system daemon-reload; \
 		systemctl --system daemon-reload ; \
 	fi
 	@if test -f $(DESTDIR)/$(FINALLIBEXECDIR)/portexcludes; then \
 		echo fixing port excludes ; \
-		sed -Ei 's@^# (.*/portexcludes)$$@\1@' $(SYSTEMDDIR)/$(SYSTEMDFILE); \
+		sed -Ei 's@^# (.*/portexcludes)$$@\1@' $(UNITDIR)/$(UNITFILE); \
 	fi
 
-$(SYSTEMDDIR):
-	mkdir -p $(SYSTEMDDIR)
+$(UNITDIR):
+	mkdir -p $(UNITDIR)
+
+$(TMPFILESDIR):
+	mkdir -p $(TMPFILESDIR)
 
 oldinitdcheck: installsystemdservice
 	@if test -f $(DESTDIR)/etc/init.d/ipsec* ; then \
@@ -46,8 +59,8 @@ oldinitdcheck: installsystemdservice
 		fi ; \
 	fi
 
-postcheck: installsystemdservice oldinitdcheck
-	@if test -z "$(DESTDIR)" -a $(SYSTEMDDIR) = $(UNITDIR) -a $(shell systemctl is-enabled ipsec.service) = "disabled" ; then \
+postcheck: installsystemdservice installtmpfilesconfig oldinitdcheck
+	@if test -z "$(DESTDIR)" -a $(UNITDIR) = $(SYSTEMUNITDIR) -a $(shell systemctl is-enabled ipsec.service) = "disabled" ; then \
 		echo "DESTDIR='$(DESTDIR)'" ; \
 		echo "************************** WARNING ***********************************" ; \
 		echo "The ipsec service is currently disabled. To enable this service issue:" ; \
