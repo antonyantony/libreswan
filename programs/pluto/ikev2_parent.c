@@ -420,12 +420,11 @@ static void ikev2_rekey_dh_continue(struct state *st,
 	ikev2_crypto_continue(st, mdp, r);
 }
 
-
 static struct msg_digest *fake_md(struct state *st)
 {
 	struct msg_digest *fake_md = alloc_md("fake IKEv2 msg_digest");
 	fake_md->st = st;
-	fake_md->from_state = STATE_IKEv2_BASE;
+	fake_md->from_state = st->st_finite_state->fs_state;
 	fake_md->hdr.isa_msgid = v2_INVALID_MSGID;
 	/* asume first microcode is valid */
 	fake_md->svm = st->st_finite_state->fs_v2_transitions;
@@ -4211,22 +4210,27 @@ static notification_t accept_child_sa_KE(struct msg_digest *md,
 {
 	if (md->chain[ISAKMP_NEXT_v2KE] != NULL) {
 		chunk_t accepted_g = empty_chunk;
-		{
-			if (accept_KE(&accepted_g, "Gi", accepted_oakley.ta_dh,
-					&md->chain[ISAKMP_NEXT_v2KE]->pbs)
-					!= NOTHING_WRONG) {
-				/*
-				 * A KE with the incorrect number of bytes is
-				 * a syntax error and not a wrong modp group.
-				 */
-				freeanychunk(accepted_g);
-				return v2N_INVALID_KE_PAYLOAD;
-			}
+		if (accept_KE(&accepted_g, "Gi", accepted_oakley.ta_dh,
+			      &md->chain[ISAKMP_NEXT_v2KE]->pbs)
+		    != NOTHING_WRONG) {
+			/*
+			 * A KE with the incorrect number of bytes is
+			 * a syntax error and not a wrong modp group.
+			 */
+			freeanychunk(accepted_g);
+			return v2N_INVALID_KE_PAYLOAD;
 		}
-		if (is_msg_request(md))
+		/* st->st_g[st->st_sa_role] = accepted_g */
+		switch (st->st_sa_role) {
+		case SA_INITIATOR:
 			st->st_gi = accepted_g;
-		else
+			break;
+		case SA_RESPONDER:
 			st->st_gr = accepted_g;
+			break;
+		default:
+			bad_case(st->st_sa_role);
+		}
 	}
 
 	return NOTHING_WRONG;
