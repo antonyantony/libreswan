@@ -317,10 +317,6 @@ void ikev2_ike_sa_established(struct ike_sa *ike,
 	 * authenticated properly.
 	 */
 	change_state(&ike->sa, new_state);
-
-	if (ike->sa.st_ike_pred != SOS_NOBODY) {
-		for_each_state(ikev2_repl_est_ipsec, &ike->sa.st_ike_pred);
-	}
 	c->newest_isakmp_sa = ike->sa.st_serialno;
 	deltatime_t delay = ikev2_replace_delay(&ike->sa, &kind);
 	delete_event(&ike->sa);
@@ -3089,8 +3085,15 @@ static stf_status ikev2_parent_inI2outR2_auth_tail(struct state *st,
 	 * Now create child state.
 	 * As we will switch to child state, force the parent to the
 	 * new state now.
-	 */
-
+	 *
+	 * XXX: Danger!  md->svm points to a state transition that
+	 * mashes the IKE SA's initial state in and the CHILD SA's
+	 * final state.  Hence, the need to explicitly force the final
+	 * IKE SA state.  There should instead be separate state
+	 * transitions for the IKE and CHILD SAs and then have the IKE
+	 * SA invoke the CHILD SA's transition.
+ 	 */
+	pexpect(md->svm->next_state == STATE_V2_IPSEC_R);
 	ikev2_ike_sa_established(pexpect_ike_sa(st), md->svm,
 				 STATE_PARENT_R2);
 
@@ -3782,7 +3785,15 @@ stf_status ikev2_parent_inR2(struct state *st, struct msg_digest *md)
 	/*
 	 * update the parent state to make sure that it knows we have
 	 * authenticated properly.
+	 *
+	 * XXX: Danger!  md->svm points to a state transition that
+	 * mashes the IKE SA's initial state in and the CHILD SA's
+	 * final state.  Hence, the need to explicitly force the final
+	 * IKE SA state.  There should instead be separate state
+	 * transitions for the IKE and CHILD SAs and then have the IKE
+	 * SA invoke the CHILD SA's transition.
 	 */
+	pexpect(md->svm->next_state == STATE_V2_IPSEC_I);
 	ikev2_ike_sa_established(pexpect_ike_sa(pst), md->svm,
 				 STATE_PARENT_I3);
 
