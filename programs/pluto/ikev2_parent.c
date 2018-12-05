@@ -327,7 +327,7 @@ static stf_status add_st_to_ike_sa_send_list(struct state *st, struct ike_sa *ik
 {
 	msgid_t unack = ike->sa.st_msgid_nextuse - ike->sa.st_msgid_lastack - 1;
 	stf_status e = STF_OK;
-	char  *what;
+	const char  *what;
 
 	if (unack < st->st_connection->ike_window) {
 		what  =  "send new exchange now";
@@ -1074,7 +1074,7 @@ stf_status ikev2_parent_inI1outR1(struct state *null_st, struct msg_digest *md)
 	struct state *st = new_state();
 	/* set up new state */
 	/* initialize_new_state expects valid icookie/rcookie values, so create it now */
-	memcpy(st->st_icookie, md->hdr.isa_icookie, IKE_SA_SPI_SIZE);
+	st->st_ike_spis.initiator = md->hdr.isa_ike_initiator_spi;
 	fill_ike_responder_spi(st, &md->sender);
 
 	initialize_new_state(st, c, policy, 0, null_fd);
@@ -5901,10 +5901,7 @@ void ikev2_record_deladdr(struct state *st, void *arg_ip)
 		migration_down(cst->st_connection, cst);
 		unroute_connection(st->st_connection);
 
-		if (cst->st_liveness_event != NULL) {
-			delete_liveness_event(cst);
-			cst->st_liveness_event = NULL;
-		}
+		delete_liveness_event(cst);
 
 		if (st->st_addr_change_event == NULL) {
 			event_schedule_s(EVENT_v2_ADDR_CHANGE, 0, st);
