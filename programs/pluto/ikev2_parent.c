@@ -376,7 +376,8 @@ static struct msg_digest *fake_md(struct state *st)
  * Check that the bundled keying material (KE) matches the accepted
  * proposal and if it doesn't send out a notification returning true.
  */
-static bool v2_reject_wrong_ke_for_proposal(struct msg_digest *md,
+static bool v2_reject_wrong_ke_for_proposal(struct state *st,
+					    struct msg_digest *md,
 					    const struct oakley_group_desc *accepted_dh)
 {
 	passert(md->chain[ISAKMP_NEXT_v2KE] != NULL);
@@ -392,7 +393,12 @@ static bool v2_reject_wrong_ke_for_proposal(struct msg_digest *md,
 		/* convert group to a raw buffer */
 		uint16_t gr = htons(accepted_dh->group);
 		chunk_t nd = chunk(&gr, sizeof(gr));
-		send_v2_notification_from_md(md, v2N_INVALID_KE_PAYLOAD, &nd);
+		if (st != NULL) {
+			send_v2N_response_from_state(ike_sa(st), md,
+						     v2N_INVALID_KE_PAYLOAD, &nd);
+		} else {
+			send_v2N_response_from_md(md, v2N_INVALID_KE_PAYLOAD, &nd);
+		}
 		return true;
 	} else {
 		return false;
@@ -1104,7 +1110,7 @@ stf_status ikev2_parent_inI1outR1(struct state *null_st, struct msg_digest *md)
 						  ike_proposals);
 	if (ret != STF_OK) {
 		if (pexpect(ret > STF_FAIL)) {
-			send_v2_notification_from_md(md, ret - STF_FAIL, &empty_chunk);
+			send_v2N_response_from_md(md, ret - STF_FAIL, &empty_chunk);
 		}
 		return STF_FATAL;
 	}
@@ -1128,7 +1134,8 @@ stf_status ikev2_parent_inI1outR1(struct state *null_st, struct msg_digest *md)
 	 * Check the MODP group in the payload matches the accepted
 	 * proposal.
 	 */
-	if (v2_reject_wrong_ke_for_proposal(md, st->st_oakley.ta_dh)) {
+	if (v2_reject_wrong_ke_for_proposal(NULL /*not encrypted*/, md,
+					    st->st_oakley.ta_dh)) {
 		/* already replied */
 		return STF_FATAL;
 	}
@@ -1139,7 +1146,7 @@ stf_status ikev2_parent_inI1outR1(struct state *null_st, struct msg_digest *md)
 	/* note: v1 notification! */
 	if (!accept_KE(&st->st_gi, "Gi", st->st_oakley.ta_dh,
 		       md->chain[ISAKMP_NEXT_v2KE])) {
-		send_v2_notification_from_md(md, v2N_INVALID_SYNTAX, &empty_chunk);
+		send_v2N_response_from_md(md, v2N_INVALID_SYNTAX, &empty_chunk);
 		return STF_FATAL;
 	}
 
@@ -2762,7 +2769,7 @@ static void ikev2_ike_sa_process_auth_request_no_skeyid_continue(struct state *s
 		 * abandon the connection.
 		 */
 		DBG(DBG_CONTROL, DBG_log("aborting IKE SA: DH failed"));
-		send_v2_notification_from_md(*mdp, v2N_INVALID_SYNTAX, NULL);
+		send_v2N_response_from_md(*mdp, v2N_INVALID_SYNTAX, NULL);
 		/* replace (*mdp)->st with st ... */
 		complete_v2_state_transition((*mdp)->st, mdp, STF_FATAL);
 		return;
@@ -2797,7 +2804,9 @@ stf_status ikev2_ike_sa_process_auth_request(struct state *st,
 		DBG(DBG_OPPO,
 			DBG_log("Deleting opportunistic Parent with no Child SA"));
 		e = STF_FATAL;
-		send_v2_notification_from_state(st, md, v2N_AUTHENTICATION_FAILED, NULL);
+		send_v2N_response_from_state(ike_sa(st), md,
+					     v2N_AUTHENTICATION_FAILED,
+					     NULL/*no data*/);
 	}
 
 	return e;
@@ -2994,7 +3003,9 @@ stf_status ikev2_parent_inI2outR2_id_tail(struct msg_digest *md)
 			st, ORIGINAL_RESPONDER, idhash_in, &pbs_no_ppk_auth,
 			st->st_connection->spd.that.authby))
 		{
-			send_v2_notification_from_state(st, md, v2N_AUTHENTICATION_FAILED, NULL);
+			send_v2N_response_from_state(ike_sa(st), md,
+						     v2N_AUTHENTICATION_FAILED,
+						     NULL/*no data*/);
 			return STF_FATAL;
 		}
 		DBG(DBG_CONTROL, DBG_log("NO_PPK_AUTH verified"));
@@ -3015,17 +3026,20 @@ stf_status ikev2_parent_inI2outR2_id_tail(struct msg_digest *md)
 				st, ORIGINAL_RESPONDER, idhash_in, &pbs_null_auth,
 				AUTH_NULL))
 			{
-				send_v2_notification_from_state(st, md, v2N_AUTHENTICATION_FAILED, NULL);
+				send_v2N_response_from_state(ike_sa(st), md,
+							     v2N_AUTHENTICATION_FAILED,
+							     NULL/*no data*/);
 				return STF_FATAL;
 			}
 			DBG(DBG_CONTROL, DBG_log("NULL_AUTH verified"));
 		} else {
 			if (!v2_check_auth(md->chain[ISAKMP_NEXT_v2AUTH]->payload.v2a.isaa_type,
 				st, ORIGINAL_RESPONDER, idhash_in, &md->chain[ISAKMP_NEXT_v2AUTH]->pbs,
-				st->st_connection->spd.that.authby))
-			{
-			send_v2_notification_from_state(st, md, v2N_AUTHENTICATION_FAILED, NULL);
-			return STF_FATAL;
+				st->st_connection->spd.that.authby)) {
+				send_v2N_response_from_state(ike_sa(st), md,
+							     v2N_AUTHENTICATION_FAILED,
+							     NULL/*no data*/);
+				return STF_FATAL;
 			}
 		}
 	}
@@ -3051,7 +3065,9 @@ static stf_status ikev2_parent_inI2outR2_auth_tail(struct state *st,
 		 * TBD: send this notification encrypted because the
 		 * AUTH payload succeed
 		 */
-		send_v2_notification_from_state(st, md, v2N_AUTHENTICATION_FAILED, NULL);
+		send_v2N_response_from_state(ike_sa(st), md,
+					     v2N_AUTHENTICATION_FAILED,
+					     NULL/*no data*/);
 		return STF_FATAL;
 	}
 
@@ -3693,7 +3709,9 @@ stf_status ikev2_parent_inR2(struct state *st, struct msg_digest *md)
 	} else {
 		if (LIN(POLICY_PPK_INSIST, c->policy)) {
 			loglog(RC_LOG_SERIOUS, "Failed to receive PPK confirmation and connection has ppk=insist");
-			send_v2_notification_from_state(st, md, v2N_AUTHENTICATION_FAILED, NULL);
+			send_v2N_response_from_state(ike_sa(st), md,
+						     v2N_AUTHENTICATION_FAILED,
+						     NULL/*no data*/);
 			return STF_FATAL;
 		}
 	}
@@ -4415,8 +4433,9 @@ stf_status ikev2_child_inIoutR(struct state *st /* child state */,
 		pexpect(st->st_oakley.ta_dh == st->st_pfs_group);
 		if (!accept_KE(&st->st_gi, "Gi", st->st_oakley.ta_dh,
 			       md->chain[ISAKMP_NEXT_v2KE])) {
-			send_v2_notification_from_state(st, md, v2N_INVALID_SYNTAX,
-							&empty_chunk);
+			send_v2N_response_from_state(ike_sa(st), md,
+						     v2N_INVALID_SYNTAX,
+						     NULL/*no data*/);
 			return STF_FATAL;
 		}
 	}
@@ -4622,7 +4641,7 @@ stf_status ikev2_child_ike_inIoutR(struct state *st /* child state */,
 		return STF_IGNORE;
 	}
 
-	if (v2_reject_wrong_ke_for_proposal(md, st->st_oakley.ta_dh)) {
+	if (v2_reject_wrong_ke_for_proposal(st/*encrypt*/, md, st->st_oakley.ta_dh)) {
 		/*
 		 * XXX; where is 'st' freed?  Should the code instead
 		 * tunnel back md.st==st and return STF_FATAL which
@@ -4643,8 +4662,9 @@ stf_status ikev2_child_ike_inIoutR(struct state *st /* child state */,
 	pexpect(st->st_pfs_group == NULL);
 	if (!accept_KE(&st->st_gr, "Gr", st->st_oakley.ta_dh,
 		       md->chain[ISAKMP_NEXT_v2KE])) {
-		send_v2_notification_from_state(st, md, v2N_INVALID_SYNTAX,
-						&empty_chunk);
+		send_v2N_response_from_state(ike_sa(st), md,
+					     v2N_INVALID_SYNTAX,
+					     NULL/*no data*/);
 		return STF_FATAL;
 	}
 
