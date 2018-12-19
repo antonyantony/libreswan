@@ -301,6 +301,7 @@ extern const struct finite_state *finite_states[STATE_IKE_ROOF];
  *   This prevents leaks.
  */
 struct state {
+	realtime_t st_inception;		/* time state is created, for logging */
 	so_serial_t st_serialno;                /* serial number (for seniority)*/
 	so_serial_t st_clonedfrom;              /* serial number of parent */
 	so_serial_t st_ike_pred;		/* IKEv2: replacing established IKE SA */
@@ -635,10 +636,10 @@ struct state {
 	struct list_entry st_serialno_list_entry;
 	/* SERIALNO hash table entry */
 	struct list_entry st_serialno_hash_entry;
-	/* ICOOKIE:RCOOKIE hash table entry */
-	struct list_entry st_cookies_hash_entry;
-	/* ICOOKIE hash table entry */
-	struct list_entry st_icookie_hash_entry;
+	/* IKE SPIi:SPIr hash table entry */
+	struct list_entry st_ike_spis_hash_entry;
+	/* IKE SPIi hash table entry */
+	struct list_entry st_ike_initiator_spi_hash_entry;
 
 	struct hidden_variables hidden_variables;
 
