@@ -611,12 +611,12 @@ void init_ikev1(void)
 	static struct finite_state v1_states[STATE_IKEv1_ROOF - STATE_IKEv1_FLOOR];
 	for (unsigned k = 0; k < elemsof(v1_states); k++) {
 		struct finite_state *fs = &v1_states[k];
-		fs->fs_state = STATE_IKEv1_FLOOR + k;
-		finite_states[fs->fs_state] = fs;
+		fs->fs_kind = STATE_IKEv1_FLOOR + k;
+		finite_states[fs->fs_kind] = fs;
 
-		fs->fs_name = enum_name(&state_names, fs->fs_state);
-		fs->fs_short_name = enum_short_name(&state_names, fs->fs_state);
-		fs->fs_story = enum_name(&state_stories, fs->fs_state);
+		fs->fs_name = enum_name(&state_names, fs->fs_kind);
+		fs->fs_short_name = enum_short_name(&state_names, fs->fs_kind);
+		fs->fs_story = enum_name(&state_stories, fs->fs_kind);
 
 		/*
 		 * Initialize .fs_category
@@ -625,7 +625,7 @@ void init_ikev1(void)
 		 * structure, this all goes away.
 		 */
 		enum state_category cat;
-		switch (fs->fs_state) {
+		switch (fs->fs_kind) {
 
 		case STATE_AGGR_R0:
 		case STATE_AGGR_I1:
@@ -698,7 +698,7 @@ void init_ikev1(void)
 			break;
 
 		default:
-			bad_case(fs->fs_state);
+			bad_case(fs->fs_kind);
 		}
 		fs->fs_category = cat;
 	}
@@ -739,8 +739,8 @@ void init_ikev1(void)
 		do {
 			fs->fs_nr_transitions++;
 			t++;
-		} while (t->state == fs->fs_state);
-		passert(t->state > fs->fs_state);
+		} while (t->state == fs->fs_kind);
+		passert(t->state > fs->fs_kind);
 	} while (t->state < STATE_IKEv1_ROOF);
 
 	/*
@@ -1266,11 +1266,11 @@ void process_v1_packet(struct msg_digest **mdp)
 
 				/* Let's try to log some info about these to track them down */
 				DBG(DBG_CONTROL, {
-					    DBG_dump("- unknown SA's md->hdr.isa_icookie:",
-						    md->hdr.isa_icookie,
+					    DBG_dump("- unknown SA's md->hdr.isa_ike_initiator_spi.bytes:",
+						    md->hdr.isa_ike_initiator_spi.bytes,
 						    COOKIE_SIZE);
-					    DBG_dump("- unknown SA's md->hdr.isa_rcookie:",
-						    md->hdr.isa_rcookie,
+					    DBG_dump("- unknown SA's md->hdr.isa_ike_responder_spi.bytes:",
+						    md->hdr.isa_ike_responder_spi.bytes,
 						    COOKIE_SIZE);
 				    });
 

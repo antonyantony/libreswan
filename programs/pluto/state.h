@@ -272,7 +272,7 @@ extern enum_names state_category_names;
  * IKEv1 and IKEv2 construct states using this as a base.
  */
 struct finite_state {
-	enum state_kind fs_state;
+	enum state_kind fs_kind;
 	const char *fs_name;
 	const char *fs_short_name;
 	const char *fs_story;
@@ -433,8 +433,6 @@ struct state {
 	/* symmetric stuff */
 
 	ike_spis_t st_ike_spis;
-#define st_icookie st_ike_spis.initiator.bytes
-#define st_rcookie st_ike_spis.responder.bytes
 	ike_spis_t st_ike_rekey_spis;		/* what was exchanged */
 
 	/* initiator stuff */
@@ -521,7 +519,8 @@ struct state {
 	/* In a Phase 1 state, preserve peer's public key after authentication */
 	struct pubkey *st_peer_pubkey;
 
-#define st_state st_finite_state->fs_state
+#define st_state st_state_kind /*compat*/
+#define st_state_kind st_finite_state->fs_kind
 #define st_state_name st_finite_state->fs_name
 #define st_state_story st_finite_state->fs_story
 	const struct finite_state *st_finite_state;	/* Current FSM state */
