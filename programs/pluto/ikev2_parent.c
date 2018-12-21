@@ -2515,7 +2515,7 @@ static stf_status ikev2_parent_inR1outI2_tail(struct state *pst, struct msg_dige
 				ikev2_calc_no_ppk_auth(cc, pst, idhash_npa, &pst->st_no_ppk_auth);
 				if (!emit_v2Ntd(v2N_NO_PPK_AUTH,
 						&pst->st_no_ppk_auth, &sk.pbs))
-						return STF_INTERNAL_ERROR;
+					return STF_INTERNAL_ERROR;
 			}
 		}
 
@@ -2784,7 +2784,6 @@ stf_status ikev2_parent_inI2outR2_id_tail(struct msg_digest *md)
 		{
 			pb_stream pbs = ntfy->pbs;
 			size_t len = pbs_left(&pbs);
-			chunk_t no_ppk_auth;
 
 			DBG(DBG_CONTROL, DBG_log("received NO_PPK_AUTH"));
 			if (noppk_seen) {
@@ -2798,10 +2797,11 @@ stf_status ikev2_parent_inI2outR2_id_tail(struct msg_digest *md)
 				break;
 			}
 
-			no_ppk_auth = alloc_chunk(len, "NO_PPK_AUTH");
+			chunk_t no_ppk_auth = alloc_chunk(len, "NO_PPK_AUTH");
 
 			if (!in_raw(no_ppk_auth.ptr, len, &pbs, "NO_PPK_AUTH extract")) {
 				loglog(RC_LOG_SERIOUS, "Failed to extract %zd bytes of NO_PPK_AUTH from Notify payload", len);
+				freeanychunk(no_ppk_auth);
 				return STF_FATAL;
 			}
 			st->st_no_ppk_auth = no_ppk_auth;
@@ -3966,7 +3966,8 @@ static stf_status ikev2_child_add_ipsec_payloads(struct msg_digest *md,
 		}
 
 		if (rekey_spi != 0) {
-			if (!emit_v2N(rekey_protoid, &rekey_spi,
+			if (!emit_v2N(build_ikev2_critical(false),
+				      rekey_protoid, &rekey_spi,
 				      v2N_REKEY_SA, &empty_chunk, outpbs))
 				return STF_INTERNAL_ERROR;
 		}
