@@ -671,6 +671,7 @@ struct state {
 	bool st_seen_fragments;                 /* did we receive ike fragments from peer, if so use them in return as well */
 	bool st_seen_no_tfc;			/* did we receive ESP_TFC_PADDING_NOT_SUPPORTED */
 	bool st_seen_use_transport;		/* did we receive USE_TRANSPORT_MODE */
+	bool st_seen_use_ipcomp;		/* did we receive request for IPCOMP */
 	bool st_seen_mobike;			/* did we receive MOBIKE */
 	bool st_sent_mobike;			/* sent MOBIKE notify */
 	bool st_seen_nonats;			/* did we receive NO_NATS_ALLOWED */
@@ -795,7 +796,7 @@ void v2_migrate_children(struct ike_sa *from, struct child_sa *to);
 void for_each_state(void (*f)(struct state *, void *data), void *data);
 
 extern void find_my_cpi_gap(cpi_t *latest_cpi, cpi_t *first_busy_cpi);
-extern ipsec_spi_t uniquify_his_cpi(ipsec_spi_t cpi, const struct state *st);
+extern ipsec_spi_t uniquify_his_cpi(ipsec_spi_t cpi, const struct state *st, int tries);
 
 extern void fmt_list_traffic(struct state *st, char *state_buf,
 			     const size_t state_buf_len);
