@@ -362,7 +362,7 @@ static bool v2_reject_wrong_ke_for_proposal(struct state *st,
 		pstats(invalidke_sent_s, accepted_dh->common.id[IKEv2_ALG_ID]);
 		/* convert group to a raw buffer */
 		uint16_t gr = htons(accepted_dh->group);
-		chunk_t nd = chunk(&gr, sizeof(gr));
+		chunk_t nd = CHUNKO(gr);
 		if (st != NULL) {
 			send_v2N_response_from_state(ike_sa(st), md,
 						     v2N_INVALID_KE_PAYLOAD, &nd);
@@ -837,24 +837,14 @@ static stf_status ikev2_parent_outI1_common(struct msg_digest *md UNUSED,
 	/* first check if this IKE_SA_INIT came from redirect
 	 * instruction.
 	 * - if yes, send the v2N_REDIRECTED_FROM
-	 * with the identity of previous gateway
+	 *   with the identity of previous gateway
 	 * - if not, check if we support redirect mechanism
 	 *   and send v2N_REDIRECT_SUPPORTED if we do
 	 */
 	if (!isanyaddr(&c->temp_vars.redirect_ip)) {
-		chunk_t old_gateway_data;
-		err_t e = build_redirected_from_notify_data(
-				c->temp_vars.old_gw_address, &old_gateway_data);
-		if (e != NULL) {
-			loglog(RC_LOG_SERIOUS, "not sending REDIRECTED_FROM Notify payload because %s", e);
-		} else {
-			if (!emit_v2Nchunk(v2N_REDIRECTED_FROM,
-					&old_gateway_data, &rbody)) {
-				freeanychunk(old_gateway_data);
-				return STF_INTERNAL_ERROR;
-			}
-			freeanychunk(old_gateway_data);
-		}
+		if (!emit_redirect_notification_decoded_dest(v2N_REDIRECTED_FROM,
+				&c->temp_vars.old_gw_address, NULL, NULL, &rbody))
+			return STF_INTERNAL_ERROR;
 	} else if (LIN(POLICY_ACCEPT_REDIRECT_YES, c->policy)) {
 		if (!emit_v2N(v2N_REDIRECT_SUPPORTED, &rbody))
 			return STF_INTERNAL_ERROR;
@@ -1979,7 +1969,7 @@ static stf_status ikev2_send_auth(struct connection *c,
 	enum notify_payload_hash_algorithms hash_algo;
 
 	if (null_auth != NULL)
-		*null_auth = empty_chunk;
+		*null_auth = EMPTY_CHUNK;
 
 	if (st->st_peer_wants_null) {
 		/* we allow authby=null and IDr payload told us to use it */
@@ -2464,9 +2454,7 @@ static stf_status ikev2_parent_inR1outI2_tail(struct state *pst, struct msg_dige
 	struct ipsec_proto_info *proto_info
 		= ikev2_child_sa_proto_info(cst, cc->policy);
 	proto_info->our_spi = ikev2_child_sa_spi(&cc->spd, cc->policy);
-	chunk_t local_spi;
-	setchunk(local_spi, (uint8_t*)&proto_info->our_spi,
-		 sizeof(proto_info->our_spi));
+	const chunk_t local_spi = CHUNKO(proto_info->our_spi);
 
 	/*
 	 * A CHILD_SA established during an AUTH exchange does
@@ -2784,7 +2772,7 @@ stf_status ikev2_parent_inI2outR2_id_tail(struct msg_digest *md)
 	bool found_ppk = FALSE;
 	bool ppkid_seen = FALSE;
 	bool noppk_seen = FALSE;
-	chunk_t null_auth;	setchunk(null_auth, NULL, 0);
+	chunk_t null_auth = EMPTY_CHUNK;
 	struct payload_digest *ntfy;
 
 	/*
@@ -3177,7 +3165,7 @@ static stf_status ikev2_parent_inI2outR2_auth_tail(struct state *st,
 		if (st->st_peer_wants_null) {
 			/* make it the Null ID */
 			/* r_id already set */
-			id_b = empty_chunk;
+			id_b = EMPTY_CHUNK;
 		} else {
 			v2_build_id_payload(&r_id,
 					 &id_b,
@@ -4054,9 +4042,7 @@ static stf_status ikev2_child_add_ipsec_payloads(struct msg_digest *md,
 	struct ipsec_proto_info *proto_info
 		= ikev2_child_sa_proto_info(cst, cc->policy);
 	proto_info->our_spi = ikev2_child_sa_spi(&cc->spd, cc->policy);
-	chunk_t local_spi;
-	setchunk(local_spi, (uint8_t*)&proto_info->our_spi,
-			sizeof(proto_info->our_spi));
+	chunk_t local_spi = CHUNKO(proto_info->our_spi);
 
 	/*
 	 * HACK: Use the CREATE_CHILD_SA proposal suite hopefully
@@ -4137,8 +4123,7 @@ static stf_status ikev2_child_add_ike_payloads(struct msg_digest *md,
 	{
 		local_g = &st->st_gr;
 		local_nonce = st->st_nr;
-		chunk_t local_spi = chunk(st->st_ike_rekey_spis.responder.bytes,
-					  sizeof(st->st_ike_rekey_spis.responder));
+		chunk_t local_spi = CHUNKO(st->st_ike_rekey_spis.responder);
 
 		/* send selected v2 IKE SA */
 		if (!ikev2_emit_sa_proposal(outpbs, st->st_accepted_ike_proposal,
@@ -4152,8 +4137,7 @@ static stf_status ikev2_child_add_ike_payloads(struct msg_digest *md,
 	{
 		local_g = &st->st_gi;
 		local_nonce = st->st_ni;
-		chunk_t local_spi = chunk(st->st_ike_rekey_spis.initiator.bytes,
-					  sizeof(st->st_ike_rekey_spis.initiator));
+		chunk_t local_spi = CHUNKO(st->st_ike_rekey_spis.initiator);
 
 		struct ikev2_proposals *ike_proposals =
 			get_v2_ike_proposals(c, "IKE SA initiating rekey");
@@ -5099,8 +5083,6 @@ static void process_informational_notify_req(struct msg_digest *md, bool *redire
 		libreswan_log("MOBIKE request: updating IPsec SA by request");
 	else
 		DBG(DBG_CONTROL, DBG_log("MOBIKE request: not updating IPsec SA"));
-
-	return;
 }
 
 static void mobike_reset_remote(struct state *st, struct mobike *est_remote)
@@ -5192,7 +5174,7 @@ stf_status process_encrypted_informational_ikev2(struct state *st,
 	 */
 	struct connection *c = st->st_connection;
 	bool do_unroute = st->st_sent_redirect && c->kind == CK_PERMANENT;
-	chunk_t cookie2 = empty_chunk;
+	chunk_t cookie2 = EMPTY_CHUNK;
 
 	/* Are we responding (as opposed to processing a response)? */
 	const bool responding = (md->hdr.isa_flags & ISAKMP_FLAGS_v2_MSG_R) == 0;
@@ -5635,17 +5617,13 @@ stf_status ikev2_send_livenss_probe(struct state *st)
 }
 
 #ifdef NETKEY_SUPPORT
-static stf_status add_mobike_payloads(struct state *st, pb_stream *pbs)
+static payload_master_t add_mobike_payloads;
+static bool add_mobike_payloads(struct state *st, pb_stream *pbs)
 {
-	if (!emit_v2N(v2N_UPDATE_SA_ADDRESSES, pbs))
-		return STF_INTERNAL_ERROR;
-
-	if (!ikev2_out_natd(&st->st_mobike_localaddr, st->st_mobike_localport,
+	return emit_v2N(v2N_UPDATE_SA_ADDRESSES, pbs) &&
+		ikev2_out_natd(&st->st_mobike_localaddr, st->st_mobike_localport,
 			    &st->st_remoteaddr, st->st_remoteport,
-			    &st->st_ike_spis, pbs))
-		return STF_INTERNAL_ERROR;
-
-	return STF_OK;
+			    &st->st_ike_spis, pbs);
 }
 #endif
 

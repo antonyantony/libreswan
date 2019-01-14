@@ -843,7 +843,7 @@ bool ikev1_justship_KE(chunk_t *g,
 	case SEND_EMPTY:
 		libreswan_log("IMPAIR: sending empty KE (g^x)");
 		return ikev1_out_generic_chunk(0, &isakmp_keyex_desc, outs,
-					       empty_chunk, "empty KE");
+					       EMPTY_CHUNK, "empty KE");
 	case SEND_ROOF:
 	default:
 	{
@@ -1127,7 +1127,7 @@ stf_status main_inI2_outR2_continue1_tail(struct state *st, struct msg_digest *m
 				free_generalNames(ca, FALSE);
 			} else {
 				if (!ikev1_build_and_ship_CR(CERT_X509_SIGNATURE,
-							empty_chunk,
+							EMPTY_CHUNK,
 							&rbody,
 							ISAKMP_NEXT_NONE))
 					return STF_INTERNAL_ERROR;
@@ -1892,7 +1892,8 @@ stf_status send_isakmp_notification(struct state *st,
 		};
 		hdr.isa_ike_initiator_spi = st->st_ike_spis.initiator;
 		hdr.isa_ike_responder_spi = st->st_ike_spis.responder;
-		passert(out_struct(&hdr, &isakmp_hdr_desc, &reply_stream, &rbody));
+		if (!out_struct(&hdr, &isakmp_hdr_desc, &reply_stream, &rbody))
+			return STF_INTERNAL_ERROR;
 	}
 	/* HASH -- create and note space to be filled later */
 	START_HASH_PAYLOAD(rbody, ISAKMP_NEXT_N);
@@ -1985,7 +1986,7 @@ static void send_notification(struct state *sndst, notification_t type,
 
 	pb_stream r_hdr_pbs;
 	u_char *r_hashval, *r_hash_start;
-	static monotime_t last_malformed;
+	static monotime_t last_malformed = MONOTIME_EPOCH;
 	monotime_t n = mononow();
 
 	r_hashval = NULL;
@@ -2316,19 +2317,17 @@ void send_v1_delete(struct state *st)
 		struct isakmp_delete isad = {
 			.isad_doi = ISAKMP_DOI_IPSEC,
 			.isad_np = ISAKMP_NEXT_NONE,
-			.isad_spisize = (2 * COOKIE_SIZE),
+			.isad_spisize = 2 * COOKIE_SIZE,
 			.isad_protoid = PROTO_ISAKMP,
 			.isad_nospi = 1,
 		};
-		u_char isakmp_spi[2 * COOKIE_SIZE];
-
-		memcpy(isakmp_spi, st->st_ike_spis.initiator.bytes, COOKIE_SIZE);
-		memcpy(isakmp_spi + COOKIE_SIZE, st->st_ike_spis.responder.bytes, COOKIE_SIZE);
 
 		passert(out_struct(&isad, &isakmp_delete_desc, &r_hdr_pbs,
 				   &del_pbs));
-		passert(out_raw(&isakmp_spi, (2 * COOKIE_SIZE), &del_pbs,
-				"delete payload"));
+		passert(out_raw(st->st_ike_spis.initiator.bytes, COOKIE_SIZE,
+				&del_pbs, "initiator SPI"));
+		passert(out_raw(st->st_ike_spis.responder.bytes, COOKIE_SIZE,
+				&del_pbs, "responder SPI"));
 		close_output_pbs(&del_pbs);
 	} else {
 		while (ns != said) {
@@ -2342,11 +2341,10 @@ void send_v1_delete(struct state *st)
 				.isad_protoid = ns->proto,
 				.isad_nospi = 1,
 			};
-			passert(out_struct(&isad, &isakmp_delete_desc, &r_hdr_pbs,
-					   &del_pbs));
+			passert(out_struct(&isad, &isakmp_delete_desc,
+					   &r_hdr_pbs, &del_pbs));
 			passert(out_raw(&ns->spi, sizeof(ipsec_spi_t),
-					&del_pbs,
-					"delete payload"));
+					&del_pbs, "delete payload"));
 			close_output_pbs(&del_pbs);
 		}
 	}

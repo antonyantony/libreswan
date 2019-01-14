@@ -35,9 +35,6 @@
 
 #include "ikev2_redirect.h"
 
-/* two bytes for GW Ident Type and GW Ident Len */
-#define GW_PAYLOAD_INFO_SIZE 2
-
 /*
  * Structure of REDIRECT Notify payload from RFC 5685.
  * The second part (Notification data) is interesting to us.
@@ -64,28 +61,45 @@
  * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  */
 
-bool emit_redirect_notification(const char *destination,
-			   const chunk_t *nonce, /* optional */
-			   pb_stream *pbs)
+bool emit_redirect_notification(
+		const char *destination,
+		const chunk_t *nonce, /* optional */
+		pb_stream *pbs)
+{
+	ip_address ip_addr;
+	err_t ugh = ttoaddr_num(destination, 0, AF_UNSPEC, &ip_addr);
+
+	if (ugh != NULL) {
+		/*
+		 * ttoaddr_num failed: just ship destination as a FQDN
+		 * ??? it may be a bogus string
+		 */
+		return emit_redirect_notification_decoded_dest(v2N_REDIRECT,
+			NULL, destination, nonce, pbs);
+	} else {
+		return emit_redirect_notification_decoded_dest(v2N_REDIRECT,
+			&ip_addr, NULL, nonce, pbs);
+	}
+}
+
+bool emit_redirect_notification_decoded_dest(
+		v2_notification_t ntype,
+		const ip_address *dest_ip,
+		const char *dest_str,
+		const chunk_t *nonce, /* optional */
+		pb_stream *pbs)
 {
 	struct ikev2_redirect_part gwi;
 	size_t id_len;
 	const unsigned char *id_bytes;
 
-	/*
-	 * try ttoaddr_num, if it fails just
-	 * ship destination (as a FQDN, although
-	 * it may be a bogus string)
-	 */
-	ip_address ip_addr;
-	err_t ugh = ttoaddr_num(destination, 0, AF_UNSPEC, &ip_addr);
-	if (ugh != NULL) {
-		DBG(DBG_CONTROL, DBG_log("REDIRECT destination is not IPv4/IPv6 address, we are going to send it as FQDN"));
-		gwi.gw_identity_type = GW_FQDN;
-		id_len = strlen(destination);
-		id_bytes = (const unsigned char *)destination;
+	if (dest_ip == NULL) {
+		id_len = strlen(dest_str);
+		id_bytes = (const unsigned char *)dest_str;
 	} else {
-		switch (addrtypeof(&ip_addr)) {
+		passert(dest_str == NULL);
+
+		switch (addrtypeof(dest_ip)) {
 		case AF_INET:
 			gwi.gw_identity_type = GW_IPV4;
 			break;
@@ -93,9 +107,9 @@ bool emit_redirect_notification(const char *destination,
 			gwi.gw_identity_type = GW_IPV6;
 			break;
 		default:
-			bad_case(addrtypeof(&ip_addr));
+			bad_case(addrtypeof(dest_ip));
 		}
-		id_len = addrbytesptr_read(&ip_addr, &id_bytes);
+		id_len = addrbytesptr_read(dest_ip, &id_bytes);
 	}
 
 	if (id_len > 0xFF) {
@@ -105,9 +119,13 @@ bool emit_redirect_notification(const char *destination,
 	}
 	gwi.gw_identity_len = id_len;
 
+	passert(nonce == NULL ||
+		(nonce->len >= IKEv2_MINIMUM_NONCE_SIZE &&
+		 nonce->len <= IKEv2_MAXIMUM_NONCE_SIZE));
+
 	pb_stream gwid_pbs;
 	return
--		emit_v2Npl(v2N_REDIRECT, pbs, &gwid_pbs) &&
+-		emit_v2Npl(ntype, pbs, &gwid_pbs) &&
 		out_struct(&gwi, &ikev2_redirect_desc, &gwid_pbs, NULL) &&
 		out_raw(id_bytes, id_len , &gwid_pbs, "redirect ID") &&
 		(nonce == NULL || out_chunk(*nonce, &gwid_pbs, "redirect ID len")) &&
@@ -208,11 +226,14 @@ err_t parse_redirect_payload(pb_stream *input_pbs,
 			return "variable part of payload is smaller than transfered GW Identity Length";
 
 		/* parse address directly to redirect_ip */
-		{
-			err_t ugh = initaddr(input_pbs->cur, gw_info.gw_identity_len, af, redirect_ip);
-			if (ugh != NULL)
-				return ugh;
-		}
+		err_t ugh = initaddr(input_pbs->cur, gw_info.gw_identity_len, af, redirect_ip);
+		if (ugh != NULL)
+			return ugh;
+
+		DBG(DBG_PARSING, {
+			ip_address_buf b;
+			DBG_log("   GW Identity IP: %s", ipstr(redirect_ip, &b));
+		});
 		input_pbs->cur += gw_info.gw_identity_len;
 		break;
 	}
@@ -227,10 +248,6 @@ err_t parse_redirect_payload(pb_stream *input_pbs,
 
 	size_t len = pbs_left(input_pbs);
 
-	DBGF(DBG_CONTROLMORE,
-		"there are %zu bytes left to parse, and we do%s need to parse nonce",
-		len, nonce == NULL ? " NOT" : "");
-
 	if (nonce == NULL) {
 		if (len > 0)
 			return "unexpected extra bytes in Notify data";
@@ -240,60 +257,15 @@ err_t parse_redirect_payload(pb_stream *input_pbs,
 		else if (len > IKEv2_MAXIMUM_NONCE_SIZE)
 			return "expected nonce is bigger than IKEv2 maximum nonce size";
 
-		if (!memeq(nonce->ptr, input_pbs->cur, len)) {
+		if (nonce->len != len ||
+		    !memeq(nonce->ptr, input_pbs->cur, len)) {
 			DBG(DBG_CONTROL, {
-				chunk_t dump_nonce;
-
-				setchunk(dump_nonce, input_pbs->cur, len);
-				DBG_dump_chunk("received nonce", dump_nonce);
+				DBG_dump_chunk("expected nonce", *nonce);
+				DBG_dump("received nonce", input_pbs->cur, len);
 			});
 			return "received nonce is not the same as Ni";
 		}
 	}
-
-	return NULL;
-}
-
-err_t build_redirected_from_notify_data(ip_address old_gw_address, chunk_t *data /* result */)
-{
-	int gw_identity_type = 0;
-	size_t gw_identity_len = 0;
-
-	switch (addrtypeof(&old_gw_address)) {
-	case AF_INET:
-		gw_identity_type = GW_IPV4;
-		gw_identity_len = 4;
-		break;
-	case AF_INET6:
-		gw_identity_type = GW_IPV6;
-		gw_identity_len = 16;
-		break;
-	default:
-		return "address of the gateway that redirected us is deformed";
-	}
-
-	size_t data_len = GW_PAYLOAD_INFO_SIZE + gw_identity_len;
-	/*
-	 * we free this data in calling function or here
-	 * (when len != gw_identity_len)
-	 */
-	*data = alloc_chunk(data_len, "data for REDIRECTED_FROM Notify payload");
-
-	char *tmp = (char *) data->ptr;
-	*tmp++ = gw_identity_type;
-	*tmp++ = gw_identity_len;
-
-	/* write values of IPv4/IPv6 address */
-	const unsigned char *addr_bytes;
-	size_t len = addrbytesptr_read(&old_gw_address, &addr_bytes);
-
-	if (len != gw_identity_len) {
-		freeanychunk(*data);
-		return "old GW identity length doesn't match address bytes length";
-	}
-
-	/* write ip_address bytes to tmp (chunk_t data) */
-	memcpy(tmp, addr_bytes, len);
 
 	return NULL;
 }
@@ -383,17 +355,13 @@ void initiate_redirect(struct state *st)
 	 */
 	if (st->st_redirected_in_auth)
 		del_spi_trick(st);
-
-	return;
 }
 
 /* helper function for send_v2_informational_request() */
-static stf_status add_redirect_payload(struct state *st, pb_stream *pbs)
+static payload_master_t add_redirect_payload;
+static bool add_redirect_payload(struct state *st, pb_stream *pbs)
 {
-	if (!emit_redirect_notification(st->st_active_redirect_gw, NULL, pbs))
-		return STF_INTERNAL_ERROR;
-
-	return STF_OK;
+	return emit_redirect_notification(st->st_active_redirect_gw, NULL, pbs);
 }
 
 void send_active_redirect_in_informational(struct state *st)
