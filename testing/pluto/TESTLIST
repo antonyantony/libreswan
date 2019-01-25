@@ -57,6 +57,7 @@ kvmplutotest	enumcheck-01			good
 
 # basic pluto test - bring up your basic CONN between eastnet-westnet.
 kvmplutotest	basic-pluto-01			good
+kvmplutotest	basic-pluto-01-nosecrets	good
 kvmplutotest	basic-pluto-02			good
 kvmplutotest	basic-pluto-03			good
 kvmplutotest	basic-pluto-04			wip
@@ -458,9 +459,8 @@ kvmplutotest	newoe-25-cat-3-4-way			good
 kvmplutotest	newoe-25-cat-4				good
 kvmplutotest 	newoe-25-cat-5				good
 kvmplutotest 	newoe-26-poc-poc-host			good
-kvmplutotest 	newoe-27-replace-sa			good
-kvmplutotest 	newoe-27-replace-sa-authnull		good
-
+kvmplutotest 	newoe-27-replace-sa-auth-authnull	good
+kvmplutotest 	newoe-27-replace-sa-authnull-authnull	good
 
 kvmplutotest 	certoe-01-whack				good
 kvmplutotest 	certoe-02-whack-badca			good

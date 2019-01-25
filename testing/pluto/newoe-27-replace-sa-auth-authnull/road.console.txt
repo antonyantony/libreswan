@@ -23,7 +23,7 @@ road #
  echo "initdone"
 initdone
 road #
- # setup static conn
+ # setup authenticated static conn
 road #
  ipsec auto --up authenticated
 002 "authenticated" #1: initiating v2 parent SA
@@ -130,12 +130,16 @@ road #
 road #
  sleep 5
 road #
- ping -n -c 1 -I 192.1.3.209 192.1.2.23
+ # the ping triggers a authnull attempt. It should fail because
+road #
+ # east should not replace an authenticated conn with an authnull conn
+road #
+ ping -n -c 2 -I 192.1.3.209 192.1.2.23
 PING 192.1.2.23 (192.1.2.23) from 192.1.3.209 : 56(84) bytes of data.
 --- 192.1.2.23 ping statistics ---
-1 packets transmitted, 0 received, 100% packet loss, time XXXX
+2 packets transmitted, 0 received, 100% packet loss, time XXXX
 road #
- # there should be no partial or established states, and a fail shunt
+ # There should NOT be an IPsec SA, and no shunt since we received failure
 road #
  ipsec whack --trafficstatus
 road #
