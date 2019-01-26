@@ -2695,7 +2695,7 @@ stf_status ikev2_ike_sa_process_auth_request(struct state *st,
 	if (e >= STF_FAIL &&
 	    (st->st_connection->policy & POLICY_OPPORTUNISTIC)) {
 		DBG(DBG_OPPO,
-			DBG_log("Deleting opportunistic Parent with no Child SA"));
+			DBG_log("(pretending?) Deleting opportunistic Parent with no Child SA"));
 		e = STF_FATAL;
 		send_v2N_response_from_state(ike_sa(st), md,
 					     v2N_AUTHENTICATION_FAILED,
@@ -2720,7 +2720,7 @@ static stf_status ikev2_parent_inI2outR2_continue_tail(struct state *st,
 	if (!LHAS(pst->hidden_variables.st_nat_traversal, NATED_HOST))
 		update_ike_endpoints(pst, md);
 
-	nat_traversal_change_port_lookup(md, st);
+	nat_traversal_change_port_lookup(md, st); /* shouldn't this be pst? */
 
 	if (!v2_decode_certs(ike, md)) {
 		pexpect(ike->sa.st_sa_role == SA_RESPONDER);
@@ -2734,8 +2734,10 @@ static stf_status ikev2_parent_inI2outR2_continue_tail(struct state *st,
 		dbg("X509: CERT payload bogus or revoked");
 	}
 	/* this call might update connection in md->st */
-	if (!ikev2_decode_peer_id(md))
+	if (!ikev2_decode_peer_id(md)) {
+		event_force(EVENT_SA_EXPIRE, st);
 		return STF_FAIL + v2N_AUTHENTICATION_FAILED;
+	}
 
 	atype = md->chain[ISAKMP_NEXT_v2AUTH]->payload.v2a.isaa_type;
 	if (IS_LIBUNBOUND && id_ipseckey_allowed(st, atype)) {
@@ -3633,8 +3635,10 @@ stf_status ikev2_parent_inR2(struct state *st, struct msg_digest *md)
 	}
 
 	/* XXX this call might change connection in md->st! */
-	if (!ikev2_decode_peer_id(md))
+	if (!ikev2_decode_peer_id(md)) {
+		event_force(EVENT_SA_EXPIRE, st);
 		return STF_FAIL + v2N_AUTHENTICATION_FAILED;
+	}
 
 	struct connection *c = st->st_connection;
 	enum keyword_authby that_authby = c->spd.that.authby;
