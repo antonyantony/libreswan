@@ -15,6 +15,7 @@
 SUBDIRS = pluto
 SUBDIRS += enumcheck
 SUBDIRS += ipcheck
+SUBDIRS += fmtcheck
 
 ifndef top_srcdir
 include ../mk/dirs.mk

@@ -146,9 +146,8 @@ static void log_processing(enum processing processing, bool current,
 			c = st->st_connection;
 		}
 		if (c != NULL) {
-			char b1[CONN_INST_BUF];
-			lswlogf(buf, " connection \"%s\"%s",
-				c->name, fmt_conn_instance(c, b1));
+			fmt_string(buf, " connection ");
+			fmt_connection(buf, c);
 		}
 		if (st != NULL && (c == NULL || !(c->policy & POLICY_OPPORTUNISTIC))) {
 			/* fmt_conn_instance() include the same if POLICY_OPPORTUNISTIC */
@@ -536,11 +535,7 @@ static void lswlog_cur_prefix(struct lswlog *buf,
 		cur_connection;
 
 	if (c != NULL) {
-		lswlogf(buf, "\"%s\"", c->name);
-		/* if it fits, put in any connection instance information */
-		char inst[CONN_INST_BUF];
-		fmt_conn_instance(c, inst);
-		lswlogs(buf, inst);
+		fmt_connection(buf, c);
 		if (cur_state != NULL) {
 			/* state number */
 			lswlogf(buf, " #%lu", cur_state->st_serialno);
@@ -693,29 +688,32 @@ void lswlog_to_whack_stream(struct lswlog *buf)
 
 	passert(fd_p(wfd));
 
-	char *m = buf->array;
-	size_t len = buf->len;
+	/* m includes '\0' */
+	chunk_t m = fmtbuf_as_chunk(buf);
+
+	/* don't need NUL, do need NL */
+	passert(m.ptr[m.len-1] == '\0');
+	m.ptr[m.len-1] = '\n';
 
 	/* write to whack socket, but suppress possible SIGPIPE */
 #ifdef MSG_NOSIGNAL                     /* depends on version of glibc??? */
-	m[len] = '\n';  /* don't need NUL, do need NL */
-	(void) send(wfd.fd, m, len + 1, MSG_NOSIGNAL);
+	(void) send(wfd.fd, m.ptr, m.len, MSG_NOSIGNAL);
 #else /* !MSG_NOSIGNAL */
 	int r;
 	struct sigaction act, oldact;
 
-	m[len] = '\n'; /* don't need NUL, do need NL */
 	act.sa_handler = SIG_IGN;
 	sigemptyset(&act.sa_mask);
 	act.sa_flags = 0; /* no nothing */
 	r = sigaction(SIGPIPE, &act, &oldact);
 	passert(r == 0);
 
-	(void) write(wfd, m, len + 1);
+	(void) write(wfd, m.ptr, m.len);
 
 	r = sigaction(SIGPIPE, &oldact, NULL);
 	passert(r == 0);
 #endif /* !MSG_NOSIGNAL */
+	m.ptr[m.len-1] = '\0'; /* put NUL back */
 }
 
 bool whack_log_p(void)

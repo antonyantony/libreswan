@@ -358,19 +358,19 @@ static stf_status ikev2_encrypt_msg(struct ike_sa *ike,
 	PK11SymKey *cipherkey;
 	PK11SymKey *authkey;
 	/* encrypt with our end's key */
-	switch (ike->sa.st_original_role) {
-	case ORIGINAL_INITIATOR:
+	switch (ike->sa.st_sa_role) {
+	case SA_INITIATOR:
 		cipherkey = ike->sa.st_skey_ei_nss;
 		authkey = ike->sa.st_skey_ai_nss;
 		salt = ike->sa.st_skey_initiator_salt;
 		break;
-	case ORIGINAL_RESPONDER:
+	case SA_RESPONDER:
 		cipherkey = ike->sa.st_skey_er_nss;
 		authkey = ike->sa.st_skey_ar_nss;
 		salt = ike->sa.st_skey_responder_salt;
 		break;
 	default:
-		bad_case(ike->sa.st_original_role);
+		bad_case(ike->sa.st_sa_role);
 	}
 
 	/* size of plain or cipher text.  */
@@ -527,21 +527,21 @@ static bool ikev2_verify_and_decrypt_sk_payload(struct ike_sa *ike,
 	chunk_t salt;
 	PK11SymKey *cipherkey;
 	PK11SymKey *authkey;
-	switch (ike->sa.st_original_role) {
-	case ORIGINAL_INITIATOR:
+	switch (ike->sa.st_sa_role) {
+	case SA_INITIATOR:
 		/* need responders key */
 		cipherkey = ike->sa.st_skey_er_nss;
 		authkey = ike->sa.st_skey_ar_nss;
 		salt = ike->sa.st_skey_responder_salt;
 		break;
-	case ORIGINAL_RESPONDER:
+	case SA_RESPONDER:
 		/* need initiators key */
 		cipherkey = ike->sa.st_skey_ei_nss;
 		authkey = ike->sa.st_skey_ai_nss;
 		salt = ike->sa.st_skey_initiator_salt;
 		break;
 	default:
-		bad_case(ike->sa.st_original_role);
+		bad_case(ike->sa.st_sa_role);
 	}
 
 	/* authenticate and decrypt the block. */
@@ -759,12 +759,12 @@ bool ikev2_decrypt_msg(struct state *st, struct msg_digest *md)
 		 * If so impaired, clone the encrypted message before
 		 * it gets decrypted in-place (but only once).
 		 */
-		if (IMPAIR(REPLAY_ENCRYPTED) && !md->fake) {
+		if (IMPAIR(REPLAY_ENCRYPTED) && !md->fake_clone) {
 			libreswan_log("IMPAIR: cloning incoming encrypted message and scheduling its replay");
 			schedule_md_event("replay encrypted message",
 					  clone_md(md, "copy of encrypted message"));
 		}
-		if (IMPAIR(CORRUPT_ENCRYPTED) && !md->fake) {
+		if (IMPAIR(CORRUPT_ENCRYPTED) && !md->fake_clone) {
 			libreswan_log("IMPAIR: corrupting incoming encrypted message's SK payload's first byte");
 			*e_pbs->cur = ~(*e_pbs->cur);
 		}

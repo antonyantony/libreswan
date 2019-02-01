@@ -52,14 +52,6 @@
 #include "ike_spi.h"
 #include "pluto_timing.h"	/* for statetime_t */
 
-/* msgid_t defined in defs.h */
-
-#define v1_MAINMODE_MSGID  ((msgid_t) 0)	/* network and host order */
-
-#define v2_INITIAL_MSGID  ((msgid_t) 0)	/* network and host order */
-
-#define v2_INVALID_MSGID  ((msgid_t) 0xffffffff)	/* network and host order */
-
 struct ikev2_ipseckey_dns; /* forward declaration of tag */
 
 struct state;   /* forward declaration of tag */
@@ -278,7 +270,6 @@ struct finite_state {
 	const char *fs_short_name;
 	const char *fs_story;
 	lset_t fs_flags;
-	enum event_type fs_timeout_event;
 	enum state_category fs_category;
 	const struct state_v1_microcode *fs_v1_transitions;
 	const struct state_v2_microcode *fs_v2_transitions;
