@@ -4,6 +4,7 @@
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2017 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2017 Antony Antony <antony@phenome.org>
+ * Copyright (C) 2019 Stepan Broz <stepan@izitra.cz>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -95,15 +96,41 @@ static void unbound_ctx_config(bool do_dnssec, const char *rootfile, const char 
 		DBG(DBG_DNS, DBG_log("/etc/resolv.conf usage activated"));
 	}
 
+	/*
+	 * Limit outgoing ports to those allowed by common SELinux policy
+	 */
+	errno = 0;
+	ugh = ub_ctx_set_option(dns_ctx, "outgoing-port-avoid:", "0-65535");
+	if (ugh != 0) {
+		loglog(RC_LOG_SERIOUS, "error setting outgoing-port-avoid: %s: %s",
+			ub_strerror(ugh), strerror(errno));
+	} else {
+		DBG(DBG_DNS, DBG_log("outgoing-port-avoid set 0-65535"));
+	}
+
+	errno = 0;
+	ugh = ub_ctx_set_option(dns_ctx, "outgoing-port-permit:", "32768-60999");
+		if (ugh != 0) {
+		loglog(RC_LOG_SERIOUS, "error setting outgoing-port-permit: %s: %s",
+			ub_strerror(ugh), strerror(errno));
+	} else {
+		DBG(DBG_DNS, DBG_log("outgoing-port-permit set 32768-60999"));
+	}
+
 	if (!do_dnssec) {
 		/* No DNSSEC - nothing more to configure */
 		DBG(DBG_DNS, DBG_log("dnssec validation disabled by configuration"));
+		return;
 	}
 
+	/* Only DNSSEC related configuration from here */
 	if (rootfile == NULL) {
-		if (trusted != NULL) {
+		if (trusted == NULL) {
 			loglog(RC_LOG_SERIOUS, "dnssec-enable=yes but no dnssec-rootkey-file or trust anchors specified.");
 			loglog(RC_LOG_SERIOUS, "WARNING: DNSSEC validation disabled");
+			return;
+		} else {
+			loglog(RC_LOG_SERIOUS, "dnssec-enable=yes but no dnssec-rootkey-file specified. Additional trust anchor file MUST include a root trust anchor or DNSSEC validation will be disabled");
 		}
 	} else {
 		DBG(DBG_DNS, DBG_log("Loading dnssec root key from:%s", rootfile));
@@ -114,7 +141,7 @@ static void unbound_ctx_config(bool do_dnssec, const char *rootfile, const char 
 
 			loglog(RC_LOG_SERIOUS, "error adding dnssec root key: %s [errno: %s]",
 				ub_strerror(ugh), strerror(e));
-			loglog(RC_LOG_SERIOUS, "WARNING: DNSSEC validation likely broken!");
+			loglog(RC_LOG_SERIOUS, "WARNING: DNSSEC validation disabled");
 		}
 	}
 
