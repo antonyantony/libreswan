@@ -71,6 +71,7 @@
 #include "ikev2_message.h"	/* for ikev2_decrypt_msg() */
 #include "pluto_stats.h"
 #include "keywords.h"
+#include "ikev2_msgid.h"
 
 static bool is_msg_request(const struct msg_digest *md);
 
@@ -93,8 +94,6 @@ enum smf2_flags {
 	 */
 	SMF2_IKE_I_SET = LELEM(1),
 	SMF2_IKE_I_CLEAR = LELEM(2),
-
-	SMF2_SEND = LELEM(3),
 
 	/*
 	 * Is the MSG_R bit set.
@@ -274,7 +273,8 @@ static /*const*/ struct state_v2_microcode v2_state_microcode_table[] = {
 	{ .story      = "Initiate CREATE_CHILD_SA IKE Rekey",
 	  .state      = STATE_V2_REKEY_IKE_I0,
 	  .next_state = STATE_V2_REKEY_IKE_I,
-	  .flags      = SMF2_IKE_I_CLEAR | SMF2_MSG_R_SET | SMF2_SEND,
+	  .flags      = SMF2_IKE_I_CLEAR | SMF2_MSG_R_SET,
+	  .send = MESSAGE_REQUEST,
 	  .processor  = NULL,
 	  .timeout_event = EVENT_RETRANSMIT, },
 
@@ -284,7 +284,8 @@ static /*const*/ struct state_v2_microcode v2_state_microcode_table[] = {
 	{ .story      = "Initiate CREATE_CHILD_SA IPsec Rekey SA",
 	  .state      = STATE_V2_REKEY_CHILD_I0,
 	  .next_state = STATE_V2_REKEY_CHILD_I,
-	  .flags =      SMF2_IKE_I_CLEAR | SMF2_MSG_R_SET | SMF2_SEND,
+	  .flags =      SMF2_IKE_I_CLEAR | SMF2_MSG_R_SET,
+	  .send = MESSAGE_REQUEST,
 	  .processor  = NULL,
 	  .timeout_event = EVENT_RETRANSMIT, },
 
@@ -294,7 +295,8 @@ static /*const*/ struct state_v2_microcode v2_state_microcode_table[] = {
 	{ .story      = "Initiate CREATE_CHILD_SA IPsec SA",
 	  .state      = STATE_V2_CREATE_I0,
 	  .next_state = STATE_V2_CREATE_I,
-	  .flags =      SMF2_IKE_I_CLEAR | SMF2_MSG_R_SET | SMF2_SEND,
+	  .flags =      SMF2_IKE_I_CLEAR | SMF2_MSG_R_SET,
+	  .send = MESSAGE_REQUEST,
 	  .processor  = NULL,
 	  .timeout_event = EVENT_RETRANSMIT, },
 
@@ -304,7 +306,8 @@ static /*const*/ struct state_v2_microcode v2_state_microcode_table[] = {
 	{ .story      = "initiate IKE_SA_INIT",
 	  .state      = STATE_PARENT_I0,
 	  .next_state = STATE_PARENT_I1,
-	  .flags      = SMF2_IKE_I_CLEAR | SMF2_MSG_R_SET | SMF2_SEND,
+	  .flags      = SMF2_IKE_I_CLEAR | SMF2_MSG_R_SET,
+	  .send = MESSAGE_REQUEST,
 	  .processor  = NULL,
 	  .timeout_event = EVENT_RETRANSMIT, },
 
@@ -315,7 +318,8 @@ static /*const*/ struct state_v2_microcode v2_state_microcode_table[] = {
 	{ .story      = "Initiator: process SA_INIT reply notification",
 	  .state      = STATE_PARENT_I1,
 	  .next_state = STATE_PARENT_I1,
-	  .flags = SMF2_IKE_I_CLEAR | SMF2_MSG_R_SET | SMF2_SEND,
+	  .flags = SMF2_IKE_I_CLEAR | SMF2_MSG_R_SET,
+	  .send = MESSAGE_REQUEST,
 	  .req_clear_payloads = P(N),
 	  .opt_clear_payloads = LEMPTY,
 	  .processor = ikev2_IKE_SA_process_SA_INIT_response_notification,
@@ -331,7 +335,8 @@ static /*const*/ struct state_v2_microcode v2_state_microcode_table[] = {
 	{ .story      = "Initiator: process IKE_SA_INIT reply, initiate IKE_AUTH",
 	  .state      = STATE_PARENT_I1,
 	  .next_state = STATE_PARENT_I2,
-	  .flags = SMF2_IKE_I_CLEAR | SMF2_MSG_R_SET | SMF2_SEND,
+	  .flags = SMF2_IKE_I_CLEAR | SMF2_MSG_R_SET,
+	  .send = MESSAGE_REQUEST,
 	  .req_clear_payloads = P(SA) | P(KE) | P(Nr),
 	  .opt_clear_payloads = P(CERTREQ),
 	  .processor  = ikev2_parent_inR1outI2,
@@ -397,7 +402,8 @@ static /*const*/ struct state_v2_microcode v2_state_microcode_table[] = {
 	{ .story      = "Respond to IKE_SA_INIT",
 	  .state      = STATE_PARENT_R0,
 	  .next_state = STATE_PARENT_R1,
-	  .flags = SMF2_IKE_I_SET | SMF2_MSG_R_CLEAR | SMF2_SEND,
+	  .flags = SMF2_IKE_I_SET | SMF2_MSG_R_CLEAR,
+	  .send = MESSAGE_RESPONSE,
 	  .req_clear_payloads = P(SA) | P(KE) | P(Ni),
 	  .processor  = ikev2_parent_inI1outR1,
 	  .recv_type  = ISAKMP_v2_IKE_SA_INIT,
@@ -415,7 +421,8 @@ static /*const*/ struct state_v2_microcode v2_state_microcode_table[] = {
 	{ .story      = "Responder: process IKE_AUTH request (no SKEYSEED)",
 	  .state      = STATE_PARENT_R1,
 	  .next_state = STATE_PARENT_R1,
-	  .flags = SMF2_IKE_I_SET | SMF2_MSG_R_CLEAR | SMF2_SEND | SMF2_NO_SKEYSEED,
+	  .flags = SMF2_IKE_I_SET | SMF2_MSG_R_CLEAR | SMF2_NO_SKEYSEED,
+	  .send = MESSAGE_RESPONSE,
 	  .req_clear_payloads = P(SK),
 	  .req_enc_payloads = LEMPTY,
 	  .opt_enc_payloads = LEMPTY,
@@ -433,7 +440,8 @@ static /*const*/ struct state_v2_microcode v2_state_microcode_table[] = {
 	{ .story      = "Responder: process IKE_AUTH request",
 	  .state      = STATE_PARENT_R1,
 	  .next_state = STATE_V2_IPSEC_R,
-	  .flags = SMF2_IKE_I_SET | SMF2_MSG_R_CLEAR | SMF2_SEND,
+	  .flags = SMF2_IKE_I_SET | SMF2_MSG_R_CLEAR,
+	  .send = MESSAGE_RESPONSE,
 	  .req_clear_payloads = P(SK),
 	  .req_enc_payloads = P(IDi) | P(AUTH) | P(SA) | P(TSi) | P(TSr),
 	  .opt_enc_payloads = P(CERT) | P(CERTREQ) | P(IDr) | P(CP),
@@ -460,7 +468,8 @@ static /*const*/ struct state_v2_microcode v2_state_microcode_table[] = {
 	{ .story      = "Respond to CREATE_CHILD_SA IKE Rekey",
 	  .state      = STATE_V2_REKEY_IKE_R,
 	  .next_state = STATE_PARENT_R2,
-	  .flags      = SMF2_MSG_R_CLEAR | SMF2_SEND,
+	  .flags      = SMF2_MSG_R_CLEAR,
+	  .send = MESSAGE_RESPONSE,
 	  .req_clear_payloads = P(SK),
 	  .req_enc_payloads = P(SA) | P(Ni) | P(KE),
 	  .opt_enc_payloads = P(N),
@@ -493,7 +502,8 @@ static /*const*/ struct state_v2_microcode v2_state_microcode_table[] = {
 	{ .story      = "Respond to CREATE_CHILD_SA IPsec SA Request",
 	  .state      = STATE_V2_CREATE_R,
 	  .next_state = STATE_V2_IPSEC_R,
-	  .flags      = SMF2_MSG_R_CLEAR | SMF2_SEND,
+	  .flags      = SMF2_MSG_R_CLEAR,
+	  .send = MESSAGE_RESPONSE,
 	  .req_clear_payloads = P(SK),
 	  .req_enc_payloads = P(SA) | P(Ni) | P(TSi) | P(TSr),
 	  .opt_enc_payloads = P(KE) | P(N),
@@ -750,10 +760,17 @@ void init_ikev2(void)
 			for (unsigned ti = 0; ti < from->fs_nr_transitions; ti++) {
 				const struct state_v2_microcode *t = &from->fs_v2_transitions[ti];
 				const struct finite_state *to = finite_states[t->next_state];
-				DBG_log("    -> %s %s (%s)", to->fs_short_name,
+				const char *send;
+				switch (t->send) {
+				case NO_MESSAGE: send = ""; break;
+				case MESSAGE_REQUEST: send = " send-request"; break;
+				case MESSAGE_RESPONSE: send = " send-request"; break;
+				default: bad_case(t->send);
+				}
+				DBG_log("    -> %s %s%s (%s)", to->fs_short_name,
 					enum_short_name(&timer_event_names,
 							t->timeout_event),
-					t->story);
+					send, t->story);
 			}
 		}
 	}
@@ -1615,130 +1632,65 @@ void ikev2_process_packet(struct msg_digest **mdp)
 						  ix, &ixb));
 			return;
 		}
-		/* update lastrecv later on */
 	} else if (v2_msg_role(md) == MESSAGE_RESPONSE) {
 		/*
-		 * A response; find the IKE SA or CHILD SA that
+		 * A response; find the SA (IKE or CHILD) that
 		 * initiated the request.
-		 *
-		 * XXX: Why is the exchange type needed?  Surely state
-		 * machine will figure out if the state X exchange is
-		 * valid?
-		 *
-		 * Lets find out.
-		 *
-		 * XXX: Why is a CHILD SA specific and then an IKE SA
-		 * specific lookup needed?  Surely a Message ID
-		 * uniquely identifies the IKE or CHILD that sent the
-		 * request?
-		 *
-		 * Lets find out.
-		 *
-		 * XXX: What happens when a duplicate response is
-		 * received?  For instance, IKE SAs send requests with
-		 * no state change.  Unless the state's Message ID is
-		 * being thwacked, it will match and, potentially
-		 * cause a re-processing of the state.  Perhaps that
-		 * is why the IX parameter is needed?
-		 *
-		 * Lets find out.
-		 *
-		 * XXX: Why is an IKE SA lookup needed?  If there is
-		 * no Message ID match then just log it - the IKE SA
-		 * is being used to make the error message "pretty".
 		 */
-		st = find_state_ikev2_child(ix, &md->hdr.isa_ike_spis,
-					    md->hdr.isa_msgid);
-		if (DBGP(DBG_BASE) && st != NULL) {
-			struct state *msgid_st = find_v2_sa_by_msgid(&md->hdr.isa_ike_spis,
-								     md->hdr.isa_msgid);
-			if (st != msgid_st) {
-				DBG_log("WIP: Message ID: find_state_ikev2_child()->#%lu == sa_by_msgid("PRI_MSGID")->#%lu",
-					st != NULL ? st->st_serialno : 0,
-					md->hdr.isa_msgid,
-					msgid_st != NULL ? msgid_st->st_serialno : 0);
-			}
-		}
-
+		st = find_v2_sa_by_request_msgid(&md->hdr.isa_ike_spis,
+						 md->hdr.isa_msgid);
 		if (st == NULL) {
 			/*
-			 * Didn't find a child waiting on that message
-			 * ID so presumably it isn't valid.
+			 * Since no SA is waiting for the Message ID,
+			 * the message isn't valid.  When there's an
+			 * IKE SA with matching SPIs log against that.
 			 */
-			st = find_v2_ike_sa(&md->hdr.isa_ike_spis);
-			if (st == NULL) {
+			struct state *ike = find_v2_ike_sa(&md->hdr.isa_ike_spis);
+			if (ike == NULL) {
+				/* technically IKE or CHILD SA */
 				rate_log("%s message response has no matching IKE SA",
 					 enum_name(&ikev2_exchange_names, ix));
-				if (DBGP(DBG_BASE)) {
-					struct state *msgid_st = find_v2_sa_by_msgid(&md->hdr.isa_ike_spis,
-										     md->hdr.isa_msgid);
-					if (msgid_st != NULL) {
-						DBG_log("WIP: Message ID: find_state_ikev2_child()->NULL find_v2_ike_sa()->NULL == sa_by_msgid("PRI_MSGID")->#%lu",
-							md->hdr.isa_msgid, msgid_st->st_serialno);
-					}
-				}
-				return;
+			} else {
+				/* XXX: rate_log_state()? */
+				push_cur_state(ike);
+				rate_log("%s message response with Message ID "PRI_MSGID" has no matching SA",
+					 enum_name(&ikev2_exchange_names, ix), md->hdr.isa_msgid);
+				pop_cur_state(SOS_NOBODY);
 			}
+			return;
+		}
+		pexpect(st != NULL);
+		/*
+		 * Does the Message ID fall within the IKE SA's
+		 * sliding Message ID window?
+		 */
+		struct ike_sa *ike = ike_sa(st);
+		if (md->hdr.isa_msgid > ike->sa.st_v2_msgids.initiator.sent) {
 			/*
-			 * Check if it's an old packet being returned,
-			 * and if so, drop it.  NOTE: in_struct()
-			 * changed the byte order.
-			 *
-			 * Beware of unsigned arrithmetic.
+			 * There was a state waiting for a message
+			 * that, according to the IKE SA, has not even
+			 * been sent?!?
 			 */
-			if (st->st_msgid_lastack != v2_INVALID_MSGID &&
-			    st->st_msgid_lastack > md->hdr.isa_msgid) {
-				/*
-				 * An old response to our request?
-				 */
-				LSWDBGP(DBG_CONTROL|DBG_RETRANSMITS, buf) {
-					lswlog_retransmit_prefix(buf, st);
-					lswlogf(buf, "dropping retransmitted response with msgid %u from peer - we already processed %u.",
-						md->hdr.isa_msgid, st->st_msgid_lastack);
-				}
-				return;
-			}
-			if (st->st_msgid_nextuse != v2_INVALID_MSGID &&
-			    md->hdr.isa_msgid >= st->st_msgid_nextuse) {
-				/*
-				 * A reply for an unknown request (or
-				 * request we've not yet sent)? Huh!
-				 */
-				dbg("dropping unasked response with msgid %u from peer (our last used msgid is %u)",
-				     md->hdr.isa_msgid,
-				     st->st_msgid_nextuse - 1);
-				return;
-			}
+			PEXPECT_LOG("Message ID: IKE #%lu receiver #%lu waiting for a message "PRI_MSGID" which is from the future from the future - last message sent is %jd",
+				    ike->sa.st_serialno, st->st_serialno,
+				    md->hdr.isa_msgid,
+				    st->st_v2_msgids.initiator.sent);
+			return;
+		}
+		if (ike->sa.st_v2_msgids.initiator.recv > md->hdr.isa_msgid) {
 			/*
-			 * Assume the request was generated by the IKE
-			 * SA, for instance:
-			 *
- 			 * - as shown by ikev2-delete-02, the delete
-			 *   response
-			 *
-			 * - (in theory), when an AUTH exchange
-			 *   involves multiple messages (so the CHILD
-			 *   SA can't be created early), the AUTH
-			 *   response???
-			 *
-			 * - ???
-			 *
-			 * The log line lets find out.
+			 * A response that falls outside of the
+			 * Message ID window.  Could something like
+			 * MOBIKE where requests are lost trigger
+			 * this?
 			 */
-			dbg("Message ID: using IKE SA #%lu for response with msgid "PRI_MSGID" (msgid: "PRI_MSGID"; nextuse: "PRI_MSGID", lastack: "PRI_MSGID"; lastrecv: "PRI_MSGID", lastreplied: "PRI_MSGID")",
-			    st->st_serialno, md->hdr.isa_msgid, st->st_msgid,
-			    st->st_msgid_nextuse, st->st_msgid_lastack,
-			    st->st_msgid_lastrecv, st->st_msgid_lastreplied);
-
 			if (DBGP(DBG_BASE)) {
-				struct state *msgid_st = find_v2_sa_by_msgid(&md->hdr.isa_ike_spis,
-									     md->hdr.isa_msgid);
-				if (st != msgid_st) {
-					DBG_log("WIP: Message ID: find_state_ikev2_child()->NULL find_v2_ike_sa()->#%lu == sa_by_msgid("PRI_MSGID")->#%lu",
-					    st->st_serialno, md->hdr.isa_msgid,
-					    msgid_st != NULL ? msgid_st->st_serialno : 0);
-				}
+				dbg("Message ID: IKE #%lu receiver #%lu dropping response with Message ID "PRI_MSGID" from peer - we already processed %jd",
+				    ike->sa.st_serialno, st->st_serialno,
+				    md->hdr.isa_msgid,
+				    st->st_v2_msgids.initiator.recv);
 			}
+			return;
 		}
 	} else {
 		PASSERT_FAIL("message role %d invalid", v2_msg_role(md));
@@ -1796,9 +1748,6 @@ void ikev2_process_packet(struct msg_digest **mdp)
 	/*
 	 * If the state is busy, presumably doing something like
 	 * crypto, skip further processing.
-	 *
-	 * For re-transmits, they should have been handled by the code
-	 * above.
 	 *
 	 * For fragments, things only go busy once all fragments have
 	 * been received (and re-transmitted fragments are ignored).
@@ -2245,7 +2194,6 @@ static bool decode_peer_id_counted(struct ike_sa *ike,
 		return FALSE;
 	}
 	bool initiator = (md->hdr.isa_flags & ISAKMP_FLAGS_v2_MSG_R) != 0;
-	struct connection *c = ike->sa.st_connection;
 
 	struct payload_digest *const id_him = initiator ?
 		md->chain[ISAKMP_NEXT_v2IDr] : md->chain[ISAKMP_NEXT_v2IDi];
@@ -2265,34 +2213,39 @@ static bool decode_peer_id_counted(struct ike_sa *ike,
 	}
 
 	/* You Tarzan, me Jane? */
-	struct payload_digest *const tarzan_pld = md->chain[ISAKMP_NEXT_v2IDr];
+	struct id tarzan_id;	/* may be unset */
+	struct id *tip = NULL;	/* tarzan ID pointer (or NULL) */
 
-	struct id tarzan_id;
-	struct id *tip = NULL;
+	{
+		const struct payload_digest *const tarzan_pld = md->chain[ISAKMP_NEXT_v2IDr];
 
-	if (!initiator && tarzan_pld != NULL) {
-		/*
-		 * ??? problem with diagnostics: what we're calling "peer ID"
-		 * is really our "peer's peer ID", in other words us!
-		 */
-		DBG(DBG_CONTROL, DBG_log("received IDr payload - extracting our alleged ID"));
-		if (!extract_peer_id(tarzan_pld->payload.v2id.isai_type,
-		     &tarzan_id, &tarzan_pld->pbs))
-		{
-			libreswan_log("Peer IDr payload extraction failed");
-			return FALSE;
+		if (!initiator && tarzan_pld != NULL) {
+			/*
+			 * ??? problem with diagnostics: what we're calling "peer ID"
+			 * is really our "peer's peer ID", in other words us!
+			 */
+			DBGF(DBG_CONTROL, "received IDr payload - extracting our alleged ID");
+			if (!extract_peer_id(tarzan_pld->payload.v2id.isai_type,
+					&tarzan_id, &tarzan_pld->pbs))
+			{
+				libreswan_log("Peer IDr payload extraction failed");
+				return FALSE;
+			}
+			tip = &tarzan_id;
 		}
-		tip = &tarzan_id;
 	}
 
+	/* start considering connection */
+
+	struct connection *c = ike->sa.st_connection;
+
 	/*
-	 * If there ar certs, try re-running the id check
+	 * If there are certs, try re-running the id check.
 	 */
 	if (!ike->sa.st_peer_alt_id &&
 	    ike->sa.st_remote_certs.verified != NULL) {
 		if (match_certs_id(ike->sa.st_remote_certs.verified,
-				   &c->spd.that.id,
-				   c/*update-connection*/)) {
+				   &c->spd.that.id /*ID_FROMCERT => updated*/)) {
 			dbg("X509: CERT and ID matches current connection");
 			ike->sa.st_peer_alt_id = true;
 		} else {
@@ -2377,6 +2330,7 @@ static bool decode_peer_id_counted(struct ike_sa *ike,
 			}
 
 			if (r == NULL) {
+				/* no "improvement" on c found */
 				char buf[IDTOA_BUF];
 
 				idtoa(&peer_id, buf, sizeof(buf));
@@ -2387,27 +2341,24 @@ static bool decode_peer_id_counted(struct ike_sa *ike,
 				    !same_id(&c->spd.that.id, &peer_id) &&
 				    c->spd.that.id.kind != ID_FROMCERT)
 				{
-					if (LIN(POLICY_AUTH_NULL, c->policy) && tarzan_pld != NULL && tarzan_id.kind == ID_NULL) {
+					if (LIN(POLICY_AUTH_NULL, c->policy) &&
+					    tip != NULL && tip->kind == ID_NULL) {
 						libreswan_log("Peer ID '%s' expects us to have ID_NULL and connection allows AUTH_NULL - allowing",
 							buf);
 						ike->sa.st_peer_wants_null = TRUE;
-						r = c;
 					} else {
 						libreswan_log("Peer ID '%s' mismatched on first found connection and no better connection found",
 							buf);
 						return FALSE;
 					}
 				} else {
-					DBG(DBG_CONTROL, DBG_log("Peer ID matches and no better connection found - continuing with existing connection"));
-					r = c;
+					DBGF(DBG_CONTROL, "Peer ID matches and no better connection found - continuing with existing connection");
 				}
-			}
+			} else if (r != c) {
+				/* r is an improvement on c -- replace */
 
-			if (r != c) {
 				char b1[CONN_INST_BUF];
 				char b2[CONN_INST_BUF];
-
-				/* apparently, r is an improvement on c -- replace */
 
 				libreswan_log("switched from \"%s\"%s to \"%s\"%s",
 					c->name,
@@ -2422,14 +2373,15 @@ static bool decode_peer_id_counted(struct ike_sa *ike,
 
 				update_state_connection(md->st, r);
 				/* redo from scratch so we read and check CERT payload */
-				DBG(DBG_X509, DBG_log("retrying ikev2_decode_peer_id_and_certs() with new conn"));
+				DBGF(DBG_X509, "retrying ikev2_decode_peer_id_and_certs() with new conn");
 				return decode_peer_id_counted(ike, md, depth + 1);
+			}
 
-			} else if (c->spd.that.has_id_wildcards) {
+			if (c->spd.that.has_id_wildcards) {
 				duplicate_id(&c->spd.that.id, &peer_id);
 				c->spd.that.has_id_wildcards = FALSE;
 			} else if (fromcert) {
-				DBG(DBG_X509, DBG_log("copying ID for fromcert"));
+				DBGF(DBG_X509, "copying ID for fromcert");
 				duplicate_id(&c->spd.that.id, &peer_id);
 			}
 		}
@@ -2571,12 +2523,14 @@ static void schedule_next_send(struct state *st)
 
 void v2_msgid_restart_init_request(struct state *st)
 {
-	dbg("restarting Message ID of state #%lu", st->st_serialno);
-	/* Ok? */
 	st->st_msgid_lastack = v2_INVALID_MSGID;
 	st->st_msgid_lastrecv = v2_INVALID_MSGID;
 	st->st_msgid_nextuse = 0;
 	st->st_msgid = 0;
+	dbg("Message ID: restart #%lu: msgid="PRI_MSGID" lastack="PRI_MSGID" lastrecv="PRI_MSGID" nextuse="PRI_MSGID,
+	    st->st_serialno, st->st_msgid,
+	    st->st_msgid_lastack, st->st_msgid_lastrecv,
+	    st->st_msgid_nextuse);
 }
 
 /*
@@ -2716,6 +2670,12 @@ static void ikev2_child_emancipate(struct msg_digest *md)
 	to->sa.st_msgid_lastack = v2_INVALID_MSGID;
 	to->sa.st_msgid_lastrecv = v2_INVALID_MSGID;
 	to->sa.st_msgid_nextuse = v2_FIRST_MSGID;
+	dbg("Message ID: emancipate #%lu: msgid="PRI_MSGID" lastack="PRI_MSGID" lastrecv="PRI_MSGID" nextuse="PRI_MSGID,
+	    to->sa.st_serialno, to->sa.st_msgid,
+	    to->sa.st_msgid_lastack,
+	    to->sa.st_msgid_lastrecv,
+	    to->sa.st_msgid_nextuse);
+	v2_msgid_init(pexpect_ike_sa(&to->sa));
 
 	/* Switch to the new IKE SPIs */
 	to->sa.st_ike_spis = to->sa.st_ike_rekey_spis;
@@ -2745,18 +2705,31 @@ static void success_v2_state_transition(struct state *st, struct msg_digest *md)
 			      enum_name(&state_names, svm->next_state)));
 	}
 
-
 	if (from_state == STATE_V2_REKEY_IKE_R ||
 	    from_state == STATE_V2_REKEY_IKE_I) {
-		dbg("Message ID: updating counters for #%lu before emancipating",
-		    md->st->st_serialno);
+		/*
+		 * XXX: need to update ST's IKE SA's msgids before ST
+		 * itself becomes its own IKE SA (making the operation
+		 * futile).
+		 */
+		dbg("Message ID: updating counters for #%lu to "PRI_MSGID" before emancipating",
+		    md->st->st_serialno, md->hdr.isa_msgid);
 		v2_msgid_update_counters(md->st, md);
+		v2_msgid_update_recv(ike_sa(st), st, md);
+		v2_msgid_update_sent(ike_sa(st), st, md, svm->send);
 		ikev2_child_emancipate(md);
 	} else  {
+		/*
+		 * XXX: need to change state before updating Message
+		 * IDs as that is what the update function expects
+		 * (this is not a good reason).
+		 */
 		change_state(st, svm->next_state);
-		dbg("Message ID: updating counters for #%lu after switching state",
-		    md->st->st_serialno);
+		dbg("Message ID: updating counters for #%lu to "PRI_MSGID" after switching state",
+		    md->st->st_serialno, md->hdr.isa_msgid);
 		v2_msgid_update_counters(md->st, md);
+		v2_msgid_update_recv(ike_sa(st), st, md);
+		v2_msgid_update_sent(ike_sa(st), st, md, svm->send);
 	}
 
 	w = RC_NEW_STATE + st->st_state;
@@ -2794,7 +2767,7 @@ static void success_v2_state_transition(struct state *st, struct msg_digest *md)
 	}
 
 	/* if requested, send the new reply packet */
-	if (svm->flags & SMF2_SEND) {
+	if (svm->send != NO_MESSAGE) {
 		/*
 		 * Adjust NAT but not for initial state (initial
 		 * outbound message?).

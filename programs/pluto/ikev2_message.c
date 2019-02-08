@@ -196,6 +196,11 @@ pb_stream open_v2_message(pb_stream *reply,
 	} else {
 		passert(ike != NULL);
 		hdr.isa_msgid = ike->sa.st_msgid_nextuse;
+		if (DBGP(DBG_BASE) && ike->sa.st_msgid_nextuse != ike->sa.st_v2_msgids.initiator.sent + 1) {
+			PEXPECT_LOG("Message ID: #%lu st_msgid_nextuse "PRI_MSGID" == initiator.sent %jd + 1",
+				    ike->sa.st_serialno, ike->sa.st_msgid_nextuse,
+				    ike->sa.st_v2_msgids.initiator.sent);
+		}
 	}
 
 	return open_output_struct_pbs(reply, &hdr, &isakmp_hdr_desc);
@@ -1043,6 +1048,11 @@ stf_status record_outbound_v2SK_msg(struct state *msg_sa,
 	 * XXX: when initiating an exchange there is no MD (or only a
 	 * badly faked up MD).
 	 */
+	dbg("Message ID: forcing IKE #%lu lastreplied "PRI_MSGID"->"PRI_MSGID" for #%lu",
+	    sk->ike->sa.st_serialno,
+	    sk->ike->sa.st_msgid_lastreplied,
+	    md->hdr.isa_msgid,
+	    msg_sa->st_serialno);
 	sk->ike->sa.st_msgid_lastreplied = md->hdr.isa_msgid;
 	return ret;
 }

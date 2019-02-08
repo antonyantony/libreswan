@@ -780,6 +780,12 @@ void unshare_connection_end(struct end *e)
  * are no longer shared.  Typically strings, but some other things too.
  *
  * Think of this as converting a shallow copy to a deep copy
+ *
+ * XXX: unshare_connection() and the shallow clone should be merged
+ * into a routine that allocates a new connection and then explicitly
+ * copy over the data.  Cloning pointers and then trying to fix them
+ * up after the event, a guarenteed way to create use-after-free
+ * problems.
  */
 static void unshare_connection(struct connection *c)
 {
@@ -1309,6 +1315,12 @@ void add_connection(const struct whack_message *wm)
 				wm->name);
 			return;
 		}
+		if (wm->vti_iface != NULL) {
+			loglog(RC_FATAL,
+				"Failed to add connection \"%s\", VTI requires tunnel mode but connection specifies type=transport",
+				wm->name);
+			return;
+		}
 	}
 	if (LIN(POLICY_AUTHENTICATE, wm->policy)) {
 		if (wm->sa_tfcpad != 0) {
@@ -1517,11 +1529,16 @@ void add_connection(const struct whack_message *wm)
 
 	/*
 	 * Connection values are set using strings in the whack
-	 * message, unshare_connection() is responsible
-	 * for cloning the strings before the whack message is
-	 * destroyed.
+	 * message.  This code is responsible for cloning the strings
+	 * before the whack message is destroyed.
+	 *
+	 * XXX: at one point this code was using unshare_connection()
+	 * to duplicate pointers from the whack message - bad idea.
+	 * For instance, it duplicated the proposal pointers yet here
+	 * the pointer was freshy allocated so no duplication should
+	 * be needed (or at least shouldn't be) (look for strange
+	 * free() vs delref() sequence).
 	 */
-
 	int same_rightca, same_leftca;
 	struct connection *c = alloc_thing(struct connection,
 					"struct connection");
@@ -1595,7 +1612,6 @@ void add_connection(const struct whack_message *wm)
 			char err_buf[256] = "";	/* ??? big enough? */
 
 			const struct proposal_policy proposal_policy = {
-				.ikev1 = LIN(POLICY_IKEV1_ALLOW, wm->policy),
 				/*
 				 * logic needs to match pick_initiator()
 				 *
@@ -1604,7 +1620,7 @@ void add_connection(const struct whack_message *wm)
 				 * magic into pluto proper and instead pass a
 				 * simple boolean.
 				 */
-				.ikev2 = LIN(POLICY_IKEV2_ALLOW, wm->policy),
+				.version = LIN(POLICY_IKEV2_ALLOW, wm->policy) ? IKEv2 : IKEv1,
 				.alg_is_ok = ike_alg_is_ike,
 				.pfs = LIN(POLICY_PFS, wm->policy),
 				.warning = libreswan_log,
@@ -1646,7 +1662,6 @@ void add_connection(const struct whack_message *wm)
 			char err_buf[256] = "";	/* ??? big enough? */
 
 			const struct proposal_policy proposal_policy = {
-				.ikev1 = LIN(POLICY_IKEV1_ALLOW, wm->policy),
 				/*
 				 * logic needs to match pick_initiator()
 				 *
@@ -1655,7 +1670,7 @@ void add_connection(const struct whack_message *wm)
 				 * magic into pluto proper and instead pass a
 				 * simple boolean.
 				 */
-				.ikev2 = LIN(POLICY_IKEV2_ALLOW, wm->policy),
+				.version = LIN(POLICY_IKEV2_ALLOW, wm->policy) ? IKEv2 : IKEv1,
 				.alg_is_ok = kernel_alg_is_ok,
 				.pfs = LIN(POLICY_PFS, wm->policy),
 				.warning = libreswan_log,
@@ -1992,8 +2007,52 @@ void add_connection(const struct whack_message *wm)
 			c->spd.that.has_client = TRUE;
 	}
 
-	/* ensure we allocate copies of all strings */
-	unshare_connection(c);
+	/*
+	 * ensure we allocate copies of all strings
+	 *
+	 * XXX: Should merge this into the above and then if things
+	 * barf call delete_connection().
+	 */
+	c->name = clone_str(c->name, "connection name");
+
+	c->foodgroup = clone_str(c->foodgroup, "connection foodgroup");
+
+	c->modecfg_dns = clone_str(c->modecfg_dns,
+				"connection modecfg_dns");
+	c->modecfg_domains = clone_str(c->modecfg_domains,
+				"connection modecfg_domains");
+	c->modecfg_banner = clone_str(c->modecfg_banner,
+				"connection modecfg_banner");
+#ifdef HAVE_LABELED_IPSEC
+	c->policy_label = clone_str(c->policy_label,
+				    "connection policy_label");
+#endif
+	c->dnshostname = clone_str(c->dnshostname, "connection dnshostname");
+
+	/* duplicate any alias, adding spaces to the beginning and end */
+	c->connalias = clone_str(c->connalias, "connection alias");
+
+	c->vti_iface = clone_str(c->vti_iface, "connection vti_iface");
+
+	c->redirect_to = clone_str(c->redirect_to,\
+					"connection redirect_to");
+	c->accept_redirect_to = clone_str(c->accept_redirect_to,\
+					"connection accept_redirect_to");
+
+	for (struct spd_route *sr = &c->spd; sr != NULL; sr = sr->spd_next) {
+		unshare_connection_end(&sr->this);
+		unshare_connection_end(&sr->that);
+	}
+
+	/* increment references to algo's, if any */
+	if (c->alg_info_ike != NULL)
+		alg_info_addref(&c->alg_info_ike->ai);
+
+	if (c->alg_info_esp != NULL)
+		alg_info_addref(&c->alg_info_esp->ai);
+
+	if (c->pool !=  NULL)
+		reference_addresspool(c);
 
 	(void)orient(c);
 
@@ -2310,24 +2369,6 @@ const char *str_connection(const struct connection *c,
 	return out->buf;
 }
 
-static size_t fmt_client(const ip_subnet *client, const ip_address *gw,
-			const char *prefix, char buf[ADDRTOT_BUF])
-{
-	if (subnetisaddr(client, gw)) {
-		buf[0] = '\0'; /* compact denotation for "self" */
-	} else {
-		char *ap;
-
-		strcpy(buf, prefix);
-		ap = buf + strlen(prefix);
-		if (subnetisnone(client))
-			strcpy(ap, "?"); /* unknown */
-		else
-			subnettot(client, 0, ap, SUBNETTOT_BUF);
-	}
-	return strlen(buf);
-}
-
 /*
  * This function is called using the convention:
  *
@@ -2337,46 +2378,11 @@ static size_t fmt_client(const ip_subnet *client, const ip_address *gw,
  */
 char *fmt_conn_instance(const struct connection *c, char buf[CONN_INST_BUF])
 {
-	char *p = buf;
-
-	*p = '\0';
-
+	/* not sizeof(buf), as BUF is an address */
+	fmtbuf_t p = array_as_fmtbuf(buf, CONN_INST_BUF);
 	if (c->kind == CK_INSTANCE) {
-		if (c->instance_serial != 0) {
-			snprintf(p, CONN_INST_BUF, "[%lu]",
-				c->instance_serial);
-			p += strlen(p);
-		}
-
-		if (c->policy & POLICY_OPPORTUNISTIC) {
-			size_t w = fmt_client(&c->spd.this.client,
-					&c->spd.this.host_addr, " ", p);
-
-			p += w;
-
-			strcpy(p, w == 0 ? " ..." : "=== ...");
-			p += strlen(p);
-
-			p += addrtot(&c->spd.that.host_addr, 0, p, ADDRTOT_BUF) - 1;
-
-			(void) fmt_client(&c->spd.that.client,
-					&c->spd.that.host_addr, "===", p);
-		} else {
-			ipstr_buf b;
-
-			*p++ = ' ';
-			/* p not subsequently used */
-#if 0
-			p = jam_str(p, &buf[CONN_INST_BUF] - p,
-				sensitive_ipstr(&c->spd.that.host_addr, &b));
-#else
-			/* attempt to calm Coverity Scan */
-			p = jam_str(p, buf + CONN_INST_BUF - p,
-				sensitive_ipstr(&c->spd.that.host_addr, &b));
-#endif
-		}
+		fmt_connection_instance(&p, c);
 	}
-
 	return buf;
 }
 

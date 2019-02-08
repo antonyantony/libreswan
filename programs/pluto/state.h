@@ -51,6 +51,7 @@
 #include "ip_subnet.h"
 #include "ike_spi.h"
 #include "pluto_timing.h"	/* for statetime_t */
+#include "ikev2_msgid.h"
 
 struct ikev2_ipseckey_dns; /* forward declaration of tag */
 
@@ -401,6 +402,8 @@ struct state {
 	/* Am I the original initator, or orignal responder (v2 IKE_I flag). */
 	enum original_role st_original_role;
 	enum sa_role st_sa_role;
+
+	struct v2_msgids st_v2_msgids;
 
 	/* message ID sequence for things we send (as initiator) */
 	msgid_t st_msgid_lastack;               /* last one peer acknowledged  - host order */
@@ -769,11 +772,7 @@ extern bool find_pending_phase2(const so_serial_t psn,
 extern struct state *find_v2_ike_sa(const ike_spis_t *ike_spis);
 extern struct state *find_v2_ike_sa_by_initiator_spi(const ike_spi_t *ike_initiator_spi);
 
-struct state *find_v2_sa_by_msgid(const ike_spis_t *ike_spis, msgid_t msgid);
-
-extern struct state *find_state_ikev2_child(const enum isakmp_xchg_types ix,
-					    const ike_spis_t *ike_spis,
-					    const msgid_t msgid);
+struct state *find_v2_sa_by_request_msgid(const ike_spis_t *ike_spis, msgid_t msgid);
 
 struct state *find_v2_child_sa_by_outbound_spi(const ike_spis_t *ike_spis,
 					       uint8_t protoid, ipsec_spi_t spi);

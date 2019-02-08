@@ -394,8 +394,8 @@ bool has_preloaded_public_key(struct state *st)
 bool extract_peer_id(enum ike_id_type kind, struct id *peer, const pb_stream *id_pbs)
 {
 	size_t left = pbs_left(id_pbs);
-	memset(peer, 0x00, sizeof(struct id));
-	peer->kind = kind;
+
+	*peer = (struct id) {.kind = kind };	/* clears everything */
 
 	switch (kind) {
 	/* ident types mostly match between IKEv1 and IKEv2 */
@@ -410,7 +410,7 @@ bool extract_peer_id(enum ike_id_type kind, struct id *peer, const pb_stream *id
 		if (ugh != NULL) {
 			loglog(RC_LOG_SERIOUS,
 				"improper %s identification payload: %s",
-				enum_show(&ike_idtype_names, peer->kind),
+				enum_show(&ike_idtype_names, kind),
 				ugh);
 			/* XXX Could send notification back */
 			return FALSE;
@@ -432,7 +432,7 @@ bool extract_peer_id(enum ike_id_type kind, struct id *peer, const pb_stream *id
 		if (memchr(id_pbs->cur, '\0', left) != NULL) {
 			loglog(RC_LOG_SERIOUS,
 				"Phase 1 (Parent)ID Payload of type %s contains a NUL",
-				enum_show(&ike_idtype_names, peer->kind));
+				enum_show(&ike_idtype_names, kind));
 			return FALSE;
 		}
 
@@ -455,19 +455,16 @@ bool extract_peer_id(enum ike_id_type kind, struct id *peer, const pb_stream *id
 
 	case ID_NULL:
 		if (left != 0) {
-			setchunk(peer->name, id_pbs->cur, left);
 			DBG(DBG_PARSING,
-				DBG_dump_chunk("unauthenticated NULL ID:", peer->name));
-			peer->name = EMPTY_CHUNK;
+				DBG_dump("unauthenticated NULL ID:", id_pbs->cur, left));
 		}
-		peer->kind = ID_NULL;
 		break;
 
 	default:
 		/* XXX Could send notification back */
 		loglog(RC_LOG_SERIOUS,
 			"Unsupported identity type (%s) in Phase 1 (Parent) ID Payload",
-			enum_show(&ike_idtype_names, peer->kind));
+			enum_show(&ike_idtype_names, kind));
 		return FALSE;
 	}
 
@@ -546,6 +543,23 @@ void send_delete(struct state *st)
 			    st->st_msgid, new_msgid);
 			ike->sa.st_msgid = new_msgid;
 			ike->sa.st_msgid_nextuse = new_nextuse;
+			/*
+			 * XXX: The record 'n' send call shouldn't be
+			 * needed.  Instead, as part of this
+			 * transition (live -> being-deleted) the
+			 * standard success_v2_transition() code path
+			 * should get to do the right thing.
+			 *
+			 * XXX: The record 'n' send call leads to an
+			 * RFC violation.  The lack of a state
+			 * transition means there's nothing set up to
+			 * wait for the ack.  And that in turn means
+			 * that the next packet will be sent before
+			 * this one has had a response.
+			 */
+			dbg("Message ID: IKE #%lu sender #%lu in %s hacking around record ' send",
+			    ike->sa.st_serialno, st->st_serialno, __func__);
+			v2_msgid_update_sent(ike, &ike->sa, NULL/*new exchange*/, MESSAGE_REQUEST);
 			break;
 		default:
 			bad_case(st->st_ike_version);
