@@ -765,8 +765,8 @@ bool v2_decode_certs(struct ike_sa *ike, struct msg_digest *md)
  * and it will be updated to an id of kind ID_DER_ASN1_DN
  * with the name taken from the cert's derSubject.
  *
- * "certs" is a list, a certificate chain (I think).
- * We only deal with the head.
+ * "certs" is a list, a certificate chain.
+ * We only deal with the head and it must be an endpoint cert.
  */
 bool match_certs_id(const struct certs *certs,
 		struct id *peer_id /*ID_FROMCERT => updated*/)
@@ -776,6 +776,12 @@ bool match_certs_id(const struct certs *certs,
 	char ipstr[IDTOA_BUF];
 
 	CERTCertificate *end_cert = certs->cert;
+
+	if (CERT_IsCACert(end_cert, NULL)) {
+		loglog(RC_LOG_SERIOUS,
+		       "cannot use CA certificate for endpoint");
+		return false;
+	}
 
 	bool m;
 
@@ -1570,28 +1576,14 @@ static void cert_detail_to_whacklog(CERTCertificate *cert)
 }
 
 typedef enum {
-	CERT_TYPE_END = 1,
-	CERT_TYPE_CA = 2,
-	CERT_TYPE_ANY = 3
+	CERT_TYPE_END,
+	CERT_TYPE_CA,
 } show_cert_t;
 
-static bool show_cert_of_type(CERTCertificate *cert, show_cert_t type)
+static bool is_cert_of_type(CERTCertificate *cert, show_cert_t type)
 {
-	if (cert == NULL)
-		return FALSE;
-
-	if (type == CERT_TYPE_ANY)
-		return TRUE;
-
-	if (CERT_IsCACert(cert, NULL)) {
-		if (type == CERT_TYPE_CA) {
-			return TRUE;
-		}
-	} else if (type == CERT_TYPE_END) {
-		return TRUE;
-	}
-
-	return FALSE;
+	return cert != NULL &&
+		CERT_IsCACert(cert, NULL) == (type == CERT_TYPE_CA);
 }
 
 static void crl_detail_to_whacklog(CERTCrl *crl)
@@ -1689,7 +1681,7 @@ static void cert_detail_list(show_cert_t type)
 
 	for (node = CERT_LIST_HEAD(certs); !CERT_LIST_END(node, certs);
 					 node = CERT_LIST_NEXT(node)) {
-		if (show_cert_of_type(node->cert, type))
+		if (is_cert_of_type(node->cert, type))
 			cert_detail_to_whacklog(node->cert);
 	}
 
