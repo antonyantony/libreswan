@@ -114,52 +114,15 @@ static bool add_proposal(struct proposal_parser *parser,
 			 struct proposals *proposals,
 			 const struct v1_proposal *proposal)
 {
-	/* duplicate? */
-	FOR_EACH_PROPOSAL(proposals, existing) {
-		struct v1_proposal existing_proposal = v1_proposal(existing);
-		/*
-		 * key length 0 is like a wild-card (it actually means
-		 * propose default and strongest key lengths) so if
-		 * either is zero just treat it as a match.
-		 */
-		if (existing_proposal.encrypt == proposal->encrypt &&
-		    existing_proposal.prf == proposal->prf &&
-		    existing_proposal.integ == proposal->integ &&
-		    existing_proposal.dh == proposal->dh &&
-		    (existing_proposal.enckeylen == proposal->enckeylen ||
-		     existing_proposal.enckeylen == 0 ||
-		     proposal->enckeylen == 0)) {
-			if (IMPAIR(PROPOSAL_PARSER)) {
-				libreswan_log("IMPAIR: including duplicate %s proposal encrypt=%s enckeylen=%d prf=%s integ=%s dh=%s",
-					      proposal->protocol->name,
-					      proposal->encrypt != NULL ? proposal->encrypt->common.name : "n/a",
-					      proposal->enckeylen,
-					      proposal->prf != NULL ? proposal->prf->common.name : "n/a",
-					      proposal->integ != NULL ? proposal->integ->common.name : "n/a",
-					      proposal->dh != NULL ? proposal->dh->common.name : "n/a");
-			} else {
-				DBG(DBG_CRYPT,
-				    DBG_log("discarding duplicate %s proposal encrypt=%s enckeylen=%d prf=%s integ=%s dh=%s",
-					    proposal->protocol->name,
-					    proposal->encrypt != NULL ? proposal->encrypt->common.name : "n/a",
-					    proposal->enckeylen,
-					    proposal->prf != NULL ? proposal->prf->common.name : "n/a",
-					    proposal->integ != NULL ? proposal->integ->common.name : "n/a",
-					    proposal->dh != NULL ? proposal->dh->common.name : "n/a"));
-				return true;
-			}
-		}
-	}
-
 	struct proposal *new = alloc_proposal(parser);
 	if (proposal->encrypt != NULL) {
-		append_algorithm(new, PROPOSAL_encrypt,
+		append_algorithm(parser, new, PROPOSAL_encrypt,
 				 &proposal->encrypt->common,
 				 proposal->enckeylen);
 	}
-#define A(NAME)							\
+#define A(NAME)								\
 	if (proposal->NAME != NULL) {					\
-		append_algorithm(new, PROPOSAL_##NAME,			\
+		append_algorithm(parser, new, PROPOSAL_##NAME,		\
 				 &proposal->NAME->common, 0);		\
 	}
 	A(prf);
@@ -171,7 +134,7 @@ static bool add_proposal(struct proposal_parser *parser,
 		free_proposal(&new);
 		return false;
 	}
-	append_proposal(proposals, new);
+	append_proposal(proposals, &new);
 	return true;
 }
 
