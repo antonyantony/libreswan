@@ -106,6 +106,12 @@ endif
 
 ifeq ($(USE_NETKEY),true)
 USERLAND_CFLAGS+=-DNETKEY_SUPPORT
+#F28 default kernel is compiled with CONFIG_XFRM_INTERFACE=n
+USE_XFRM_INTERFACE?=false
+endif
+
+ifeq ($(USE_XFRM_INTERFACE), true)
+USERLAND_CFLAGS+=-DUSE_XFRM_INTERFACE
 endif
 
 ifeq ($(USE_PFKEYv2),true)
