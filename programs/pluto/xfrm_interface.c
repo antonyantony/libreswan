@@ -28,6 +28,7 @@
 #include <linux/if_addr.h>
 #include <linux/if_link.h>
 
+#include "lswalloc.h"
 #include "netlink_attrib.h"
 #include "xfrm_interface.h"
 #include "lswlog.h"
@@ -377,6 +378,8 @@ bool setup_xfrm_interface(struct connection *c)
 
 	if (ip_link_set_up(c->xfrm_if_name))
 			return TRUE;
+	pfreeany(c->interface->ip_dev->id_vname);
+	c->interface->ip_dev->id_vname = clone_str(c->xfrm_if_name, "xfrm copy of id_vname");
 
 	return FALSE;
 }
