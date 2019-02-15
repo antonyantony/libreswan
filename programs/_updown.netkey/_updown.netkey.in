@@ -411,6 +411,7 @@ addsource() {
     local st
     interface=lo
     st=0
+
     if [ -z "${PLUTO_MY_SOURCEIP}" ]; then
         return ${st}
     fi
@@ -418,11 +419,13 @@ addsource() {
     if ! ip -o route get ${PLUTO_MY_SOURCEIP} | grep -q ^local; then
 	if [ -n "${VTI_IFACE}" -a "${VTI_ROUTING}" = yes ]; then
 	    interface="${VTI_IFACE}"
+	elif [ -n ${PLUTO_XFRMI_ROUTE} ]; then
+	    interface=${PLUTO_INTERFACE}
 	fi
 	it="ip addr add ${PLUTO_MY_SOURCEIP}/${MAX_CIDR} dev ${interface} scope ${SCOPE}"
 	oops="$(eval ${it} 2>&1)"
 	st=$?
-	if [ -z "${oops}" -a ${st} -ne 0 ]; then
+	if [ -z "${oops}" -o ${st} -ne 0 ]; then
 	    oops="silent error, exit status ${st}"
 	fi
 	case "${oops}" in
@@ -452,6 +455,8 @@ delsource() {
     if [ $(ip -o route list src ${PLUTO_MY_SOURCEIP} | wc -l) -eq 0 ]; then
 	if [ -n "${VTI_IFACE}" -a "${VTI_ROUTING}" = yes ]; then
 	    interface="${VTI_IFACE}"
+	elif [ -n ${PLUTO_XFRMI_ROUTE} ]; then
+		interface=${PLUTO_INTERFACE}
 	fi
 	# If there is no ip we just return
 	if ! ip -o addr list dev ${interface} scope ${SCOPE} | \
@@ -524,12 +529,44 @@ doproxyarp() {
     fi
 }
 
+err_check()
+{
+    local st=$1
+    local oops=$2
+    local it=$3
+
+    if [ -z "${oops}" -a ${st} -ne 0 ]; then
+	oops="silent error, exit status ${st}"
+    fi
+    case "${oops}" in
+	'RTNETLINK answers: No such process'*)
+	    # should not happen, but ... ignore if the
+	    # route was already removed
+	    oops=""
+	    st=0
+	    ;;
+    esac
+    if [ -n "${oops}" -a ${st} -ne 0 ]; then
+	echo "$0: doroute \"${it}\" failed (${oops})" >&2
+	echo ${st}
+    fi
+    echo 0
+}
+
 doroute() {
     local cmd
     local oops
     local st
     cmd=${1}
     st=0
+    local IPSEC_R_TABLE=50
+    local XRMI_RULE="no"
+    local XFRMI_ROUTE=${PLUTO_XFRMI_ROUTE}
+
+    if [ -n "${PLUTO_XFRMI_FWMARK}" ]; then
+	    XFRMI_RULE="yes" #we have to add "ip rules" and "ip route table"
+    fi
+
     if [ ${cmd} != del ]; then
 	oops="$(eval ip route get ${PLUTO_PEER_CLIENT} 2>&1)"
 	case "${oops}" in
@@ -545,8 +582,13 @@ doroute() {
 	"${ROUTE}" != "yes" -a \
 	"${cmd}" != "del" ]
     then
-	return 0
+	ROUTE="no"
     fi
+
+    if [ "${XFRMI_RULE}" = "yes" ]; then
+	    XFRMI_ROUTE="no";
+    fi
+
     parms="${PLUTO_PEER_CLIENT}"
     parms2=${IPRARGS}
     # nexthop is not needed on ppp interfaces. unset it to make cases
@@ -575,14 +617,24 @@ doroute() {
 	peer_interface=$(ip -o route get ${PLUTO_NEXT_HOP} | \
 	    sed "s/^.*dev \([^ ]*\) .*/\1/")
     fi
+
+    if [ -z "${peer_interface}" ]; then
+	peer_interface=${PLUTO_MY_INTERFACE}
+    fi
+
+    if [ "${PLUTO_XFRMI_ROUTE}" = "yes" ]; then
+    	peer_interface=${PLUTO_INTERFACE}
+    fi
+
     if [ -n "${VTI_IFACE}" ]; then
 	addsource
 	peer_interface="${VTI_IFACE}"
     fi
-    if [ -z "${peer_interface}" ]; then
-	peer_interface=${PLUTO_MY_INTERFACE}
-    fi
-    parms2="${parms2} dev ${peer_interface%:*}${PLUTO_MTU:+ mtu ${PLUTO_MTU}}${PLUTO_METRIC:+ metric ${PLUTO_METRIC}} $IPROUTEARGS"
+
+    parms2="${parms2}${PLUTO_MTU:+ mtu ${PLUTO_MTU}}"
+    parms2="${parms2}${PLUTO_METRIC:+ metric ${PLUTO_METRIC}} ${IPROUTEARGS}"
+
+    parms2="${parms2} dev ${peer_interface%:*}"
 
     # make sure whe have sourceip locally in this machine
     if [ "${cmd}" = "replace" -a -n "${PLUTO_MY_SOURCEIP}" ]; then
@@ -601,23 +653,44 @@ doroute() {
 	    it="ip route ${cmd} ${parms} ${parms2}"
 	    ;;
     esac
-    oops="$(eval ${it} 2>&1)"
-    st=$?
-    if [ -z "${oops}" -a ${st} -ne 0 ]; then
-	oops="silent error, exit status ${st}"
+
+    if [ "${ROUTE}" = "yes" -o "${XFRMI_ROUTE}" = "yes" ]; then
+        oops="$(eval ${it} 2>&1)"
+	st=$?
+
+	st_r=$(eval err_check ${st} ${oops} "$it")
+	if [ ${st_r} -ne 0 ]; then
+	    return ${st}
+	fi
     fi
-    case "${oops}" in
-	'RTNETLINK answers: No such process'*)
-	    # should not happen, but ... ignore if the
-	    # route was already removed
-	    oops=""
-	    st=0
-	    ;;
-    esac
-    if [ -n "${oops}" -o ${st} -ne 0 ]; then
-	echo "$0: doroute \"${it}\" failed (${oops})" >&2
+
+    if [ "${XFRMI_RULE}" = "yes" ]; then
+    	ipro="ip route ${cmd} table ${IPSEC_R_TABLE} ${parms} ${parms2}"
+	oops="$(eval ${ipro} 2>&1)"
+	st=$?
+
+	st_r="$(err_check ${st} "${oops}" "$ipro")"
+	if [ ${st_r} -ne 0 ]; then
+	    return ${st}
+	fi
+
+	iprulecmd="${cmd}"
+	if [ "${cmd}" = "replace" ]; then
+	    iprulecmd="add"
+	fi
+
+    	ipru="ip rule ${iprulecmd} prio 100 to ${parms}"
+	ipru="${ipru} not fwmark ${PLUTO_XFRMI_FWMARK} lookup $IPSEC_R_TABLE"
+	oops="$(eval ${ipru} 2>&1)"
+	st=$?
+
+	st_r=$(err_check ${st} "${oops}" "${ipru}")
+	if [ ${st_r} -ne 0 ]; then
+            return ${st}
+	fi
     fi
-    return ${st}
+
+    return 0
 }
 
 # TODO: We need to specify CIDR mask but our _MASK variables are in old school format
