@@ -458,7 +458,8 @@ int fmt_common_shell_out(char *buf, int blen, const struct connection *c,
 		traffic_out_str[sizeof("PLUTO_OUT_BYTES='' ") + MAX_DISPLAY_BYTES] = "",
 		nflogstr[sizeof("NFLOG='' ") + MAX_DISPLAY_BYTES] = "",
 		connmarkstr[2 * (sizeof("CONNMARK_XXX='' ") +  2 * sizeof("0xffffffff")+1) + sizeof(", ")] = "",
-		catstr[] = "CAT='YES' ";
+		catstr[] = "CAT='YES' ",
+		xfrmifwmarks[sizeof("PLUTO_XFRMI_FWMARK='/0xffffffff' ") + MAX_DISPLAY_BYTES] = "";
 #undef MAX_DISPLAY_BYTES
 
 	ipstr_buf bme, bpeer;
@@ -582,6 +583,18 @@ int fmt_common_shell_out(char *buf, int blen, const struct connection *c,
 			}
 		}
 	}
+	if (c->xfrm_if_id > 0) {
+		if (addrinsubnet(&sr->that.host_addr, &sr->that.client)) {
+			snprintf(xfrmifwmarks, sizeof(xfrmifwmarks),
+				 "PLUTO_XFRMI_FWMARK='%" PRIu32 "/0xffffffff' ",
+				 c->xfrm_if_id);
+		} else {
+			jam_str(xfrmifwmarks, sizeof(xfrmifwmarks), "PLUTO_XFRMI_FWMARK='' ");
+			dbg("not adding PLUTO_XFRMI_FWMARK. PLUTO_PEER=%s is not inside PLUTO_PEER_CLIENT=%s",
+							ipstr(&sr->that.host_addr, &bpeer),
+							peerclient_str);
+		}
+	}
 
 	result = snprintf(
 		buf, blen,
@@ -589,6 +602,9 @@ int fmt_common_shell_out(char *buf, int blen, const struct connection *c,
 		"PLUTO_VERSION='2.0' "
 		"PLUTO_CONNECTION='%s' "
 		"PLUTO_INTERFACE='%s' "
+		"PLUTO_MY_INTERFACE='%s' "
+		"PLUTO_XFRMI_ROUTE='%s' "
+		"%s" /* PLUTO_XFRMI_FWMARK */
 		"%s" /* possible PLUTO_NEXT_HOP */
 		"PLUTO_ME='%s' "
 		"PLUTO_MY_ID='%s' "	/* 5 */
@@ -639,6 +655,9 @@ int fmt_common_shell_out(char *buf, int blen, const struct connection *c,
 
 		, c->name,
 		c->interface == NULL ? "NULL" : c->interface->ip_dev->id_vname,
+		c->interface == NULL ? "NULL" : c->interface->ip_dev->id_rname,
+		c->xfrm_if > 0  ? "yes" : "",
+		xfrmifwmarks,
 		nexthop_str,
 		ipstr(&sr->this.host_addr, &bme),
 		secure_myid_str,		/* 5 */
