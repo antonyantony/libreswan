@@ -71,6 +71,9 @@ export LC_ALL
 #	PLUTO_MTU
 #		is the mtu to set for the route
 #
+# 	PLUTO_MY_INTERFACE
+#		is the name of the real interace used for encrypted, IKE traffic
+#
 #	PLUTO_MY_CLIENT
 #		is the IP address / count of our client subnet.	 If
 #		the  client  is	 just  the  host,  this will be the
@@ -548,7 +551,7 @@ doroute() {
     parms2=${IPRARGS}
     # nexthop is not needed on ppp interfaces. unset it to make cases
     # work, where left is set but no leftnexthop (e.g. left=%defaultroute)
-    if ip link show "${PLUTO_INTERFACE%:*}" | grep -q POINTOPOINT; then
+    if ip link show "${PLUTO_MY_INTERFACE%:*}" | grep -q POINTOPOINT; then
 	POINTPOINT=yes
     fi
     # use nexthop if nexthop is not %direct and POINTPOINT is not set
@@ -577,7 +580,7 @@ doroute() {
 	peer_interface="${VTI_IFACE}"
     fi
     if [ -z "${peer_interface}" ]; then
-	peer_interface=${PLUTO_INTERFACE}
+	peer_interface=${PLUTO_MY_INTERFACE}
     fi
     parms2="${parms2} dev ${peer_interface%:*}${PLUTO_MTU:+ mtu ${PLUTO_MTU}}${PLUTO_METRIC:+ metric ${PLUTO_METRIC}} $IPROUTEARGS"
 
