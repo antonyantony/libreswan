@@ -86,6 +86,10 @@
 #include "udpfromto.h"
 #include "monotime.h"
 
+#ifdef USE_XFRM_INTERFACE
+#include "xfrm_interface.h"
+#endif
+
 #include "nat_traversal.h"
 
 #include "lswfips.h"
@@ -277,6 +281,9 @@ void free_ifaces(void)
 {
 	mark_ifaces_dead();
 	free_dead_ifaces();
+#ifdef USE_XFRM_INTERFACE
+	free_xfrmi_ipsec0();
+#endif
 }
 
 struct raw_iface *static_ifn = NULL;
