@@ -4107,6 +4107,9 @@ static stf_status ikev2_process_ts_and_rest(struct msg_digest *md)
 
 	ikev2_derive_child_keys(st, md->original_role);
 
+	if (c->spd.this.has_cat)
+                ikev2_mangle_cat(st);
+
 	/* now install child SAs */
 	if (!install_ipsec_sa(st, TRUE))
 		return STF_FATAL;
