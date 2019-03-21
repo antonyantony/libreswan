@@ -270,6 +270,7 @@ struct connection {
 	enum yna_options xfrm_if; /* XFRMA_IF_ID support */
 	uint32_t xfrm_if_id; /* interface id and output mark */
 	char *xfrm_if_name; /* name for XFRM interface */
+	uint32_t xfrm_sub_sa_id; /* Steffen's parallel SA ID AA_201903*/
 	deltatime_t r_interval; /* initial retransmit time, doubles each time */
 	deltatime_t r_timeout; /* max time (in secs) for one packet exchange attempt */
 	reqid_t sa_reqid;

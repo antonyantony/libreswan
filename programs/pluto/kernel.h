@@ -144,6 +144,7 @@ struct kernel_sa {
 #endif
 	const char *nic_offload_dev;
 	uint32_t xfrm_if_id;
+	uint32_t xfrm_sub_sa_id;
 
 	deltatime_t sa_lifetime; /* number of seconds until SA expires */
 	/*
@@ -204,6 +205,7 @@ struct kernel_ops {
 			   uint32_t sa_priority,
 			   const struct sa_marks *sa_marks,
 			   const uint32_t xfrm_if_id,
+			   uint32_t xfrm_sub_sa_id,
 			   enum pluto_sadb_operations op,
 			   const char *text_said
 #ifdef HAVE_LABELED_IPSEC
