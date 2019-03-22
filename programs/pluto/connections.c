@@ -94,7 +94,7 @@
 #endif
 
 struct connection *connections = NULL;
-static uint32_t xfrm_sub_sa_id = 0;
+// static uint32_t xfrm_sub_sa_id = 0;
 
 struct connection *unoriented_connections = NULL;
 
@@ -1980,8 +1980,9 @@ void add_connection(const struct whack_message *wm)
 			c->spd.that.has_client = TRUE;
 	}
 
-	c->xfrm_sub_sa_id = xfrm_sub_sa_id;
-	xfrm_sub_sa_id++;
+	c->xfrm_sub_sa_id = wm->xfrm_sub_sa_id;
+
+	DBG_log("AA connection %s xfrm_sub_sa_id %u", wm->name, c->xfrm_sub_sa_id);
 
 	/*
 	 * ensure we allocate copies of all strings

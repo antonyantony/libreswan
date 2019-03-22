@@ -556,6 +556,7 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	msg.sighash_policy = conn->sighash_policy;
 
 	msg.connalias = conn->connalias;
+	msg.xfrm_sub_sa_id = conn->xfrm_sub_sa_id;
 
 	msg.metric = conn->options[KBF_METRIC];
 
