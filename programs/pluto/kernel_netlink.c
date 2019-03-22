@@ -486,6 +486,7 @@ static bool netlink_raw_eroute(const ip_address *this_host,
 			uint32_t sa_priority,
 			const struct sa_marks *sa_marks,
 			const uint32_t xfrm_if_id,
+			const uint32_t xfrm_sub_sa_id,
 			enum pluto_sadb_operations sadb_op,
 			const char *text_said
 #ifdef HAVE_LABELED_IPSEC
@@ -713,6 +714,13 @@ static bool netlink_raw_eroute(const ip_address *this_host,
 				req.n.nlmsg_len += mark_attr->rta_len;
 			}
 		}
+
+		if (xfrm_sub_sa_id == 1) {
+			DBG(DBG_KERNEL, DBG_log("netlink: xfrm_sub_sa_id %u set master SA", xfrm_sub_sa_id));
+		} else if (xfrm_sub_sa_id > 1) {
+			DBG(DBG_KERNEL, DBG_log("netlink: xfrm_sub_sa_id %u set sub SA", xfrm_sub_sa_id));
+		}
+
                if (xfrm_if_id > 0) {
 #ifdef USE_XFRM_INTERFACE
                        struct rtattr *attr = (struct rtattr *)((char *)&req + req.n.nlmsg_len);
@@ -1508,6 +1516,12 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 		attr = (struct rtattr *)((char *)attr + attr->rta_len);
 	}
 
+	if (sa->xfrm_sub_sa_id == 1) {
+		DBG(DBG_KERNEL, DBG_log("netlink: xfrm_sub_sa_id %u set master SA", sa->xfrm_sub_sa_id));
+	} else if (sa->xfrm_sub_sa_id > 1) {
+		DBG(DBG_KERNEL, DBG_log("netlink: xfrm_sub_sa_id %u set sub SA", sa->xfrm_sub_sa_id));
+	}
+
 	if (sa->xfrm_if_id > 0) {
 #ifdef USE_XFRM_INTERFACE
 		DBG(DBG_KERNEL, DBG_log("netlink: XFRMA_IF_ID to %" PRIu32, sa->xfrm_if_id));
@@ -2159,7 +2173,7 @@ static bool netlink_sag_eroute(const struct state *st, const struct spd_route *s
 	return eroute_connection(sr, inner_spi, inner_spi, inner_proto,
 				inner_esatype, proto_info + i,
 				calculate_sa_prio(c), &c->sa_marks,
-				c->xfrm_if_id,
+				c->xfrm_if_id, c->xfrm_sub_sa_id,
 				op, opname
 #ifdef HAVE_LABELED_IPSEC
 				, st->st_connection->policy_label
@@ -2296,6 +2310,7 @@ static bool netlink_shunt_eroute(const struct connection *c,
 				calculate_sa_prio(c),
 				&c->sa_marks,
 				c->xfrm_if_id,
+				c->xfrm_sub_sa_id,
 				op, buf2
 #ifdef HAVE_LABELED_IPSEC
 				, c->policy_label
@@ -2327,6 +2342,7 @@ static bool netlink_shunt_eroute(const struct connection *c,
 				  calculate_sa_prio(c),
 				  &c->sa_marks,
 				  c->xfrm_if_id,
+				  c->xfrm_sub_sa_id,
 				  op, buf2
 #ifdef HAVE_LABELED_IPSEC
 				  , c->policy_label

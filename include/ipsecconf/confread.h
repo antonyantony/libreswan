@@ -125,6 +125,7 @@ struct starter_conn {
 	bool vti_routing;
 	bool vti_shared;
 	bool xfrm_if;
+	uint32_t xfrm_sub_sa_id; /* Steffen's parallel SA ID AA_201903*/
 };
 
 struct starter_config {

@@ -56,6 +56,7 @@ extern bool pfkey_raw_eroute(const ip_address *this_host,
 			     uint32_t sa_priority,
 			     const struct sa_marks *sa_marks UNUSED,
 			     const uint32_t xfrm_if_id UNUSED,
+			     uint32_t xfrm_sub_sa_id UNUSED,
 			     enum pluto_sadb_operations op,
 			     const char *text_said
 #ifdef HAVE_LABELED_IPSEC

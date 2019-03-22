@@ -94,6 +94,7 @@
 #endif
 
 struct connection *connections = NULL;
+static xfrm_sub_sa_id = 1;
 
 struct connection *unoriented_connections = NULL;
 
@@ -1978,6 +1979,9 @@ void add_connection(const struct whack_message *wm)
 		if (c->spd.that.virt != NULL)
 			c->spd.that.has_client = TRUE;
 	}
+
+	c->xfrm_sub_sa_id = xfrm_sub_sa_id;
+	xfrm_sub_sa_id++;
 
 	/*
 	 * ensure we allocate copies of all strings

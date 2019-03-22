@@ -421,6 +421,7 @@ extern bool eroute_connection(const struct spd_route *sr,
 			      uint32_t sa_priority,
 			      const struct sa_marks *sa_marks,
 			      const uint32_t xfrm_if_id,
+			      const uint32_t xfrm_sub_sa_id,
 			      unsigned int op, const char *opname
 #ifdef HAVE_LABELED_IPSEC
 			      , const char *policy_label
@@ -469,6 +470,7 @@ extern bool raw_eroute(const ip_address *this_host,
 		       uint32_t sa_priority,
 		       const struct sa_marks *sa_marks,
 		       const uint32_t xfrm_if_id,
+		       const uint32_t xfrm_sub_sa_id,
 		       enum pluto_sadb_operations op,
 		       const char *opname
 #ifdef HAVE_LABELED_IPSEC

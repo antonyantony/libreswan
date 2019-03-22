@@ -1299,6 +1299,7 @@ bool raw_eroute(const ip_address *this_host,
 		uint32_t sa_priority,
 		const struct sa_marks *sa_marks,
 		const uint32_t xfrm_if_id,
+		uint32_t xfrm_sub_sa_id,
 		enum pluto_sadb_operations op,
 		const char *opname
 #ifdef HAVE_LABELED_IPSEC
@@ -1358,6 +1359,7 @@ bool raw_eroute(const ip_address *this_host,
 					esatype, proto_info,
 					use_lifetime, sa_priority, sa_marks,
 					xfrm_if_id,
+					xfrm_sub_sa_id,
 					op, text_said
 #ifdef HAVE_LABELED_IPSEC
 					, policy_label
@@ -1488,6 +1490,7 @@ static bool fiddle_bare_shunt(const ip_address *src, const ip_address *dst,
 			0, /* we don't know connection for priority yet */
 			NULL, /* sa_marks */
 			0, /* xfrm interface id */
+			0, /* xfrm sub id */
 			op, why
 #ifdef HAVE_LABELED_IPSEC
 			, NULL
@@ -1577,6 +1580,7 @@ bool eroute_connection(const struct spd_route *sr,
 		uint32_t sa_priority,
 		const struct sa_marks *sa_marks,
 		const uint32_t xfrm_if_id,
+		uint32_t xfrm_sub_sa_id,
 		unsigned int op, const char *opname
 #ifdef HAVE_LABELED_IPSEC
 		, const char *policy_label
@@ -1606,7 +1610,7 @@ bool eroute_connection(const struct spd_route *sr,
 				proto_info,
 				deltatime(0),
 				sa_priority, sa_marks,
-				xfrm_if_id, op, buf2
+				xfrm_if_id, xfrm_sub_sa_id, op, buf2
 #ifdef HAVE_LABELED_IPSEC
 				, policy_label
 #endif
@@ -1628,6 +1632,7 @@ bool eroute_connection(const struct spd_route *sr,
 			deltatime(0),
 			sa_priority, sa_marks,
 			xfrm_if_id,
+			xfrm_sub_sa_id,
 			op, buf2
 #ifdef HAVE_LABELED_IPSEC
 			, policy_label
@@ -1717,6 +1722,7 @@ bool assign_holdpass(const struct connection *c,
 						null_proto_info,
 						calculate_sa_prio(c),
 						NULL, 0,
+						0,
 						op,
 						reason
 #ifdef HAVE_LABELED_IPSEC
@@ -2463,6 +2469,7 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 				calculate_sa_prio(c),	/* priority */
 				&c->sa_marks,		/* IPsec SA marks */
 				c->xfrm_if_id,
+				c->xfrm_sub_sa_id,
 				ERO_ADD_INBOUND,	/* op */
 				"add inbound"		/* opname */
 #ifdef HAVE_LABELED_IPSEC
@@ -2576,6 +2583,7 @@ static bool teardown_half_ipsec_sa(struct state *st, bool inbound)
 				calculate_sa_prio(c),
 				&c->sa_marks,
 				c->xfrm_if_id,
+				c->xfrm_sub_sa_id,
 				ERO_DEL_INBOUND,
 				"delete inbound"
 #ifdef HAVE_LABELED_IPSEC
@@ -3190,7 +3198,7 @@ bool route_and_eroute(struct connection *c,
 						deltatime(SHUNT_PATIENCE),
 						calculate_sa_prio(c),
 						NULL,
-						0,
+						0, 0,
 						ERO_REPLACE,
 						"restore"
 #ifdef HAVE_LABELED_IPSEC

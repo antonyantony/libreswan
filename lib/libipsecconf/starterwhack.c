@@ -848,6 +848,8 @@ static int starter_permutate_conns(int
 			conn->name, lc, rc);
 		sc.name = tmpconnname;
 
+		sc.xfrm_sub_sa_id = rc;
+
 		sc.connalias = conn->name;
 
 		success = (*operation)(cfg, &sc);

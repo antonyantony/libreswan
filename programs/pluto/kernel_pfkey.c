@@ -920,6 +920,7 @@ bool pfkey_raw_eroute(const ip_address *this_host,
 		      uint32_t sa_priority UNUSED,
 		      const struct sa_marks *sa_marks UNUSED,
 		      const uint32_t xfrm_if_id UNUSED,
+		      const uint32_t xfrm_sub_sa_id UNUSED,
 		      enum pluto_sadb_operations op,
 		      const char *text_said
 #ifdef HAVE_LABELED_IPSEC
@@ -1405,6 +1406,7 @@ bool pfkey_shunt_eroute(const struct connection *c,
 					calculate_sa_prio(c),
 					&c->sa_marks,
 					c->xfrm_if_id,
+					c->xfrm_sub_sa_id,
 					op, buf2
 #ifdef HAVE_LABELED_IPSEC
 					, c->policy_label
@@ -1498,6 +1500,7 @@ bool pfkey_sag_eroute(const struct state *st, const struct spd_route *sr,
 				 inner_esatype, proto_info + i,
 				 0 /* KLIPS does not support priority */, NULL,
 				 st->st_connection->xfrm_if_id,
+				 st->st_connection->xfrm_sub_sa_id,
 				 op, opname
 #ifdef HAVE_LABELED_IPSEC
 				 , NULL
