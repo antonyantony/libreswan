@@ -220,6 +220,11 @@ stf_status ikev2_child_sa_respond(struct ike_sa *ike,
 		case v2N_NO_PPK_AUTH:
 			DBG(DBG_CONTROL, DBG_log("received NO_PPK_AUTH already processed"));
 			break;
+
+		case v2N_PCPU_ID:
+			if (!extract_u32_notify(&ntfy->pbs, "v2N_PCPU_ID", &cst->st_pcpu.sa_clone_id))
+				return STF_FATAL;
+			break;
 		default:
 			libreswan_log("received unsupported NOTIFY %s ",
 				      enum_name(&ikev2_notify_names,
@@ -293,6 +298,10 @@ stf_status ikev2_child_sa_respond(struct ike_sa *ike,
 		if (!emit_v2N(v2N_ESP_TFC_PADDING_NOT_SUPPORTED, outpbs))
 			return STF_INTERNAL_ERROR;
 	}
+
+	if (child->sa.st_connection->sa_clones > CLONE_SA_HEAD)
+		if (!send_clone_id(ike, child, outpbs))
+			return STF_INTERNAL_ERROR;
 
 	if (!emit_v2N_compression(cst, cst->st_seen_use_ipcomp, outpbs))
 		return STF_INTERNAL_ERROR;

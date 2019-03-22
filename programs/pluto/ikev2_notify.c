@@ -246,6 +246,21 @@ bool decode_v2N_ike_auth_request(struct msg_digest *md)
 			md->v2N.initial_contact = true;
 			break;
 
+		case v2N_PCPU_I:
+			dbg("received v2N_PCPU_I");
+			md->v2N.sa_clones_i = ntfy;
+			break;
+
+		case v2N_PCPU_ID:
+			dbg("received v2N_PCPU_ID");
+			md->v2N.sa_clone_id = ntfy;
+			break;
+
+		case v2N_PCPU_R:
+			dbg("received v2N_PCPU_R");
+			md->v2N.sa_clones_r = ntfy;
+			break;
+
 		/* Child SA related NOTIFYs are processed later in ikev2_process_ts_and_rest() */
 		case v2N_USE_TRANSPORT_MODE:
 		case v2N_IPCOMP_SUPPORTED:
@@ -291,10 +306,22 @@ bool decode_v2N_ike_auth_response(struct msg_digest *md)
 			dbg("received v2N_USE_TRANSPORT_MODE in IKE_AUTH reply");
 			md->v2N.use_transport_mode = true;
 			break;
+		case v2N_PCPU_I:
+			dbg("received v2N_PCPU_I");
+			md->v2N.sa_clones_i = ntfy;
+			break;
+		case v2N_PCPU_ID:
+			dbg("received v2N_PCPU_ID");
+			md->v2N.sa_clone_id = ntfy;
+			break;
+		case v2N_PCPU_R:
+			dbg("received v2N_PCPU_R");
+			md->v2N.sa_clones_r = ntfy;
+			break;
 		default:
 			dbg("received %s notify - ignored",
-			    enum_name(&ikev2_notify_names,
-				      ntfy->payload.v2n.isan_type));
+					enum_name(&ikev2_notify_names,
+						ntfy->payload.v2n.isan_type));
 		}
 	}
 	return true;
@@ -339,6 +366,18 @@ bool decode_v2N_ike_auth_child(struct msg_digest *md)
 		case v2N_IPCOMP_SUPPORTED:
 			dbg("received v2N_IPCOMP_SUPPORTED");
 			md->v2N.ipcomp_supported = ntfy;
+			break;
+		case v2N_PCPU_I:
+			dbg("received v2N_PCPU_I");
+			md->v2N.sa_clones_i = ntfy;
+			break;
+		case v2N_PCPU_ID:
+			dbg("received v2N_PCPU_ID");
+			md->v2N.sa_clone_id = ntfy;
+			break;
+		case v2N_PCPU_R:
+			dbg("received v2N_PCPU_R");
+			md->v2N.sa_clones_r = ntfy;
 			break;
 		default:
 			dbg("ignored received NOTIFY (%d): %s ",

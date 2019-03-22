@@ -474,6 +474,12 @@ struct state {
 	struct p_dns_req *ipseckey_fwd_dnsr;/* validate IDi that IP in forward A/AAAA */
 
 	char *st_active_redirect_gw;	/* needed for sending of REDIRECT in informational */
+	struct {
+		bool	 sa_clones;   /* received clones support */
+		uint32_t sa_clones_i; /* optimal send clones announced by peer */
+		uint32_t sa_clones_r; /* optimal receive clones announced by peer */
+		uint32_t sa_clone_id; /* pcpu ID of this pair of IPsec SA */
+	} st_pcpu;
 
 	/** end of IKEv2-only things **/
 

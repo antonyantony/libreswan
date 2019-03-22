@@ -166,6 +166,9 @@ struct msg_digest {
 		bool mobike_supported;
 		bool initial_contact;
 		struct payload_digest *ipcomp_supported;
+		struct payload_digest *sa_clone_id;
+		struct payload_digest *sa_clones_i;
+		struct payload_digest *sa_clones_r;
 	} v2N;
 
 	/*
