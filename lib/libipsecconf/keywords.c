@@ -538,6 +538,9 @@ const struct keyword_def ipsec_conf_keywords[] = {
   { "fragmentation",  kv_conn | kv_processed,  kt_enum,  KBF_IKE_FRAG,  &kw_ynf_list, NULL, },
   { "mobike",  kv_conn,  kt_bool,  KBF_MOBIKE, NULL, NULL, },
   { "narrowing",  kv_conn,  kt_bool,  KBF_IKEv2_ALLOW_NARROWING, NULL, NULL, },
+#ifdef USE_CLONES
+  { "clones",  kv_conn,  kt_number,  KBF_CLONES, NULL, NULL, },
+#endif
   { "pam-authorize",  kv_conn,  kt_bool,  KBF_IKEv2_PAM_AUTHORIZE, NULL, NULL, },
   { "send-redirect",  kv_conn,  kt_enum,  KBF_SEND_REDIRECT, &kw_yna_list, NULL, },
   { "redirect-to",  kv_conn,  kt_string,  KSCF_REDIRECT_TO, NULL, NULL, },

@@ -124,6 +124,8 @@ struct starter_conn {
 	char *accept_redirect_to;
 	bool vti_routing;
 	bool vti_shared;
+	uint32_t sa_clones;
+	uint32_t sa_clone_id;
 };
 
 struct starter_config {
