@@ -2390,9 +2390,13 @@ static bool decode_peer_id_counted(struct ike_sa *ike,
 			struct connection *r = NULL;
 
 			if (authby != AUTH_NULL) {
-				r = refine_host_connection(
-					md->st, &peer_id, tip, FALSE /*initiator*/,
-					LEMPTY /* auth_policy */, authby, &fromcert);
+				if (c->clone_id == 0) {
+					r = refine_host_connection(
+						md->st, &peer_id, tip, FALSE /*initiator*/,
+						LEMPTY /* auth_policy */, authby, &fromcert);
+				} else {
+					r = c; /* don't switch clones */
+				}
 			}
 
 			if (r == NULL) {
@@ -2689,12 +2693,13 @@ void log_ipsec_sa_established(const char *m, const struct state *st)
 
 	rangetot(&a->net, 0, ba, sizeof(ba));
 	rangetot(&b->net, 0, bb, sizeof(bb));
-	libreswan_log("%s [%s:%d-%d %d] -> [%s:%d-%d %d]",
+	libreswan_log("%s [%s:%d-%d %d] --(%lu)--> [%s:%d-%d %d]",
 			m,
 			ba,
 			a->startport,
 			a->endport,
 			a->ipprotoid,
+			st->st_connection->clone_id,
 			bb,
 			b->startport,
 			b->endport,

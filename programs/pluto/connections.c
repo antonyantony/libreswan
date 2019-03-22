@@ -1381,6 +1381,10 @@ void add_connection(const struct whack_message *wm)
 			loglog(RC_FATAL, "narrowing=yes requires ikev2");
 			return;
 		}
+		if (wm->sa_clones != 0) {
+			loglog(RC_FATAL, "clones= requires ikev2");
+			return;
+		}
 	}
 
 	if (wm->policy & POLICY_MOBIKE) {
@@ -1685,6 +1689,10 @@ void add_connection(const struct whack_message *wm)
 		c->sa_rekey_margin = wm->sa_rekey_margin;
 		c->sa_rekey_fuzz = wm->sa_rekey_fuzz;
 		c->sa_keying_tries = wm->sa_keying_tries;
+		c->sa_clone_id = wm->sa_clone_id;
+		c->sa_clones = wm->sa_clones;
+		DBG_log("AA_2019 %s %d %s sa_clone_id %u sa_clones %u", __func__,
+					__LINE__, c->name, c->sa_clone_id, c->sa_clones);
 		c->sa_replay_window = wm->sa_replay_window;
 		c->r_timeout = wm->r_timeout;
 		c->r_interval = wm->r_interval;
@@ -4271,7 +4279,7 @@ void show_one_connection(const struct connection *c)
 	}
 
 	whack_log(RC_COMMENT,
-		"\"%s\"%s:   ike_life: %jds; ipsec_life: %jds; replay_window: %u; rekey_margin: %jds; rekey_fuzz: %lu%%; keyingtries: %lu;",
+		"\"%s\"%s:   ike_life: %jds; ipsec_life: %jds; replay_window: %u; rekey_margin: %jds; rekey_fuzz: %lu%%; keyingtries: %lu; clone_id: %lu;",
 		c->name,
 		instance,
 		deltasecs(c->sa_ike_life_seconds),
@@ -4279,7 +4287,8 @@ void show_one_connection(const struct connection *c)
 		c->sa_replay_window,
 		deltasecs(c->sa_rekey_margin),
 		c->sa_rekey_fuzz,
-		c->sa_keying_tries);
+		c->sa_keying_tries,
+		c->sa_clone_id);
 
 	whack_log(RC_COMMENT,
 		  "\"%s\"%s:   retransmit-interval: %jdms; retransmit-timeout: %jds;",

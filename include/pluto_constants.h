@@ -869,6 +869,11 @@ enum connection_kind {
 	CK_GOING_AWAY   /* instance being deleted -- don't delete again */
 };
 
+enum ikev2_clone_sa_kind {
+	CLONE_SA_HEAD,
+	CLONE_SA_SUB,
+};
+
 /* routing status.
  * Note: routing ignores source address, but erouting does not!
  * Note: a connection can only be routed if it is NEVER_NEGOTIATE

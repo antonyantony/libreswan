@@ -141,6 +141,7 @@ enum keyword_numeric_config_field {
 	KBF_DECAP_DSCP,
 	KBF_NOPMTUDISC,
 	KBF_IKEv2_ALLOW_NARROWING,
+	KBF_CLONES, /* how many clones of the IPsec SA to install */
 	KBF_IKEv2_PAM_AUTHORIZE,
 	KBF_SEND_REDIRECT,	/* this and next word are used for IKEv2 Redirect Mechanism */
 	KBF_ACCEPT_REDIRECT,	/* see RFC 5685 for more details */
