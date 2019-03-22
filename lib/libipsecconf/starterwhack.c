@@ -549,6 +549,7 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	msg.sa_rekey_fuzz = conn->options[KNCF_REKEYFUZZ];
 	msg.sa_keying_tries = conn->options[KNCF_KEYINGTRIES];
 	msg.sa_replay_window = conn->options[KNCF_REPLAY_WINDOW];
+	msg.sa_clones = conn->options[KBF_CLONES];
 
 	msg.r_interval = deltatime_ms(conn->options[KNCF_RETRANSMIT_INTERVAL_MS]);
 	msg.r_timeout = deltatime(conn->options[KNCF_RETRANSMIT_TIMEOUT]);
@@ -556,7 +557,11 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	msg.policy = conn->policy;
 	msg.sighash_policy = conn->sighash_policy;
 
+	if (conn->options_set[KBF_CLONES])
+		msg.policy |= POLICY_OVERLAPIP;
+
 	msg.connalias = conn->connalias;
+	msg.sa_clone_id = conn->sa_clone_id;
 
 	msg.metric = conn->options[KNCF_METRIC];
 
@@ -895,13 +900,35 @@ static int starter_permutate_conns(int
 int starter_whack_add_conn(struct starter_config *cfg,
 			const struct starter_conn *conn)
 {
-	/* basic case, nothing special to synthize! */
-	if (!conn->left.strings_set[KSCF_SUBNETS] &&
-	    !conn->right.strings_set[KSCF_SUBNETS])
-		return starter_whack_basic_add_conn(cfg, conn);
-
-	return starter_permutate_conns(starter_whack_basic_add_conn,
+	/* leftsubnets= / rightsubnets= */
+	if (conn->left.strings_set[KSCF_SUBNETS] ||
+	    conn->right.strings_set[KSCF_SUBNETS]) {
+		return starter_permutate_conns(starter_whack_basic_add_conn,
 				cfg, conn);
+	}
+
+	/* clones= */
+	if (conn->options_set[KBF_CLONES]) {
+		int clone_id = CLONE_SA_HEAD;
+		int num = 0;
+		char tmpconnname[256];
+
+		while (clone_id < conn->options[KBF_CLONES] + 1) {
+			/* copy conn  - borrow pointers, since this is a temporary copy */
+			struct starter_conn cc = *conn;
+
+			snprintf(tmpconnname, sizeof(tmpconnname), "%s-%d",
+				conn->name, clone_id);
+			cc.name = tmpconnname;
+			cc.connalias = conn->name;
+			cc.sa_clone_id = clone_id;
+			num += starter_whack_basic_add_conn(cfg, &cc);
+			clone_id++;
+		}
+		return num;
+	}
+
+	return starter_whack_basic_add_conn(cfg, conn);
 }
 
 static int starter_whack_basic_route_conn(struct starter_config *cfg,

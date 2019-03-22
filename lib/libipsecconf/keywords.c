@@ -557,6 +557,9 @@ const struct keyword_def ipsec_conf_keywords[] = {
   { "cisco_unity",  kv_conn | kv_alias,  kt_bool,  KNCF_CISCO_UNITY, NULL, NULL, },  /* obsolete _ */
   { "cisco-unity",  kv_conn,  kt_bool,  KNCF_CISCO_UNITY, NULL, NULL, },
   { "send-no-esp-tfc",  kv_conn,  kt_bool,  KNCF_NO_ESP_TFC, NULL, NULL, },
+#ifdef USE_CLONES
+  { "clones",  kv_conn,  kt_number,  KBF_CLONES, NULL, NULL, },
+#endif
   { "fake-strongswan",  kv_conn,  kt_bool,  KNCF_VID_STRONGSWAN, NULL, NULL, },
   { "send_vendorid",  kv_conn | kv_alias,  kt_bool,  KNCF_SEND_VENDORID, NULL, NULL, },  /* obsolete _ */
   { "send-vendorid",  kv_conn,  kt_bool,  KNCF_SEND_VENDORID, NULL, NULL, },

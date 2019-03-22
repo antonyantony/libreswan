@@ -148,6 +148,7 @@ struct kernel_sa {
 	const char *text_said;
 	struct xfrm_user_sec_ctx_ike *sec_ctx;
 	const char *nic_offload_dev;
+	uint32_t clone_id;
 
 	deltatime_t sa_lifetime; /* number of seconds until SA expires */
 	/*
