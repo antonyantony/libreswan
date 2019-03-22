@@ -2173,6 +2173,7 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 			c->sa_replay_window));
 
 		said_next->xfrm_if_id = c->xfrm_if_id;
+		said_next->xfrm_sub_sa_id =  c->xfrm_sub_sa_id;
 
 		if (!inbound && c->sa_tfcpad != 0 && !st->st_seen_no_tfc) {
 			DBG(DBG_KERNEL, DBG_log("Enabling TFC at %d bytes (up to PMTU)", c->sa_tfcpad));
