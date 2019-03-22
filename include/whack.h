@@ -174,6 +174,7 @@ struct whack_message {
 	deltatime_t sa_rekey_margin;
 	unsigned long sa_rekey_fuzz;
 	unsigned long sa_keying_tries;
+	unsigned long sa_clones;
 	unsigned long sa_replay_window;
 	deltatime_t r_timeout; /* in secs */
 	deltatime_t r_interval; /* in msec */

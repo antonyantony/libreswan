@@ -547,6 +547,7 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	msg.sa_rekey_margin = deltatime(conn->options[KBF_REKEYMARGIN]);
 	msg.sa_rekey_fuzz = conn->options[KBF_REKEYFUZZ];
 	msg.sa_keying_tries = conn->options[KBF_KEYINGTRIES];
+	msg.sa_clones = conn->options[KBF_CLONES];
 	msg.sa_replay_window = conn->options[KBF_REPLAY_WINDOW];
 
 	msg.r_interval = deltatime_ms(conn->options[KBF_RETRANSMIT_INTERVAL_MS]);
@@ -554,6 +555,9 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 
 	msg.policy = conn->policy;
 	msg.sighash_policy = conn->sighash_policy;
+
+	if (conn->options_set[KBF_CLONES])
+		msg.policy |= POLICY_OVERLAPIP;
 
 	msg.connalias = conn->connalias;
 
@@ -894,13 +898,35 @@ static int starter_permutate_conns(int
 int starter_whack_add_conn(struct starter_config *cfg,
 			const struct starter_conn *conn)
 {
-	/* basic case, nothing special to synthize! */
-	if (!conn->left.strings_set[KSCF_SUBNETS] &&
-	    !conn->right.strings_set[KSCF_SUBNETS])
-		return starter_whack_basic_add_conn(cfg, conn);
-
-	return starter_permutate_conns(starter_whack_basic_add_conn,
+	/* leftsubnets= / rightsubnets= */
+	if (conn->left.strings_set[KSCF_SUBNETS] ||
+	    conn->right.strings_set[KSCF_SUBNETS]) {
+		return starter_permutate_conns(starter_whack_basic_add_conn,
 				cfg, conn);
+	}
+
+	/* clones= */
+	if (conn->options_set[KBF_CLONES]) {
+		int clones = conn->options[KBF_CLONES] + 1 ; /* 1 clone means 2 conns */
+		int num = 0;
+		char tmpconnname[256];
+
+		while (clones != 0) {
+			/* copy conn  - borrow pointers, since this is a temporary copy */
+			struct starter_conn cc = *conn;
+
+			snprintf(tmpconnname, sizeof(tmpconnname), "%s-%d",
+				conn->name, clones);
+			cc.name = tmpconnname;
+			cc.connalias = conn->name;
+			cc.options[KBF_CLONES] = clones; /* used as clone ID */
+			num += starter_whack_basic_add_conn(cfg, &cc);
+			clones--;
+		}
+		return num;
+	}
+
+	return starter_whack_basic_add_conn(cfg, conn);
 }
 
 static int starter_whack_basic_route_conn(struct starter_config *cfg,

@@ -1483,6 +1483,10 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 		attr = (struct rtattr *)((char *)attr + attr->rta_len);
 	}
 
+	if (sa->clone_id != 0) {
+		// Antony's code to add XFRM payload
+	}
+
 #ifdef USE_NIC_OFFLOAD
 	if (sa->nic_offload_dev) {
 		struct xfrm_user_offload xuo = {
