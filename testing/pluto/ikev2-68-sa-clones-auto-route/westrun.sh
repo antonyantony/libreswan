@@ -1,2 +1,2 @@
-taskset 0x2 ping -n -c 2 -I 192.0.1.254 192.0.2.254
+taskset 0x2 ping -w 2 -n -c 2 192.1.2.23
 echo done
