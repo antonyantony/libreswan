@@ -716,14 +716,17 @@ static bool netlink_raw_eroute(const ip_address *this_host,
 		}
 
 		{
+
+
+
 			uint32_t xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
 			struct rtattr *attr = (struct rtattr *)((char *)&req + req.n.nlmsg_len);
 			if (xfrm_sub_sa_id == 0) {
-				DBG(DBG_KERNEL, DBG_log("netlink: xfrm_sub_sa_id %u set head SA", xfrm_sub_sa_id));
+				DBG(DBG_KERNEL, DBG_log("AA_2019 netlink_raw_eroute head SA "));
 				xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
 			} else {
-				DBG(DBG_KERNEL, DBG_log("netlink: set xfrm_sub_sa_id %u set sub SA", xfrm_sub_sa_id));
 				uint32_t sub_sa_id =  xfrm_sub_sa_id -1 ;
+				DBG(DBG_KERNEL, DBG_log("AA_2019 netlink_raw_eroute xfrm_sub_sa_id %u set sub SA", sub_sa_id ));
 				attr->rta_type = XFRMA_SA_PCPU;
 				attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
 				memcpy(RTA_DATA(attr), &sub_sa_id, sizeof(uint32_t));
@@ -1540,20 +1543,20 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 
 		uint32_t xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
 		if (sa->xfrm_sub_sa_id == 0) {
-			DBG(DBG_KERNEL, DBG_log("netlink: xfrm_sub_sa_id %u set master SA", sa->xfrm_sub_sa_id));
+			DBG(DBG_KERNEL, DBG_log("AA_2019 netlink_add_sa head SA "));
 			xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
 		} else {
-			DBG(DBG_KERNEL, DBG_log("netlink: set xfrm_sub_sa_id %u set sub SA", sa->xfrm_sub_sa_id));
 			uint32_t sub_sa_id = sa->xfrm_sub_sa_id - 1;
+			DBG(DBG_KERNEL, DBG_log("AA_2019 netlink_add_sa xfrm_sub_sa_id %u set sub SA", sub_sa_id ));
 			attr->rta_type = XFRMA_SA_PCPU;
 			attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
 
 			memcpy(RTA_DATA(attr), &sub_sa_id, sizeof(uint32_t));
 			req.n.nlmsg_len += attr->rta_len;
 			attr = (struct rtattr *)((char *)attr + attr->rta_len);
+
 			xfrm_sub_sa_flag = XFRM_SA_PCPU_SUB;
 		}
-
 			attr->rta_type = XFRMA_SA_EXTRA_FLAGS;
                         attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
                         memcpy(RTA_DATA(attr), &xfrm_sub_sa_flag, sizeof(uint32_t));
