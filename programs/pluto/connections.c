@@ -94,7 +94,7 @@
 #endif
 
 struct connection *connections = NULL;
-static xfrm_sub_sa_id = 1;
+static uint32_t xfrm_sub_sa_id = 0;
 
 struct connection *unoriented_connections = NULL;
 

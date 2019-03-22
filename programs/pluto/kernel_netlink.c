@@ -1516,11 +1516,29 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 		attr = (struct rtattr *)((char *)attr + attr->rta_len);
 	}
 
-	if (sa->xfrm_sub_sa_id == 1) {
-		DBG(DBG_KERNEL, DBG_log("netlink: xfrm_sub_sa_id %u set master SA", sa->xfrm_sub_sa_id));
-	} else if (sa->xfrm_sub_sa_id > 1) {
-		DBG(DBG_KERNEL, DBG_log("netlink: xfrm_sub_sa_id %u set sub SA", sa->xfrm_sub_sa_id));
-	}
+	// 	if (sa->xfrm_sub_sa_id > 0) { not yet
+
+		uint32_t xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
+		if (sa->xfrm_sub_sa_id == 0) {
+			DBG(DBG_KERNEL, DBG_log("netlink: xfrm_sub_sa_id %u set master SA", sa->xfrm_sub_sa_id));
+			xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
+		} else {
+			DBG(DBG_KERNEL, DBG_log("netlink: set xfrm_sub_sa_id %u set sub SA", sa->xfrm_sub_sa_id));
+			attr->rta_type = XFRMA_SA_PCPU;
+			attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
+			memcpy(RTA_DATA(attr), &sa->xfrm_sub_sa_id, sizeof(uint32_t));
+			req.n.nlmsg_len += attr->rta_len;
+			attr = (struct rtattr *)((char *)attr + attr->rta_len);
+			xfrm_sub_sa_flag = XFRM_SA_PCPU_SUB;
+		}
+
+			attr->rta_type = XFRMA_SA_EXTRA_FLAGS;
+                        attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
+                        memcpy(RTA_DATA(attr), &xfrm_sub_sa_flag, sizeof(uint32_t));
+                        req.n.nlmsg_len += attr->rta_len;
+                        attr = (struct rtattr *)((char *)attr + attr->rta_len);
+
+	//}
 
 	if (sa->xfrm_if_id > 0) {
 #ifdef USE_XFRM_INTERFACE
