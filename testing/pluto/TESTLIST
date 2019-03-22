@@ -163,6 +163,12 @@ kvmplutotest	ikev2-62-host-ondemand-instance		good
 kvmplutotest	ikev2-63-anyid-nat			good
 kvmplutotest	ikev2-64-same-route-twice		wip
 kvmplutotest	ikev2-67-parallel-sa			wip
+kvmplutotest	ikev2-67-alias-same-sa			wip
+kvmplutotest	ikev2-68-sa-clones			wip
+kvmplutotest	ikev2-68-sa-clones-host			wip
+kvmplutotest	ikev2-68-sa-clones-encap		wip
+kvmplutotest	ikev2-70-alias-delete			wip
+kvmplutotest	ikev2-71-clones-delete			wip
 
 kvmplutotest	ikev2-24-cryptoload			wip
 kvmplutotest	ikev2-25-rw-nat				good
