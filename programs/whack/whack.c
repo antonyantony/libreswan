@@ -107,6 +107,7 @@ static void help(void)
 		"	[--send-redirect] [--redirect-to] \\\n"
 		"	[--accept-redirect] [--accept-redirect-to] \\\n"
 		"	[--keyingtries <count>] \\\n"
+		"	[--clones <num>] \\\n"
 		"	[--replay-window <num>] \\\n"
 		"	[--esp <esp-algos>] \\\n"
 		"	[--remote-peer-type <cisco>] \\\n"
@@ -432,6 +433,7 @@ enum option_enums {
 	CD_RKMARGIN,
 	CD_RKFUZZ,
 	CD_KTRIES,
+	CD_CLONES,
 	CD_REPLAY_W,
 	CD_DPDDELAY,
 	CD_DPDTIMEOUT,
@@ -737,6 +739,7 @@ static const struct option long_opts[] = {
 	{ "rekeywindow", required_argument, NULL, CD_RKMARGIN + OO + NUMERIC_ARG },
 	{ "rekeyfuzz", required_argument, NULL, CD_RKFUZZ + OO + NUMERIC_ARG },
 	{ "keyingtries", required_argument, NULL, CD_KTRIES + OO + NUMERIC_ARG },
+	{ "clones", required_argument, NULL, CD_CLONES + OO + NUMERIC_ARG },
 	{ "replay-window", required_argument, NULL, CD_REPLAY_W + OO + NUMERIC_ARG },
 	{ "ike",    required_argument, NULL, CD_IKE + OO },
 	{ "ikealg", required_argument, NULL, CD_IKE + OO },
@@ -1770,6 +1773,10 @@ int main(int argc, char **argv)
 
 		case CD_KTRIES:	/* --keyingtries <count> */
 			msg.sa_keying_tries = opt_whole;
+			continue;
+
+		case CD_CLONES: /* --clones <num> */
+			msg.sa_clones = opt_whole;
 			continue;
 
 		case CD_REPLAY_W: /* --replay-window <num> */

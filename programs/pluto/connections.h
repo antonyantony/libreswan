@@ -260,6 +260,8 @@ struct connection {
 	deltatime_t sa_rekey_margin;
 	unsigned long sa_rekey_fuzz;
 	unsigned long sa_keying_tries;
+	uint32_t sa_clones;
+	uint32_t sa_clone_id;
 	uint32_t sa_priority;
 	uint32_t sa_tfcpad;
 	bool send_no_esp_tfc;

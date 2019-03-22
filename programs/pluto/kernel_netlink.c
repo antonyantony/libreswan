@@ -1494,6 +1494,11 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 		attr = (struct rtattr *)((char *)attr + attr->rta_len);
 	}
 
+	if (sa->clones > CLONE_SA_HEAD) {
+		// Antony's code to add XFRM payload
+		DBG_log("AA_2019 add  clone %u", sa->clone_id);
+	}
+
 	if (sa->nic_offload_dev) {
 		struct xfrm_user_offload xuo = {
 			.flags = (sa->inbound ? XFRM_OFFLOAD_INBOUND : 0) |
