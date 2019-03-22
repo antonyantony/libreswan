@@ -504,6 +504,7 @@ struct find_oppo_bundle {
 	ipsec_spi_t failure_shunt; /* in host order! */
 	struct fd *whackfd;
 	bool background;
+	uint32_t clone_cpu_id;
 };
 
 static void cannot_oppo(struct connection *c,
@@ -979,6 +980,7 @@ void initiate_ondemand(const ip_address *our_client,
 		       bool held,
 		       struct fd *whackfd, bool background,
 		       struct xfrm_user_sec_ctx_ike *uctx,
+		       uint32_t clone_cpu_id,
 		       const char *why)
 {
 	struct find_oppo_bundle b = {
@@ -993,6 +995,7 @@ void initiate_ondemand(const ip_address *our_client,
 		.failure_shunt = SPI_HOLD, /* until we found connection policy */
 		.whackfd = whackfd, /*on-stack*/
 		.background = background,
+		.clone_cpu_id = clone_cpu_id,
 	};
 
 	initiate_ondemand_body(&b, uctx);

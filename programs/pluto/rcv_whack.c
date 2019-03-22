@@ -494,7 +494,8 @@ static bool whack_process(struct fd *whackfd, const struct whack_message *const 
 			initiate_ondemand(&m->oppo_my_client,
 					  &m->oppo_peer_client, m->oppo_proto,
 					  FALSE, whackfd, m->whack_async,
-					  NULL, "whack");
+					  NULL, NULL, -1 /* clone_cpu_id */,
+					  "whack");
 		}
 	}
 

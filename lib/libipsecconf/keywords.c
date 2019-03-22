@@ -111,6 +111,13 @@ static const struct keyword_enum_values kw_yn_list = VALUES_INITIALIZER(kw_yn_va
 #endif
 
 /* Values for yes/no/auto, used by encapsulation and nic-offload */
+static const struct keyword_enum_value kw_ny_u32_values[] = {
+        { "yes",        ny_u32_yes  },
+        { "no",         ny_u32_no },
+};
+static const struct keyword_enum_values kw_ny_u32_list = VALUES_INITIALIZER(kw_ny_u32_values);
+
+/* Values for yes/no/auto, used by encapsulation and nic-offload */
 static const struct keyword_enum_value kw_yna_values[] = {
 	{ "yes",	yna_yes  },
 	{ "no",		yna_no },
@@ -529,6 +536,9 @@ const struct keyword_def ipsec_conf_keywords[] = {
   { "cisco_unity",  kv_conn | kv_alias,  kt_bool,  KNCF_CISCO_UNITY, NULL, NULL, },  /* obsolete _ */
   { "cisco-unity",  kv_conn,  kt_bool,  KNCF_CISCO_UNITY, NULL, NULL, },
   { "send-no-esp-tfc",  kv_conn,  kt_bool,  KNCF_NO_ESP_TFC, NULL, NULL, },
+#ifdef USE_CLONES
+  { "clones",  kv_conn,  kt_loose_enum,  KNCF_SA_CLONES, &kw_ny_u32_list, NULL, },
+#endif
   { "fake-strongswan",  kv_conn,  kt_bool,  KNCF_VID_STRONGSWAN, NULL, NULL, },
   { "send_vendorid",  kv_conn | kv_alias,  kt_bool,  KNCF_SEND_VENDORID, NULL, NULL, },  /* obsolete _ */
   { "send-vendorid",  kv_conn,  kt_bool,  KNCF_SEND_VENDORID, NULL, NULL, },

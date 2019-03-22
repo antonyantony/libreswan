@@ -172,6 +172,7 @@ struct kernel_sa {
 	struct xfrm_user_sec_ctx_ike *sec_ctx;
 	const char *nic_offload_dev;
 	uint32_t xfrm_if_id;
+	uint32_t clone_id;
 
 	deltatime_t sa_lifetime; /* number of seconds until SA expires */
 };
@@ -377,6 +378,7 @@ extern void record_and_initiate_opportunistic(const ip_subnet *,
 					      const ip_subnet *,
 					      int transport_proto,
 					      struct xfrm_user_sec_ctx_ike *,
+					      uint32_t clone_cpu_id,
 					      const char *why);
 extern void init_kernel(void);
 

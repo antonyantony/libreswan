@@ -207,6 +207,7 @@ void record_and_initiate_opportunistic(const ip_subnet *ours,
 				const ip_subnet *his,
 				int transport_proto,
 				struct xfrm_user_sec_ctx_ike *uctx,
+				uint32_t clone_cpu_id,
 				const char *why)
 {
 	passert(subnet_type(ours) == subnet_type(his));
@@ -233,8 +234,8 @@ void record_and_initiate_opportunistic(const ip_subnet *ours,
 
 	/* actually initiate opportunism / ondemand */
 	initiate_ondemand(&src, &dst, transport_proto,
-			  TRUE, null_fd, true/*background*/,
-			  uctx, "acquire");
+			  TRUE, null_fd, true /*background*/,
+			  uctx, clone_cpu_id, "acquire");
 
 	if (kernel_ops->remove_orphaned_holds != NULL) {
 		DBG(DBG_OPPO, DBG_log("record_and_initiate_opportunistic(): tell kernel to remove orphan hold for our bare shunt"));
@@ -1783,6 +1784,7 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		.sa_lifetime = c->sa_ipsec_life_seconds,
 		.outif = -1,
 		.sec_ctx = st->sec_ctx,
+		.clone_id = (uint32_t)c->sa_clone_id,
 	};
 
 	if (kernel_ops->inbound_eroute) {

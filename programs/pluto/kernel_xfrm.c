@@ -35,7 +35,6 @@
  * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
  * for more details.
  */
-
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
@@ -55,6 +54,8 @@
 
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sched.h>
+
 
 #include "kameipsec.h"
 #include <linux/rtnetlink.h>
@@ -1555,6 +1556,10 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 		attr = (struct rtattr *)((char *)attr + attr->rta_len);
 #endif
 	}
+	if (sa->clones > CLONE_SA_HEAD) {
+		// Antony's code to add XFRM payload
+		DBG_log("AA_2020 add  clone %u", sa->clone_id);
+	}
 
 	if (sa->nic_offload_dev) {
 		struct xfrm_user_offload xuo = {
@@ -1694,10 +1699,11 @@ static void netlink_acquire(struct nlmsghdr *n)
 	err_t ugh = NULL;
 	struct xfrm_user_sec_ctx_ike *uctx = NULL;
 	struct xfrm_user_sec_ctx_ike uctx_space;
-
-	DBG(DBG_KERNEL,
+	uint32_t cpu_id = -1;
+	DBG(DBG_KERNEL, {
 		DBG_log("xfrm netlink msg len %zu",
-			(size_t) n->nlmsg_len));
+				(size_t) n->nlmsg_len));
+	}
 
 	if (n->nlmsg_len < NLMSG_LENGTH(sizeof(*acquire))) {
 		libreswan_log(
@@ -1741,88 +1747,92 @@ static void netlink_acquire(struct nlmsghdr *n)
 	size_t remaining = n->nlmsg_len -
 			NLMSG_SPACE(sizeof(struct xfrm_user_acquire));
 
-	while (remaining > 0) {
-		DBG(DBG_KERNEL,
-			DBG_log("xfrm acquire rtattribute type %u", attr->rta_type));
-		switch (attr->rta_type) {
-		case XFRMA_TMPL:
-		{
-			struct xfrm_user_tmpl* tmpl = (struct xfrm_user_tmpl *) RTA_DATA(attr);
-			DBG(DBG_KERNEL,
-				DBG_log("xfrm template attribute with reqid:%d, spi:%d, proto:%d", tmpl->reqid, tmpl->id.spi, tmpl->id.proto));
-			break;
-		}
-		case XFRMA_POLICY_TYPE:
-			/* discard */
-			break;
-		case XFRMA_SEC_CTX:
-		{
-			struct xfrm_user_sec_ctx *xuctx = (struct xfrm_user_sec_ctx *) RTA_DATA(attr);
-			/* length of text of label */
-			size_t len = xuctx->ctx_len;
+	LSWDBGP(DBG_KERNEL, buf) {
+		lswlogf(buf, "parse  XFRM_MSG_ACQUIRE message\n");
+		while (remaining > 0) {
+			char acquire_log_p[] = "xfrm acquire rta ttribute type ";
+				switch (attr->rta_type) {
+					case XFRMA_TMPL:
+						{
+							struct xfrm_user_tmpl* tmpl = (struct xfrm_user_tmpl *) RTA_DATA(attr);
+							lswlogf(buf, "%s with reqid:%d, spi:%d, proto:%d\n", acquire_log_p, tmpl->reqid, tmpl->id.spi, tmpl->id.proto);
+							break;
+						}
+					case XFRMA_POLICY_TYPE:
+						lswlogf(buf, "%s XFRMA_POLICY_TYPE discard \n", acquire_log_p);
+						break;
 
-			DBG(DBG_KERNEL,
-				DBG_log("xfrm xuctx: exttype=%d, len=%d, ctx_doi=%d, ctx_alg=%d, ctx_len=%zu",
-					xuctx->exttype, xuctx->len,
-					xuctx->ctx_doi, xuctx->ctx_alg,
-					len));
+					case XFRMA_SA_PCPU:
+						cpu_id = *((uint32_t *) RTA_DATA(attr));
+						lswlogf(buf, "%s XFRMA_SA_PCPU %u \n", acquire_log_p, cpu_id);
+						break;
 
-			if (uctx != NULL) {
-				libreswan_log("Second Sec Ctx label in a single Acquire message; ignoring Acquire message");
-				return;
-			}
+					case XFRMA_SEC_CTX:
+						{
+							struct xfrm_user_sec_ctx *xuctx = (struct xfrm_user_sec_ctx *) RTA_DATA(attr);
+							/* length of text of label */
+							size_t len = xuctx->ctx_len;
 
-			if (len > MAX_SECCTX_LEN) {
-				libreswan_log("Sec Ctx label of length %zu, longer than MAX_SECCTX_LEN; ignoring Acquire message",
-					len);
-				return;
-			}
+							lswlogf(buf, "%s XFRMA_SEC_CTX xuctx: exttype=%d, len=%d, ctx_doi=%d, ctx_alg=%d, ctx_len=%zu",
+									acquire_log_p, xuctx->exttype, xuctx->len,
+									xuctx->ctx_doi, xuctx->ctx_alg,
+									len);
 
-			/*
-			 * note: xuctx + 1 is tricky:
-			 * first byte after header
-			 */
-			DBG(DBG_KERNEL,
-				DBG_log("xfrm: xuctx security context value: %.*s",
-					xuctx->ctx_len,
-					(const char *) (xuctx + 1)));
+							if (uctx != NULL) {
+								libreswan_log("Second Sec Ctx label in a single Acquire message; ignoring Acquire message");
+								return;
+							}
 
-			zero(&uctx_space);
-			uctx = &uctx_space;
+							if (len > MAX_SECCTX_LEN) {
+								libreswan_log("Sec Ctx label of length %zu, longer than MAX_SECCTX_LEN; ignoring Acquire message",
+										len);
+								return;
+							}
 
-			memcpy(uctx->sec_ctx_value, (xuctx + 1),
-				xuctx->ctx_len);
+							/*
+							 * note: xuctx + 1 is tricky:
+							 * first byte after header
+							 */
+							lswlogf(buf, "xfrm: xuctx security context value: %.*s",
+									xuctx->ctx_len,
+									(const char *) (xuctx + 1));
 
-			if (len == 0 || uctx->sec_ctx_value[len-1] != '\0') {
-				if (len == MAX_SECCTX_LEN) {
-					libreswan_log("Sec Ctx label missing final NUL and too long to add; ignoring Acquire message");
-					return;
+							zero(&uctx_space);
+							uctx = &uctx_space;
+
+							memcpy(uctx->sec_ctx_value, (xuctx + 1),
+									xuctx->ctx_len);
+
+							if (len == 0 || uctx->sec_ctx_value[len-1] != '\0') {
+								if (len == MAX_SECCTX_LEN) {
+									libreswan_log("Sec Ctx label missing final NUL and too long to add; ignoring Acquire message");
+									return;
+								}
+								libreswan_log("Sec Ctx label missing final NUL; we're adding it");
+								uctx->sec_ctx_value[len] = '\0';
+								len++;
+							}
+
+							if (strlen(uctx->sec_ctx_value) + 1 != len) {
+								libreswan_log("Sec Ctx label contains embedded NUL; ignoring Acquire message");
+								return;
+							}
+
+							uctx->ctx.ctx_alg = xuctx->ctx_alg;
+							uctx->ctx.ctx_doi = xuctx->ctx_doi;
+							/* Length includes '\0'*/
+							uctx->ctx.ctx_len = len;
+
+							break;
+						}
+					default:
+						lswlogf(buf, "%s ignoring unknown xfrm acquire payload type %u",
+								acquire_log_p, attr->rta_type);
+						break;
 				}
-				libreswan_log("Sec Ctx label missing final NUL; we're adding it");
-				uctx->sec_ctx_value[len] = '\0';
-				len++;
-			}
-
-			if (strlen(uctx->sec_ctx_value) + 1 != len) {
-				libreswan_log("Sec Ctx label contains embedded NUL; ignoring Acquire message");
-				return;
-			}
-
-			uctx->ctx.ctx_alg = xuctx->ctx_alg;
-			uctx->ctx.ctx_doi = xuctx->ctx_doi;
-			/* Length includes '\0'*/
-			uctx->ctx.ctx_len = len;
-
-			break;
+			/* updates remaining too */
+			attr = RTA_NEXT(attr, remaining);
 		}
-		default:
-			DBG(DBG_KERNEL,
-				DBG_log("ignoring unknown xfrm acquire payload type %u",
-					attr->rta_type));
-			break;
-		}
-		/* updates remaining too */
-		attr = RTA_NEXT(attr, remaining);
 	}
 
 	src_proto = dst_proto = acquire->sel.proto;
@@ -1837,8 +1847,8 @@ static void netlink_acquire(struct nlmsghdr *n)
 			NULL : "src and dst protocols differ")) &&
 	    NULL == (ugh = addrtosubnet(&src, &ours)) &&
 	    NULL == (ugh = addrtosubnet(&dst, &his)))
-		record_and_initiate_opportunistic(&ours, &his, transport_proto, uctx,
-			"%acquire-netlink");
+		record_and_initiate_opportunistic(&ours, &his, transport_proto,
+				uctx, cpu_id, "%acquire-netlink");
 
 	if (ugh != NULL)
 		libreswan_log(
