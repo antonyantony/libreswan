@@ -1597,7 +1597,6 @@ bool assign_holdpass(const struct connection *c,
 				op = ERO_ADD;
 				reason = "add broad %pass or %hold";
 			}
-
 			if (eroute_connection(sr,
 						htonl(SPI_HOLD), /* kernel induced */
 						htonl(negotiation_shunt),
@@ -1662,7 +1661,9 @@ ipsec_spi_t shunt_policy_spi(const struct connection *c, bool prospective)
 }
 
 bool del_spi(ipsec_spi_t spi, const struct ip_protocol *proto,
-	     const ip_address *src, const ip_address *dest)
+	     const ip_address *src, const ip_address *dest,
+	     uint32_t sa_clones /* set only on outgoing */,
+	     uint32_t sa_clone_id)
 {
 	char text_said[SATOT_BUF];
 
@@ -1677,6 +1678,9 @@ bool del_spi(ipsec_spi_t spi, const struct ip_protocol *proto,
 		.dst.address = dest,
 		.text_said = text_said,
 	};
+
+	if (sa_clones >= CLONE_SA_SUB)
+		sa.clone_id = sa_clone_id;
 
 	passert(kernel_ops->del_sa != NULL);
 	return kernel_ops->del_sa(&sa);
@@ -1784,10 +1788,12 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		.sa_lifetime = c->sa_ipsec_life_seconds,
 		.outif = -1,
 		.sec_ctx = st->sec_ctx,
-		.clone_id = (uint32_t)c->sa_clone_id,
+		.clone_id = inbound ? 0 : c->sa_clone_id,
+		.clones = inbound ? 0 : c->sa_clones,
 	};
 
 	if (kernel_ops->inbound_eroute) {
+		DBG_log("AA_2020 %s %d %s kernel_ops->inbound_eroute sa_clone_id %u", __func__, __LINE__, c->name, c->sa_clone_id);
 		inner_spi = SPI_PASS;
 		if (mode == ENCAPSULATION_MODE_TUNNEL) {
 			/* If we are tunnelling, set up IP in IP pseudo SA */
@@ -2338,6 +2344,8 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		uint32_t xfrm_if_id = c->xfrmi != NULL ?
 			c->xfrmi->if_id : 0;
 
+		DBG_log("AA_2020 %s %d call raw_eroute inbound ?? set sa_clone_id = 0" , __func__, __LINE__);
+
 		/* MCR - should be passed a spd_eroute structure here */
 		/* note: this and that are intentionally reversed */
 		if (!raw_eroute(&c->spd.that.host_addr,		/* this_host */
@@ -2407,7 +2415,7 @@ fail:
 			if (said_next->proto != 0) {
 				(void) del_spi(said_next->spi,
 					said_next->proto,
-					&src.addr, said_next->dst.address);
+					&src.addr, said_next->dst.address, 0, 0 /* AA_2020 fix me find direction */);
 			}
 		}
 		return FALSE;
@@ -2510,18 +2518,24 @@ static bool teardown_half_ipsec_sa(struct state *st, bool inbound)
 		const struct ip_protocol *proto = protos[i].proto;
 		ipsec_spi_t spi;
 		const ip_address *src, *dst;
+		uint32_t sa_clones = 0;
+		uint32_t sa_clone_id = 0;
 
 		if (inbound) {
 			spi = protos[i].info->our_spi;
 			src = &c->spd.that.host_addr;
 			dst = &c->spd.this.host_addr;
 		} else {
+			if (c->sa_clones >= CLONE_SA_SUB) {
+				sa_clones = c->sa_clones;
+				sa_clone_id = c->sa_clone_id;
+			}
 			spi = protos[i].info->attrs.spi;
 			src = &c->spd.this.host_addr;
 			dst = &c->spd.that.host_addr;
 		}
 
-		result &= del_spi(spi, proto, src, dst);
+		result &= del_spi(spi, proto, src, dst, sa_clones, sa_clone_id);
 	}
 
 	if (redirected)
@@ -2785,6 +2799,7 @@ bool install_inbound_ipsec_sa(struct state *st)
 		DBG(DBG_CONTROL,
 			DBG_log("installing outgoing SA now as refhim=%u",
 				st->st_refhim));
+		DBG_log("AA_2020 %s %d call setup_half_ipsec_sa outbound con %s ", __func__, __LINE__, st->st_connection->name);
 		if (!setup_half_ipsec_sa(st, FALSE)) {
 			DBG_log("failed to install outgoing SA: %u",
 				st->st_refhim);
@@ -2796,7 +2811,7 @@ bool install_inbound_ipsec_sa(struct state *st)
 	DBG(DBG_CONTROL, DBG_log("outgoing SA has refhim=%u", st->st_refhim));
 
 	/* (attempt to) actually set up the SAs */
-
+	DBG_log("AA_2020 %s %d call setup_half_ipsec_sa inbound conn %s", __func__, __LINE__, st->st_connection->name);
 	return setup_half_ipsec_sa(st, TRUE);
 }
 
@@ -3131,7 +3146,6 @@ bool install_ipsec_sa(struct state *st, bool inbound_also)
 {
 	dbg("install_ipsec_sa() for #%lu: %s", st->st_serialno,
 	    inbound_also ? "inbound and outbound" : "outbound only");
-
 	enum routability rb = could_route(st->st_connection);
 
 	switch (rb) {
@@ -3147,6 +3161,7 @@ bool install_ipsec_sa(struct state *st, bool inbound_also)
 	/* (attempt to) actually set up the SA group */
 
 	/* setup outgoing SA if we haven't already */
+	DBG_log("AA_2020 %s %d call setup_half_ipsec_sa outbound conn %s", __func__, __LINE__, st->st_connection->name);
 	if (!st->st_outbound_done) {
 		if (!setup_half_ipsec_sa(st, FALSE)) {
 			return FALSE;
@@ -3159,6 +3174,7 @@ bool install_ipsec_sa(struct state *st, bool inbound_also)
 
 	/* now setup inbound SA */
 	if (st->st_ref == IPSEC_SAREF_NULL && inbound_also) {
+		DBG_log("AA_2020 %s %d call setup_half_ipsec_sa inbound conn %s", __func__, __LINE__, st->st_connection->name);
 		if (!setup_half_ipsec_sa(st, TRUE))
 			return FALSE;
 
@@ -3438,6 +3454,9 @@ bool get_sa_info(struct state *st, bool inbound, deltatime_t *ago /* OUTPUT */)
 
 	uint64_t bytes;
 	uint64_t add_time;
+
+	if (!inbound && c->sa_clones >= CLONE_SA_SUB)
+		sa.clone_id = c->sa_clone_id;
 
 	if (!kernel_ops->get_sa(&sa, &bytes, &add_time))
 		return FALSE;
