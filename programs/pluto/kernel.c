@@ -1279,6 +1279,7 @@ bool raw_eroute(const ip_address *this_host,
 		deltatime_t use_lifetime,
 		uint32_t sa_priority,
 		const struct sa_marks *sa_marks,
+		const uint32_t sa_clone_id,
 		enum pluto_sadb_operations op,
 		const char *opname
 #ifdef HAVE_LABELED_IPSEC
@@ -1336,7 +1337,7 @@ bool raw_eroute(const ip_address *this_host,
 					cur_spi, new_spi, sa_proto,
 					transport_proto,
 					esatype, proto_info,
-					use_lifetime, sa_priority, sa_marks, op, text_said
+					use_lifetime, sa_priority, sa_marks, sa_clone_id, op, text_said
 #ifdef HAVE_LABELED_IPSEC
 					, policy_label
 #endif
@@ -1465,6 +1466,7 @@ static bool fiddle_bare_shunt(const ip_address *src, const ip_address *dst,
 			deltatime(SHUNT_PATIENCE),
 			0, /* we don't know connection for priority yet */
 			NULL, /* sa_marks */
+			0, /* sa_clone_id */
 			op, why
 #ifdef HAVE_LABELED_IPSEC
 			, NULL
@@ -1553,6 +1555,7 @@ bool eroute_connection(const struct spd_route *sr,
 		const struct pfkey_proto_info *proto_info,
 		uint32_t sa_priority,
 		const struct sa_marks *sa_marks,
+		const uint32_t sa_clone_id,
 		unsigned int op, const char *opname
 #ifdef HAVE_LABELED_IPSEC
 		, const char *policy_label
@@ -1581,7 +1584,7 @@ bool eroute_connection(const struct spd_route *sr,
 				esatype,
 				proto_info,
 				deltatime(0),
-				sa_priority, sa_marks, op, buf2
+				sa_priority, sa_marks, sa_clone_id, op, buf2
 #ifdef HAVE_LABELED_IPSEC
 				, policy_label
 #endif
@@ -1601,7 +1604,7 @@ bool eroute_connection(const struct spd_route *sr,
 			esatype,
 			proto_info,
 			deltatime(0),
-			sa_priority, sa_marks, op, buf2
+			sa_priority, sa_marks, sa_clone_id, op, buf2
 #ifdef HAVE_LABELED_IPSEC
 			, policy_label
 #endif
@@ -1690,6 +1693,7 @@ bool assign_holdpass(const struct connection *c,
 						null_proto_info,
 						calculate_sa_prio(c),
 						NULL,
+						0, /* sa_clone_id */
 						op,
 						reason
 #ifdef HAVE_LABELED_IPSEC
@@ -2434,6 +2438,7 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 				deltatime(0),		/* lifetime */
 				calculate_sa_prio(c),	/* priority */
 				&c->sa_marks,		/* IPsec SA marks */
+				c->sa_clone_id,
 				ERO_ADD_INBOUND,	/* op */
 				"add inbound"		/* opname */
 #ifdef HAVE_LABELED_IPSEC
@@ -2546,6 +2551,7 @@ static bool teardown_half_ipsec_sa(struct state *st, bool inbound)
 				deltatime(0),
 				calculate_sa_prio(c),
 				&c->sa_marks,
+				c->sa_clone_id,
 				ERO_DEL_INBOUND,
 				"delete inbound"
 #ifdef HAVE_LABELED_IPSEC
@@ -3160,6 +3166,7 @@ bool route_and_eroute(struct connection *c,
 						deltatime(SHUNT_PATIENCE),
 						calculate_sa_prio(c),
 						NULL,
+						0, /* sa_clone_id */
 						ERO_REPLACE,
 						"restore"
 #ifdef HAVE_LABELED_IPSEC

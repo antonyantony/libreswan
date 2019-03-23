@@ -448,6 +448,45 @@ static bool netlink_policy(struct nlmsghdr *hdr, bool enoent_ok,
 	return FALSE;
 }
 
+static void add_sa_clone_atribs(uint32_t sub_sa_id, struct rtattr *attr, void *req_void)
+{
+
+	uint32_t xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
+
+	struct request {
+                struct nlmsghdr n;
+                struct xfrm_usersa_info p;
+                char data[MAX_NETLINK_DATA_SIZE];
+        };
+
+	struct request *req = (struct request *)req_void;
+
+	sub_sa_id = sub_sa_id - 1;
+	DBG(DBG_KERNEL, DBG_log("AA_2019 extar SA %u", sub_sa_id));
+	if (sub_sa_id  == 0) {
+		DBG(DBG_KERNEL, DBG_log("AA_2019 head SA %u", sub_sa_id));
+		xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
+	} else {
+		sub_sa_id  = sub_sa_id - 1; //Steffen's sub sa id array start with 0
+		DBG(DBG_KERNEL, DBG_log("AA_2019 clone_id %u set sub SA", sub_sa_id ));
+		attr->rta_type = XFRMA_SA_PCPU;
+		attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
+
+		memcpy(RTA_DATA(attr), &sub_sa_id, sizeof(uint32_t));
+		req->n.nlmsg_len += attr->rta_len;
+		attr = (struct rtattr *)((char *)attr + attr->rta_len);
+
+		xfrm_sub_sa_flag = XFRM_SA_PCPU_SUB;
+	}
+	attr->rta_type = XFRMA_SA_EXTRA_FLAGS;
+	attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
+	memcpy(RTA_DATA(attr), &xfrm_sub_sa_flag, sizeof(uint32_t));
+	req->n.nlmsg_len += attr->rta_len;
+	attr = (struct rtattr *)((char *)attr + attr->rta_len);
+}
+
+
+
 /*
  * netlink_raw_eroute
  *
@@ -479,6 +518,7 @@ static bool netlink_raw_eroute(const ip_address *this_host,
 			deltatime_t use_lifetime UNUSED,
 			uint32_t sa_priority,
 			const struct sa_marks *sa_marks,
+			const uint32_t sa_clone_id,
 			enum pluto_sadb_operations sadb_op,
 			const char *text_said
 #ifdef HAVE_LABELED_IPSEC
@@ -688,6 +728,11 @@ static bool netlink_raw_eroute(const ip_address *this_host,
 			req.n.nlmsg_len += attr->rta_len;
 		}
 
+		if (sa_clone_id == 0) {
+			struct rtattr *attr = (struct rtattr *)((char *)&req + req.n.nlmsg_len);
+			add_sa_clone_atribs(sa_clone_id, attr, &req);
+
+		}
 		/* mark policy extension */
 		{
 			struct sa_mark sa_mark = (dir == XFRM_POLICY_IN) ? sa_marks->in : sa_marks->out;
@@ -1160,43 +1205,6 @@ out:
 #endif /* USE_NIC_OFFLOAD */
 
 
-
-static void add_sa_clone_atribs(uint32_t sub_sa_id, struct rtattr *attr, void *req_void)
-{
-
-	uint32_t xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
-
-	struct request {
-                struct nlmsghdr n;
-                struct xfrm_usersa_info p;
-                char data[MAX_NETLINK_DATA_SIZE];
-        };
-
-	struct request *req = (struct request *)req_void;
-
-	sub_sa_id = sub_sa_id - 1;
-	DBG(DBG_KERNEL, DBG_log("AA_2019 extar SA %u", sub_sa_id));
-	if (sub_sa_id  == 0) {
-		DBG(DBG_KERNEL, DBG_log("AA_2019 head SA %u", sub_sa_id));
-		xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
-	} else {
-		sub_sa_id  = sub_sa_id - 1; //Steffen's sub sa id array start with 0
-		DBG(DBG_KERNEL, DBG_log("AA_2019 clone_id %u set sub SA", sub_sa_id ));
-		attr->rta_type = XFRMA_SA_PCPU;
-		attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
-
-		memcpy(RTA_DATA(attr), &sub_sa_id, sizeof(uint32_t));
-		req->n.nlmsg_len += attr->rta_len;
-		attr = (struct rtattr *)((char *)attr + attr->rta_len);
-
-		xfrm_sub_sa_flag = XFRM_SA_PCPU_SUB;
-	}
-	attr->rta_type = XFRMA_SA_EXTRA_FLAGS;
-	attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
-	memcpy(RTA_DATA(attr), &xfrm_sub_sa_flag, sizeof(uint32_t));
-	req->n.nlmsg_len += attr->rta_len;
-	attr = (struct rtattr *)((char *)attr + attr->rta_len);
-}
 
 /*
  * netlink_add_sa - Add an SA into the kernel SPDB via netlink
@@ -2160,7 +2168,8 @@ static bool netlink_sag_eroute(const struct state *st, const struct spd_route *s
 
 	return eroute_connection(sr, inner_spi, inner_spi, inner_proto,
 				inner_esatype, proto_info + i,
-				calculate_sa_prio(c), &c->sa_marks, op, opname
+				calculate_sa_prio(c), &c->sa_marks,
+				c->sa_clone_id, op, opname
 #ifdef HAVE_LABELED_IPSEC
 				, st->st_connection->policy_label
 #endif
@@ -2295,6 +2304,7 @@ static bool netlink_shunt_eroute(const struct connection *c,
 				deltatime(0),
 				calculate_sa_prio(c),
 				&c->sa_marks,
+				c->sa_clone_id,
 				op, buf2
 #ifdef HAVE_LABELED_IPSEC
 				, c->policy_label
@@ -2325,6 +2335,7 @@ static bool netlink_shunt_eroute(const struct connection *c,
 				  deltatime(0),
 				  calculate_sa_prio(c),
 				  &c->sa_marks,
+				  c->sa_clone_id,
 				  op, buf2
 #ifdef HAVE_LABELED_IPSEC
 				  , c->policy_label

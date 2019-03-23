@@ -827,6 +827,7 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b
 					deltatime(SHUNT_PATIENCE),
 					calculate_sa_prio(c),
 					NULL,
+					0, /* sa_clone_id */
 					ERO_ADD, addwidemsg
 #ifdef HAVE_LABELED_IPSEC
 					, NULL

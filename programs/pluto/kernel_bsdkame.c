@@ -425,6 +425,7 @@ static bool bsdkame_raw_eroute(const ip_address *this_host,
 			       deltatime_t use_lifetime UNUSED,
 			       uint32_t sa_priority UNUSED,
 			       const struct sa_marks *sa_marks UNUSED,
+			       const uint32_t sa_clone_id UNUSED,
 			       enum pluto_sadb_operations op,
 			       const char *text_said UNUSED
 #ifdef HAVE_LABELED_IPSEC
