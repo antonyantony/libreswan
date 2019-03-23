@@ -4279,7 +4279,7 @@ void show_one_connection(const struct connection *c)
 	}
 
 	whack_log(RC_COMMENT,
-		"\"%s\"%s:   ike_life: %jds; ipsec_life: %jds; replay_window: %u; rekey_margin: %jds; rekey_fuzz: %lu%%; keyingtries: %lu; clone_id: %lu;",
+		"\"%s\"%s:   ike_life: %jds; ipsec_life: %jds; replay_window: %u; rekey_margin: %jds; rekey_fuzz: %lu%%; keyingtries: %lu; clone_id: %u;",
 		c->name,
 		instance,
 		deltasecs(c->sa_ike_life_seconds),
