@@ -728,8 +728,9 @@ static bool netlink_raw_eroute(const ip_address *this_host,
 			req.n.nlmsg_len += attr->rta_len;
 		}
 
-		if (sa_clone_id == 0) {
+		if (sa_clone_id != 0) {
 			struct rtattr *attr = (struct rtattr *)((char *)&req + req.n.nlmsg_len);
+			DBG_log("AA_2019 add clone from netlink_raw_eroute %u", sa_clone_id);
 			add_sa_clone_atribs(sa_clone_id, attr, &req);
 
 		}
@@ -1532,7 +1533,7 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 
 	if (sa->clone_id != 0) {
 		// Antony's code to add XFRM payload
-		DBG_log("AA_2019 add clone %u", sa->clone_id);
+		DBG_log("AA_2019 add clone from add_sa %u", sa->clone_id);
 		add_sa_clone_atribs(sa->clone_id, attr, &req);
 	}
 
@@ -2165,7 +2166,7 @@ static bool netlink_sag_eroute(const struct state *st, const struct spd_route *s
 			proto_info[j].encapsulation =
 				ENCAPSULATION_MODE_TRANSPORT;
 	}
-
+	DBG_log("AA_2019 eroute update call %u", c->sa_clone_id);
 	return eroute_connection(sr, inner_spi, inner_spi, inner_proto,
 				inner_esatype, proto_info + i,
 				calculate_sa_prio(c), &c->sa_marks,
