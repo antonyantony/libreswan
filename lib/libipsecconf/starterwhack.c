@@ -560,6 +560,7 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 		msg.policy |= POLICY_OVERLAPIP;
 
 	msg.connalias = conn->connalias;
+	msg.sa_clone_id = conn->sa_clone_id;
 
 	msg.metric = conn->options[KBF_METRIC];
 
@@ -920,6 +921,7 @@ int starter_whack_add_conn(struct starter_config *cfg,
 			cc.name = tmpconnname;
 			cc.connalias = conn->name;
 			cc.options[KBF_CLONES] = clones; /* used as clone ID */
+			cc.sa_clone_id = clones;
 			num += starter_whack_basic_add_conn(cfg, &cc);
 			clones--;
 		}

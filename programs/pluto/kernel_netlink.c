@@ -1485,6 +1485,7 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 
 	if (sa->clone_id != 0) {
 		// Antony's code to add XFRM payload
+		DBG_log("AA_2019 add  clone %u", sa->clone_id);
 	}
 
 #ifdef USE_NIC_OFFLOAD

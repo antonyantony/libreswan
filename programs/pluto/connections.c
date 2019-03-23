@@ -1689,7 +1689,7 @@ void add_connection(const struct whack_message *wm)
 		c->sa_rekey_margin = wm->sa_rekey_margin;
 		c->sa_rekey_fuzz = wm->sa_rekey_fuzz;
 		c->sa_keying_tries = wm->sa_keying_tries;
-		c->clone_id = wm->sa_clones;
+		c->sa_clone_id = wm->sa_clone_id;
 		c->sa_replay_window = wm->sa_replay_window;
 		c->r_timeout = wm->r_timeout;
 		c->r_interval = wm->r_interval;
@@ -4285,7 +4285,7 @@ void show_one_connection(const struct connection *c)
 		deltasecs(c->sa_rekey_margin),
 		c->sa_rekey_fuzz,
 		c->sa_keying_tries,
-		c->clone_id);
+		c->sa_clone_id);
 
 	whack_log(RC_COMMENT,
 		  "\"%s\"%s:   retransmit-interval: %jdms; retransmit-timeout: %jds;",

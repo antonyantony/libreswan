@@ -1871,7 +1871,7 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 #ifdef HAVE_LABELED_IPSEC
 		.sec_ctx = st->sec_ctx,
 #endif
-		.clone_id = (uint32_t)c->clone_id,
+		.clone_id = (uint32_t)c->sa_clone_id,
 	};
 
 	if (kernel_ops->inbound_eroute) {
@@ -3229,7 +3229,7 @@ bool install_ipsec_sa(struct state *st, bool inbound_also)
 	DBG(DBG_CONTROL, DBG_log("install_ipsec_sa() for #%lu: %s with clone_id:%lu",
 		st->st_serialno,
 		inbound_also ?  "inbound and outbound" : "outbound only",
-		st->st_connection->clone_id));
+		st->st_connection->sa_clone_id));
 
 	enum routability rb = could_route(st->st_connection);
 
