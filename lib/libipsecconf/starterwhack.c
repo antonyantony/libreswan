@@ -899,36 +899,13 @@ static int starter_permutate_conns(int
 int starter_whack_add_conn(struct starter_config *cfg,
 			const struct starter_conn *conn)
 {
-	/* leftsubnets= / rightsubnets= */
-	if (conn->left.strings_set[KSCF_SUBNETS] ||
-	    conn->right.strings_set[KSCF_SUBNETS]) {
-		return starter_permutate_conns(starter_whack_basic_add_conn,
+	/* basic case, nothing special to synthize! */
+	if (!conn->left.strings_set[KSCF_SUBNETS] &&
+	    !conn->right.strings_set[KSCF_SUBNETS])
+		return starter_whack_basic_add_conn(cfg, conn);
+
+	return starter_permutate_conns(starter_whack_basic_add_conn,
 				cfg, conn);
-	}
-
-	/* clones= */
-	if (conn->options_set[KBF_CLONES]) {
-		int clones = conn->options[KBF_CLONES] + 1 ; /* 1 clone means 2 conns */
-		int num = 0;
-		char tmpconnname[256];
-		int i;
-
-		for (i=0; i < clones; i++) {
-			/* copy conn  - borrow pointers, since this is a temporary copy */
-			struct starter_conn cc = *conn;
-
-			cc.sa_clone_id = i;
-			snprintf(tmpconnname, sizeof(tmpconnname), "%s-%d",
-				conn->name, cc.sa_clone_id);
-			cc.name = tmpconnname;
-			cc.connalias = conn->name;
-			cc.options[KBF_CLONES] = clones; /* used as clone ID */
-			num += starter_whack_basic_add_conn(cfg, &cc);
-		}
-		return num;
-	}
-
-	return starter_whack_basic_add_conn(cfg, conn);
 }
 
 static int starter_whack_basic_route_conn(struct starter_config *cfg,
