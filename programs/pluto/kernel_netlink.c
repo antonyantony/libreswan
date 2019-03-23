@@ -444,6 +444,42 @@ static bool netlink_policy(struct nlmsghdr *hdr, bool enoent_ok,
 	return FALSE;
 }
 
+#ifdef USE_CLONES
+static void add_sa_clone_atribs(uint32_t sub_sa_id, struct rtattr *attr, void *req_void)
+{
+
+	uint32_t xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
+
+	struct request {
+                struct nlmsghdr n;
+                struct xfrm_usersa_info p;
+                char data[MAX_NETLINK_DATA_SIZE];
+        };
+	struct request *req = (struct request *)req_void;
+
+	if (sub_sa_id  == 0) {
+		DBG_log("AA_2019 %s %d set XFRM_SA_PCPU_HEAD sub_sa_id %u", __func__, __LINE__, sub_sa_id);
+		xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
+	} else {
+		sub_sa_id  = sub_sa_id - 1; // Steffen's sub sa id array start with 0, while connection start with 1
+		DBG(DBG_KERNEL, DBG_log("AA_2019 %s %d clone_id %u set XFRMA_SA_PCPU", __func__, __LINE__, sub_sa_id ));
+		attr->rta_type = XFRMA_SA_PCPU;
+		attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
+
+		memcpy(RTA_DATA(attr), &sub_sa_id, sizeof(uint32_t));
+		req->n.nlmsg_len += attr->rta_len;
+		attr = (struct rtattr *)((char *)attr + attr->rta_len);
+
+		xfrm_sub_sa_flag = XFRM_SA_PCPU_SUB;
+	}
+	attr->rta_type = XFRMA_SA_EXTRA_FLAGS;
+	attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
+	memcpy(RTA_DATA(attr), &xfrm_sub_sa_flag, sizeof(uint32_t));
+	req->n.nlmsg_len += attr->rta_len;
+	attr = (struct rtattr *)((char *)attr + attr->rta_len);
+}
+#endif
+
 /*
  * netlink_raw_eroute
  *
@@ -1479,10 +1515,12 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 		attr = (struct rtattr *)((char *)attr + attr->rta_len);
 	}
 
+#ifdef USE_CLONES
 	if (sa->clones > CLONE_SA_HEAD) {
-		// Antony's code to add XFRM payload
-		DBG_log("AA_2019 add  clone %u", sa->clone_id);
+		DBG_log("AA_2019 %s %d clone_id %u spi 0x%x reqid %u %s", __func__, __LINE__, sa->clone_id, ntohl(sa->spi), sa->reqid, sa->inbound ? "inbound" : "outbound");
+		add_sa_clone_atribs(sa->clone_id, attr, &req);
 	}
+#endif
 
 #ifdef USE_NIC_OFFLOAD
 	if (sa->nic_offload_dev) {
@@ -2113,10 +2151,10 @@ static bool netlink_sag_eroute(const struct state *st, const struct spd_route *s
 			proto_info[j].encapsulation =
 				ENCAPSULATION_MODE_TRANSPORT;
 	}
-
 	return eroute_connection(sr, inner_spi, inner_spi, inner_proto,
 				inner_esatype, proto_info + i,
-				calculate_sa_prio(c), &c->sa_marks, op, opname
+				calculate_sa_prio(c), &c->sa_marks,
+				op, opname
 #ifdef HAVE_LABELED_IPSEC
 				, st->st_connection->policy_label
 #endif
@@ -2543,6 +2581,7 @@ static bool netlink_get_sa(const struct kernel_sa *sa, uint64_t *bytes,
 	struct {
 		struct nlmsghdr n;
 		struct xfrm_usersa_id id;
+		char data[MAX_NETLINK_DATA_SIZE];
 	} req;
 
 	struct nlm_resp rsp;
@@ -2551,19 +2590,37 @@ static bool netlink_get_sa(const struct kernel_sa *sa, uint64_t *bytes,
 	req.n.nlmsg_flags = NLM_F_REQUEST;
 	req.n.nlmsg_type = XFRM_MSG_GETSA;
 
+	req.n.nlmsg_len = NLMSG_ALIGN(NLMSG_LENGTH(sizeof(req.id)));
+
+#ifdef USE_CLONES
+	if (sa->clone_id > CLONE_SA_HEAD) {
+		struct rtattr *attr = (struct rtattr *)((char *)&req + req.n.nlmsg_len);
+		DBG_log("AA_2019 %s %d clone_id %u 0x%x %s", __func__, __LINE__, sa->clone_id, ntohl(sa->spi), sa->inbound ? "inbound" : "outbound");
+		add_sa_clone_atribs(sa->clone_id, attr, &req);
+
+		DBG_log("AA_2019 %s %d XFRMA_SRCADDR %u 0x%x %s", __func__, __LINE__, sa->clone_id, ntohl(sa->spi), sa->inbound ? "inbound" : "outbound");
+		xfrm_address_t srcaddr;
+		attr = (struct rtattr *)((char *)&req + req.n.nlmsg_len);
+		attr->rta_type = XFRMA_SRCADDR;
+		attr->rta_len = RTA_LENGTH(sizeof(xfrm_address_t));
+		ip2xfrm(sa->src, &srcaddr);
+		memcpy(RTA_DATA(attr), &srcaddr, sizeof(srcaddr));
+		req.n.nlmsg_len += attr->rta_len;
+	}
+#endif
+
 	ip2xfrm(sa->dst, &req.id.daddr);
 
 	req.id.spi = sa->spi;
 	req.id.family = addrtypeof(sa->src);
 	req.id.proto = sa->proto;
 
-	req.n.nlmsg_len = NLMSG_ALIGN(NLMSG_LENGTH(sizeof(req.id)));
-
 	if (!send_netlink_msg(&req.n, XFRM_MSG_NEWSA, &rsp, "Get SA", sa->text_said))
 		return FALSE;
 
 	*bytes = rsp.u.info.curlft.bytes;
 	*add_time = rsp.u.info.curlft.add_time;
+
 	return TRUE;
 }
 
