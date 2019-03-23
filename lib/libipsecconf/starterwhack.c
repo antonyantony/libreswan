@@ -911,19 +911,19 @@ int starter_whack_add_conn(struct starter_config *cfg,
 		int clones = conn->options[KBF_CLONES] + 1 ; /* 1 clone means 2 conns */
 		int num = 0;
 		char tmpconnname[256];
+		int i;
 
-		while (clones != 0) {
+		for (i=0; i < clones; i++) {
 			/* copy conn  - borrow pointers, since this is a temporary copy */
 			struct starter_conn cc = *conn;
 
+			cc.sa_clone_id = i;
 			snprintf(tmpconnname, sizeof(tmpconnname), "%s-%d",
-				conn->name, clones);
+				conn->name, cc.sa_clone_id);
 			cc.name = tmpconnname;
 			cc.connalias = conn->name;
 			cc.options[KBF_CLONES] = clones; /* used as clone ID */
-			cc.sa_clone_id = clones;
 			num += starter_whack_basic_add_conn(cfg, &cc);
-			clones--;
 		}
 		return num;
 	}
