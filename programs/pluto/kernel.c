@@ -3226,7 +3226,7 @@ bool route_and_eroute(struct connection *c,
 bool install_ipsec_sa(struct state *st, bool inbound_also)
 {
 	statetime_t start = statetime_start(&ike_sa(st)->sa); /* bill parent */
-	DBG(DBG_CONTROL, DBG_log("install_ipsec_sa() for #%lu: %s with clone_id:%lu",
+	DBG(DBG_CONTROL, DBG_log("install_ipsec_sa() for #%lu: %s with clone_id:%u",
 		st->st_serialno,
 		inbound_also ?  "inbound and outbound" : "outbound only",
 		st->st_connection->sa_clone_id));

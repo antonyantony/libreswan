@@ -1159,6 +1159,44 @@ out:
 
 #endif /* USE_NIC_OFFLOAD */
 
+
+
+static void add_sa_clone_atribs(uint32_t sub_sa_id, struct rtattr *attr, void *req_void)
+{
+
+	uint32_t xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
+
+	struct request {
+                struct nlmsghdr n;
+                struct xfrm_usersa_info p;
+                char data[MAX_NETLINK_DATA_SIZE];
+        };
+
+	struct request *req = (struct request *)req_void;
+
+	DBG(DBG_KERNEL, DBG_log("AA_2019 extar SA %u", sub_sa_id));
+	if (sub_sa_id  == 0) {
+		DBG(DBG_KERNEL, DBG_log("AA_2019 head SA %u", sub_sa_id));
+		xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
+	} else {
+		sub_sa_id  = sub_sa_id - 1; //Steffen's sub sa id array start with 0
+		DBG(DBG_KERNEL, DBG_log("AA_2019 clone_id %u set sub SA", sub_sa_id ));
+		attr->rta_type = XFRMA_SA_PCPU;
+		attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
+
+		memcpy(RTA_DATA(attr), &sub_sa_id, sizeof(uint32_t));
+		req->n.nlmsg_len += attr->rta_len;
+		attr = (struct rtattr *)((char *)attr + attr->rta_len);
+
+		xfrm_sub_sa_flag = XFRM_SA_PCPU_SUB;
+	}
+	attr->rta_type = XFRMA_SA_EXTRA_FLAGS;
+	attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
+	memcpy(RTA_DATA(attr), &xfrm_sub_sa_flag, sizeof(uint32_t));
+	req->n.nlmsg_len += attr->rta_len;
+	attr = (struct rtattr *)((char *)attr + attr->rta_len);
+}
+
 /*
  * netlink_add_sa - Add an SA into the kernel SPDB via netlink
  *
@@ -1485,7 +1523,8 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 
 	if (sa->clone_id != 0) {
 		// Antony's code to add XFRM payload
-		DBG_log("AA_2019 add  clone %u", sa->clone_id);
+		DBG_log("AA_2019 add clone %u", sa->clone_id);
+		add_sa_clone_atribs(sa->clone_id, attr, &req);
 	}
 
 #ifdef USE_NIC_OFFLOAD
