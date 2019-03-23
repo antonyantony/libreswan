@@ -145,6 +145,7 @@ struct kernel_sa {
 #endif
 	const char *nic_offload_dev;
 	uint32_t clone_id;
+	uint32_t clones;
 
 	deltatime_t sa_lifetime; /* number of seconds until SA expires */
 	/*

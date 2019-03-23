@@ -1491,7 +1491,8 @@ bool pfkey_sag_eroute(const struct state *st, const struct spd_route *sr,
 	return eroute_connection(sr,
 				 inner_spi, inner_spi, inner_proto,
 				 inner_esatype, proto_info + i,
-				 0 /* KLIPS does not support priority */, NULL, op, opname
+				 0 /* KLIPS does not support priority */, NULL,
+				 op, opname
 #ifdef HAVE_LABELED_IPSEC
 				 , NULL
 #endif
