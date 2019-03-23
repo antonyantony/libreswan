@@ -718,7 +718,6 @@ static bool netlink_raw_eroute(const ip_address *this_host,
 		{
 
 
-
 			uint32_t xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
 			struct rtattr *attr = (struct rtattr *)((char *)&req + req.n.nlmsg_len);
 			if (xfrm_sub_sa_id == 0) {
