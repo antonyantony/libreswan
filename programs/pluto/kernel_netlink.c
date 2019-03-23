@@ -1174,6 +1174,7 @@ static void add_sa_clone_atribs(uint32_t sub_sa_id, struct rtattr *attr, void *r
 
 	struct request *req = (struct request *)req_void;
 
+	sub_sa_id = sub_sa_id - 1;
 	DBG(DBG_KERNEL, DBG_log("AA_2019 extar SA %u", sub_sa_id));
 	if (sub_sa_id  == 0) {
 		DBG(DBG_KERNEL, DBG_log("AA_2019 head SA %u", sub_sa_id));

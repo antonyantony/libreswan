@@ -853,6 +853,7 @@ static int starter_permutate_conns(int
 		sc.name = tmpconnname;
 
 		sc.connalias = conn->name;
+		sc.sa_clone_id = rc;
 
 		success = (*operation)(cfg, &sc);
 		if (success != 0) {
