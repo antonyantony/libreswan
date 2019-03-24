@@ -1685,7 +1685,7 @@ bool assign_holdpass(const struct connection *c,
 				op = ERO_ADD;
 				reason = "add broad %pass or %hold";
 			}
-
+			DBG_log("AA_2019 %s %d call eroute_connection without sa_clone_id", __func__, __LINE__);
 			if (eroute_connection(sr,
 						htonl(SPI_HOLD), /* kernel induced */
 						htonl(negotiation_shunt),
@@ -1875,10 +1875,11 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 #ifdef HAVE_LABELED_IPSEC
 		.sec_ctx = st->sec_ctx,
 #endif
-		.clone_id = (uint32_t)c->sa_clone_id,
+		.clone_id = inbound ? 0 : c->sa_clone_id,
 	};
 
 	if (kernel_ops->inbound_eroute) {
+		DBG_log("AA_2019 %s %d kernel_ops->inbound_eroute ", __func__, __LINE__);
 		inner_spi = SPI_PASS;
 		if (encapsulation == ENCAPSULATION_MODE_TUNNEL) {
 			/* If we are tunnelling, set up IP in IP pseudo SA */
@@ -2422,7 +2423,7 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 				proto_info[i].encapsulation =
 					ENCAPSULATION_MODE_TRANSPORT;
 		}
-
+		DBG_log("AA_2019 %s %d call raw_eroute inbound ?? set sa_clone_id = 0" , __func__, __LINE__);
 		/* MCR - should be passed a spd_eroute structure here */
 		/* note: this and that are intentionally reversed */
 		if (!raw_eroute(&c->spd.that.host_addr,		/* this_host */
@@ -2438,7 +2439,7 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 				deltatime(0),		/* lifetime */
 				calculate_sa_prio(c),	/* priority */
 				&c->sa_marks,		/* IPsec SA marks */
-				c->sa_clone_id,
+				0,	// c->sa_clone_id,		// inbound or outbound ??
 				ERO_ADD_INBOUND,	/* op */
 				"add inbound"		/* opname */
 #ifdef HAVE_LABELED_IPSEC
@@ -2882,6 +2883,7 @@ bool install_inbound_ipsec_sa(struct state *st)
 		DBG(DBG_CONTROL,
 			DBG_log("installing outgoing SA now as refhim=%u",
 				st->st_refhim));
+		DBG_log("AA_2019 %s %d call setup_half_ipsec_sa outbound con %s ", __func__, __LINE__, st->st_connection->name);
 		if (!setup_half_ipsec_sa(st, FALSE)) {
 			DBG_log("failed to install outgoing SA: %u",
 				st->st_refhim);
@@ -2893,7 +2895,7 @@ bool install_inbound_ipsec_sa(struct state *st)
 	DBG(DBG_CONTROL, DBG_log("outgoing SA has refhim=%u", st->st_refhim));
 
 	/* (attempt to) actually set up the SAs */
-
+	DBG_log("AA_2019 %s %d call setup_half_ipsec_sa inbound conn %s", __func__, __LINE__, st->st_connection->name);
 	return setup_half_ipsec_sa(st, TRUE);
 }
 
@@ -3253,6 +3255,7 @@ bool install_ipsec_sa(struct state *st, bool inbound_also)
 	/* (attempt to) actually set up the SA group */
 
 	/* setup outgoing SA if we haven't already */
+	DBG_log("AA_2019 %s %d call setup_half_ipsec_sa outbound conn %s", __func__, __LINE__, st->st_connection->name);
 	if (!st->st_outbound_done) {
 		if (!setup_half_ipsec_sa(st, FALSE)) {
 			return FALSE;
@@ -3266,6 +3269,7 @@ bool install_ipsec_sa(struct state *st, bool inbound_also)
 
 	/* now setup inbound SA */
 	if (st->st_ref == IPSEC_SAREF_NULL && inbound_also) {
+		DBG_log("AA_2019 %s %d call setup_half_ipsec_sa inbound conn %s", __func__, __LINE__, st->st_connection->name);
 		if (!setup_half_ipsec_sa(st, TRUE))
 			return FALSE;
 
@@ -3544,6 +3548,9 @@ bool get_sa_info(struct state *st, bool inbound, deltatime_t *ago /* OUTPUT */)
 
 	uint64_t bytes;
 	uint64_t add_time;
+
+	if (!inbound && c->sa_clone_id > 1)
+		sa.clone_id = c->sa_clone_id;
 
 	if (!kernel_ops->get_sa(&sa, &bytes, &add_time))
 		return FALSE;

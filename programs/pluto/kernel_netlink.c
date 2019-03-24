@@ -462,13 +462,13 @@ static void add_sa_clone_atribs(uint32_t sub_sa_id, struct rtattr *attr, void *r
 	struct request *req = (struct request *)req_void;
 
 	sub_sa_id = sub_sa_id - 1;
-	DBG(DBG_KERNEL, DBG_log("AA_2019 extar SA %u", sub_sa_id));
+	DBG(DBG_KERNEL, DBG_log("AA_2019 %s %d sub_sa_id %u", __func__, __LINE__, sub_sa_id));
 	if (sub_sa_id  == 0) {
-		DBG(DBG_KERNEL, DBG_log("AA_2019 head SA %u", sub_sa_id));
+		DBG(DBG_KERNEL, DBG_log("AA_2019 %s %d head SA %u", __func__, __LINE__, sub_sa_id));
 		xfrm_sub_sa_flag = XFRM_SA_PCPU_HEAD;
 	} else {
 		sub_sa_id  = sub_sa_id - 1; //Steffen's sub sa id array start with 0
-		DBG(DBG_KERNEL, DBG_log("AA_2019 clone_id %u set sub SA", sub_sa_id ));
+		DBG(DBG_KERNEL, DBG_log("AA_2019 %s %d clone_id %u set sub SA", __func__, __LINE__, sub_sa_id ));
 		attr->rta_type = XFRMA_SA_PCPU;
 		attr->rta_len = RTA_LENGTH(sizeof(uint32_t));
 
@@ -730,7 +730,7 @@ static bool netlink_raw_eroute(const ip_address *this_host,
 
 		if (sa_clone_id != 0) {
 			struct rtattr *attr = (struct rtattr *)((char *)&req + req.n.nlmsg_len);
-			DBG_log("AA_2019 add clone from netlink_raw_eroute %u", sa_clone_id);
+			DBG_log("AA_2019 %s %d %u cur_spi 0x%x new_spi 0x%x %s", __func__, __LINE__, sa_clone_id, ntohl(cur_spi), ntohl(new_spi), text_said);
 			add_sa_clone_atribs(sa_clone_id, attr, &req);
 
 		}
@@ -1533,7 +1533,7 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 
 	if (sa->clone_id != 0) {
 		// Antony's code to add XFRM payload
-		DBG_log("AA_2019 add clone from add_sa %u", sa->clone_id);
+		DBG_log("AA_2019 %s %d clone_id %u spi 0x%x reqid %u %s", __func__, __LINE__, sa->clone_id, ntohl(sa->spi), sa->reqid, sa->inbound ? "inbound" : "outbound");
 		add_sa_clone_atribs(sa->clone_id, attr, &req);
 	}
 
@@ -2166,7 +2166,7 @@ static bool netlink_sag_eroute(const struct state *st, const struct spd_route *s
 			proto_info[j].encapsulation =
 				ENCAPSULATION_MODE_TRANSPORT;
 	}
-	DBG_log("AA_2019 eroute update call %u", c->sa_clone_id);
+	DBG_log("AA_2019 %s %d call eroute_connection conn %s sa_clone_id %u", __func__, __LINE__,  c->name, c->sa_clone_id);
 	return eroute_connection(sr, inner_spi, inner_spi, inner_proto,
 				inner_esatype, proto_info + i,
 				calculate_sa_prio(c), &c->sa_marks,
@@ -2606,11 +2606,17 @@ static bool netlink_get_sa(const struct kernel_sa *sa, uint64_t *bytes,
 		struct xfrm_usersa_id id;
 	} req;
 
-	struct nlm_resp rsp;
+	// struct nlm_resp rsp; AA_2019 DISABLED
 
 	zero(&req);
 	req.n.nlmsg_flags = NLM_F_REQUEST;
 	req.n.nlmsg_type = XFRM_MSG_GETSA;
+
+	if (sa->clone_id > 1) {
+		struct rtattr *attr = (struct rtattr *)((char *)&req + req.n.nlmsg_len);
+		DBG_log("AA_2019 %s %d clone_id %u 0x%x %s", __func__, __LINE__, sa->clone_id, ntohl(sa->spi), sa->inbound ? "inbound" : "outbound");
+		add_sa_clone_atribs(sa->clone_id, attr, &req);
+	}
 
 	ip2xfrm(sa->dst, &req.id.daddr);
 
@@ -2620,11 +2626,17 @@ static bool netlink_get_sa(const struct kernel_sa *sa, uint64_t *bytes,
 
 	req.n.nlmsg_len = NLMSG_ALIGN(NLMSG_LENGTH(sizeof(req.id)));
 
+	libreswan_log("AA_2019 tafficstatus is disabled 'ip xfrm state | grep seq' ");
+	/*
 	if (!send_netlink_msg(&req.n, XFRM_MSG_NEWSA, &rsp, "Get SA", sa->text_said))
 		return FALSE;
 
 	*bytes = rsp.u.info.curlft.bytes;
 	*add_time = rsp.u.info.curlft.add_time;
+
+	*/
+	*bytes = 0; // AA_2019 SUBSA HACK
+	*add_time = 0; // AA_2019 SUBSA HACK
 	return TRUE;
 }
 
