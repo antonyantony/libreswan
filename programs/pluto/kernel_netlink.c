@@ -2604,6 +2604,7 @@ static bool netlink_get_sa(const struct kernel_sa *sa, uint64_t *bytes,
 	struct {
 		struct nlmsghdr n;
 		struct xfrm_usersa_id id;
+		char data[MAX_NETLINK_DATA_SIZE];
 	} req;
 
 	struct nlm_resp rsp;
@@ -2612,10 +2613,21 @@ static bool netlink_get_sa(const struct kernel_sa *sa, uint64_t *bytes,
 	req.n.nlmsg_flags = NLM_F_REQUEST;
 	req.n.nlmsg_type = XFRM_MSG_GETSA;
 
+	req.n.nlmsg_len = NLMSG_ALIGN(NLMSG_LENGTH(sizeof(req.id)));
+
 	if (sa->clone_id > 1) {
 		struct rtattr *attr = (struct rtattr *)((char *)&req + req.n.nlmsg_len);
 		DBG_log("AA_2019 %s %d clone_id %u 0x%x %s", __func__, __LINE__, sa->clone_id, ntohl(sa->spi), sa->inbound ? "inbound" : "outbound");
 		add_sa_clone_atribs(sa->clone_id, attr, &req);
+
+		DBG_log("AA_2019 %s %d XFRMA_SRCADDR %u 0x%x %s", __func__, __LINE__, sa->clone_id, ntohl(sa->spi), sa->inbound ? "inbound" : "outbound");
+		xfrm_address_t srcaddr;
+		attr = (struct rtattr *)((char *)&req + req.n.nlmsg_len);
+		attr->rta_type = XFRMA_SRCADDR;
+		attr->rta_len = RTA_LENGTH(sizeof(xfrm_address_t));
+		ip2xfrm(sa->src, &srcaddr);
+		memcpy(RTA_DATA(attr), &srcaddr, sizeof(srcaddr));
+		req.n.nlmsg_len += attr->rta_len;
 	}
 
 	ip2xfrm(sa->dst, &req.id.daddr);
