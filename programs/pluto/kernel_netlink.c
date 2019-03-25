@@ -2606,7 +2606,7 @@ static bool netlink_get_sa(const struct kernel_sa *sa, uint64_t *bytes,
 		struct xfrm_usersa_id id;
 	} req;
 
-	// struct nlm_resp rsp; AA_2019 DISABLED
+	struct nlm_resp rsp;
 
 	zero(&req);
 	req.n.nlmsg_flags = NLM_F_REQUEST;
@@ -2626,17 +2626,12 @@ static bool netlink_get_sa(const struct kernel_sa *sa, uint64_t *bytes,
 
 	req.n.nlmsg_len = NLMSG_ALIGN(NLMSG_LENGTH(sizeof(req.id)));
 
-	libreswan_log("AA_2019 tafficstatus is disabled 'ip xfrm state | grep seq' ");
-	/*
 	if (!send_netlink_msg(&req.n, XFRM_MSG_NEWSA, &rsp, "Get SA", sa->text_said))
 		return FALSE;
 
 	*bytes = rsp.u.info.curlft.bytes;
 	*add_time = rsp.u.info.curlft.add_time;
 
-	*/
-	*bytes = 0; // AA_2019 SUBSA HACK
-	*add_time = 0; // AA_2019 SUBSA HACK
 	return TRUE;
 }
 
