@@ -2636,8 +2636,6 @@ static bool netlink_get_sa(const struct kernel_sa *sa, uint64_t *bytes,
 	req.id.family = addrtypeof(sa->src);
 	req.id.proto = sa->proto;
 
-	req.n.nlmsg_len = NLMSG_ALIGN(NLMSG_LENGTH(sizeof(req.id)));
-
 	if (!send_netlink_msg(&req.n, XFRM_MSG_NEWSA, &rsp, "Get SA", sa->text_said))
 		return FALSE;
 
