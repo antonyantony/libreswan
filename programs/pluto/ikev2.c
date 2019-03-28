@@ -2630,8 +2630,8 @@ static bool decode_peer_id_counted(struct ike_sa *ike,
 
 			if (authby != AUTHBY_NULL) {
 				r = refine_host_connection(
-					md->st, &peer_id, tip, FALSE /*initiator*/,
-					LEMPTY /* auth_policy */, authby, &fromcert);
+						md->st, &peer_id, tip, FALSE /*initiator*/,
+						LEMPTY /* auth_policy */, authby, &fromcert);
 			}
 
 			if (r == NULL) {
@@ -2727,6 +2727,19 @@ static bool decode_peer_id_counted(struct ike_sa *ike,
 			str_id(&peer_id, &idbuf));
 	}
 
+	if (c->sa_clones != 0) {
+		DBG_log("AA_2020 %s %d found %s %u/%u", __func__, __LINE__, c->name, c->sa_clone_id, c->sa_clones);
+		/* this head connection with "conn-0". find a free slot */
+		if (c->sa_clones > 0) {
+			struct connection *r;
+			r = next_free_clone_slot(c);
+			c = r;
+			libreswan_log("AA_2020 IKE_INIT responder switched clone connection %u/%u from %u", r->sa_clone_id, c->sa_clones, c->sa_clone_id);
+		} else if (c->sa_clone_id > CLONE_SA_HEAD) {
+			libreswan_log("AA_2020 IKE_INIT responder matched wrong clone connection %u/%u expecting 0", c->sa_clone_id, c->sa_clones);
+		}
+	}
+
 	return TRUE;
 }
 
@@ -2819,13 +2832,14 @@ void log_ipsec_sa_established(const char *m, const struct state *st)
 	const struct traffic_selector *a = &st->st_ts_this;
 	const struct traffic_selector *b = &st->st_ts_that;
 	range_buf ba, bb;
-	libreswan_log("%s [%s:%d-%d %d] -> [%s:%d-%d %d]",
+	libreswan_log("%s [%s:%d-%d %d] --(%u)--> [%s:%d-%d %d]",
 			m,
-		      str_range(&a->net, &ba),
+			str_range(&a->net, &ba),
 			a->startport,
 			a->endport,
 			a->ipprotoid,
-		      str_range(&b->net, &bb),
+			st->st_connection->sa_clone_id,
+			str_range(&b->net, &bb),
 			b->startport,
 			b->endport,
 			b->ipprotoid);
