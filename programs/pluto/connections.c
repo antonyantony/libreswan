@@ -1184,10 +1184,6 @@ static bool extract_connection(const struct whack_message *wm, struct connection
 		loglog(RC_FATAL, "narrowing=yes requires ikev2");
 		return false;
 	}
-	if (wm->sa_clones != 0 &&  c->ike_version == IKEv1) {
-		loglog(RC_FATAL, "clones= requires ikev2");
-		return;
-	}
 
 	if (wm->policy & POLICY_MOBIKE) {
 		if (kernel_ops->migrate_sa_check == NULL) {
@@ -1485,8 +1481,7 @@ static bool extract_connection(const struct whack_message *wm, struct connection
 		c->sa_keying_tries = wm->sa_keying_tries;
 		c->sa_clone_id = wm->sa_clone_id;
 		c->sa_clones = wm->sa_clones;
-		DBG_log("AA_2019 %s %d %s sa_clone_id %u sa_clones %u", __func__,
-					__LINE__, c->name, c->sa_clone_id, c->sa_clones);
+		DBG_log("AA_2019 %s %d %s sa_clone_id %u sa_clones %u", __func__, __LINE__, c->name, c->sa_clone_id, c->sa_clones);
 		c->sa_replay_window = wm->sa_replay_window;
 		c->r_timeout = wm->r_timeout;
 		c->r_interval = wm->r_interval;
