@@ -1244,6 +1244,15 @@ static void mark_parse(const char *cnm, /*const*/ char *wmmark, struct sa_mark *
 	}
 }
 
+static reqid_t get_clone_reqid(const char *connalias)
+{
+	char tmpconnname[256];
+	struct connection *c;
+	snprintf(tmpconnname, sizeof(tmpconnname), "%s-%u", connalias, CLONE_SA_HEAD);
+	c = conn_by_name(tmpconnname, TRUE, TRUE);
+	return c->spd.reqid;
+}
+
 /*
  * Extract the connection detail from the whack message WM and store
  * them in the connection C.
@@ -1660,8 +1669,7 @@ static bool extract_connection(const struct whack_message *wm, struct connection
 		c->sa_keying_tries = wm->sa_keying_tries;
 		c->sa_clone_id = wm->sa_clone_id;
 		c->sa_clones = wm->sa_clones;
-		DBG_log("AA_2019 %s %d %s sa_clone_id %u sa_clones %u", __func__,
-					__LINE__, c->name, c->sa_clone_id, c->sa_clones);
+		DBG_log("AA_2019 %s %d %s sa_clone_id %u sa_clones %u", __func__, __LINE__, c->name, c->sa_clone_id, c->sa_clones);
 		c->sa_replay_window = wm->sa_replay_window;
 		c->r_timeout = wm->r_timeout;
 		c->r_interval = wm->r_interval;
@@ -1896,11 +1904,32 @@ static bool extract_connection(const struct whack_message *wm, struct connection
 	c->newest_ipsec_sa = SOS_NOBODY;
 	c->spd.eroute_owner = SOS_NOBODY;
 	c->temp_vars.num_redirects = 0;
-	/*
-	 * is spd.reqid necessary for all c? CK_INSTANCE or CK_PERMANENT
-	 * need one. Does CK_TEMPLATE need one?
-	 */
-	c->spd.reqid = c->sa_reqid == 0 ? gen_reqid() : c->sa_reqid;
+	if (c->sa_reqid == 0) {
+		if (c->sa_clones == 0) {
+			/*
+			 * is spd.reqid necessary for all c? CK_INSTANCE or CK_PERMANENT
+			 * need one. Does CK_TEMPLATE need one?
+			 */
+			c->spd.reqid = gen_reqid();
+		} else if (c->sa_clone_id == CLONE_SA_HEAD) {
+
+			/* all clone SA/connections need the same reqid this, head, SA */
+			/* AA_2019 some other way to distribute than this ??? */
+			c->sa_reqid = c->spd.reqid = IPSEC_MANUAL_REQID_MAX - 1;
+			DBG_log("AA_2019 %s %d %s harcode reqid %u", __func__, __LINE__, c->name, c->spd.reqid);
+		} else if (c->sa_clone_id >= CLONE_SA_SUB) {
+			c->spd.reqid = c->sa_reqid = get_clone_reqid(c->connalias);
+			DBG_log("AA_2019 %s %d %s use head's reqid %u", __func__, __LINE__, c->name, c->spd.reqid);
+			if  (c->spd.reqid == 0) {
+				libreswan_log("AA_2019 can not find head reqid");
+				return;
+			}
+		}
+	} else {
+		c->spd.reqid = c->sa_reqid;
+		DBG_log("AA_2019 %s %d %s use configured reqid %u", __func__, __LINE__, c->name,
+				c->spd.reqid);
+	}
 
 	/* force all oppo connections to have a client */
 	if (c->policy & POLICY_OPPORTUNISTIC) {
