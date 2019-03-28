@@ -639,6 +639,19 @@ struct connection *find_next_host_connection(
 		 */
 		if ((req_policy & ~c->policy) == LEMPTY)
 			break;
+
+		if (c->sa_clones > CLONE_SA_HEAD) {
+			if (c->sa_clone_id == CLONE_SA_HEAD) {
+				char ci[CONN_INST_BUF];
+				DBG_log("AA_2019 %s %d found head sa returns %s%s", __func__, __LINE__, c->name, fmt_conn_instance(c, ci));
+				break;
+			}
+			else {
+				char ci[CONN_INST_BUF];
+				DBG_log("AA_2019 %s %d ignore sub sa connection %s%s", __func__, __LINE__, c->name, fmt_conn_instance(c, ci));
+				continue;
+			}
+		}
 	}
 
 	DBG(DBG_CONTROLMORE, {
