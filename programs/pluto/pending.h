@@ -30,6 +30,8 @@ extern struct connection *first_pending(const struct state *st,
 					lset_t *policy,
 					fd_t *p_whack_sock);
 
+extern struct pending **host_pair_oldest_pending(const struct connection *c);
+
 /* struct pending, the structure representing IPsec SA
  * negotiations delayed until a Keying Channel has been negotiated.
  * Essentially, a pending call to quick_outI1 or ikev2 child initiate

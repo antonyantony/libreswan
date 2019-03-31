@@ -342,15 +342,19 @@ struct connection *first_pending(const struct state *st,
 	DBG(DBG_DPD,
 	    DBG_log("getting first pending from state #%lu", st->st_serialno));
 
-	for (pp = host_pair_first_pending(st->st_connection);
-	     (p = *pp) != NULL; pp = &p->next)
-	{
-		if (p->isakmp_sa == st) {
-			*p_whack_sock = p->whack_sock;
-			*policy = p->policy;
-			return p->connection;
+	pp = host_pair_oldest_pending(st->st_connection);
+	if (pp != NULL) {
+		while((p = *pp) != NULL) {
+			if (p->isakmp_sa == st) {
+				*p_whack_sock = p->whack_sock;
+				*policy = p->policy;
+				*pp = NULL;
+				return p->connection;
+			}
 		}
+		pp = &p->next;
 	}
+
 	return NULL;
 }
 
