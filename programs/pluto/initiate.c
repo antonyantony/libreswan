@@ -316,6 +316,28 @@ static int initiate_a_connection(struct connection *c, void *arg)
 	return 1;
 }
 
+static int initiate_clones(const char *name, void *arg)
+{
+	char tmpconnname[256];
+        struct connection *c;
+	int count = 0;
+
+        snprintf(tmpconnname, sizeof(tmpconnname), "%s-%u", name, CLONE_SA_HEAD);
+        c = conn_by_name(tmpconnname, TRUE, TRUE);
+	if (c != NULL && c->sa_clones > 0) {
+		uint32_t i = 0;
+		count += initiate_a_connection(c, arg);
+		for (i = 1; i <= c->sa_clones; i++) {
+			snprintf(tmpconnname, sizeof(tmpconnname), "%s-%u", name, i);
+			c = conn_by_name(tmpconnname, TRUE, TRUE);
+			passert(c != NULL);
+			count += initiate_a_connection(c, arg);
+		}
+	}
+
+	return count;
+}
+
 void initiate_connection(const char *name, fd_t whackfd,
 			 lmod_t more_debugging,
 			 lmod_t more_impairing,
@@ -339,8 +361,12 @@ void initiate_connection(const char *name, fd_t whackfd,
 		return;
 	}
 
-	loglog(RC_COMMENT, "initiating all conns with alias='%s'", name);
-	count = foreach_connection_by_alias(name, initiate_a_connection, &is);
+	count = initiate_clones(name, &is);
+
+	if (count == 0) {
+		loglog(RC_COMMENT, "initiating all conns with alias='%s'", name);
+		count = foreach_connection_by_alias(name, initiate_a_connection, &is);
+	}
 
 	if (count == 0) {
 		whack_log(RC_UNKNOWN_NAME,
