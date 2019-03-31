@@ -171,6 +171,20 @@ struct pending **host_pair_first_pending(const struct connection *c)
 	return &c->host_pair->pending;
 }
 
+struct pending **host_pair_oldest_pending(const struct connection *c)
+{
+	struct pending **pp = &c->host_pair->pending;
+	struct pending *p = *pp;
+	while(p != NULL) {
+		if (p->next == NULL)
+			return pp;
+		pp = &p->next;
+		p = *pp;
+	}
+
+	return NULL;
+}
+
 /** returns a host pair based upon addresses.
  *
  * find_host_pair is given a pair of addresses, plus UDP ports, and
