@@ -356,6 +356,9 @@ USE_LABELED_IPSEC ?= false
 # Enable seccomp support (whitelist allows syscalls)
 USE_SECCOMP ?= false
 
+#clone SAs, experimental pCPU support started at IPsec workshop 2019, Prague
+USE_CLONES?=true
+
 # Support for Network Manager
 USE_NM ?= true
 
@@ -572,6 +575,11 @@ ifeq ($(USE_SECCOMP),true)
 USERLAND_CFLAGS += -DHAVE_SECCOMP
 SECCOMP_LDFLAGS = -lseccomp
 endif
+
+ifeq ($(USE_CLONES), true)
+USERLAND_CFLAGS+= -DUSE_CLONES
+endif
+
 
 ifeq ($(USE_LIBCURL),true)
 USERLAND_CFLAGS += -DLIBCURL
