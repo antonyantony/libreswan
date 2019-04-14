@@ -281,6 +281,10 @@ USE_PORTEXCLUDES?=false
 # The default DNSSEC root key location is set to /var/lib/unbound/root.key
 # DEFAULT_DNSSEC_ROOTKEY_FILE=/var/lib/unbound/root.key
 
+
+#clone SAs, expirimental pCPU xfrm support started at IPsec workshop 2019, Prague
+USE_CLONES?=true
+
 # To build with clang, use: scan-build make programs
 #GCC=clang
 GCC?=gcc
