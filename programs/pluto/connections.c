@@ -1197,6 +1197,10 @@ static bool extract_connection(const struct fd *whackfd,
 		loglog(RC_FATAL, "MOBIKE requires ikev2");
 		return false;
 	}
+	if (wm->sa_clones != 0 && c->ike_version == IKEv1) {
+		loglog(RC_FATAL, "clones= requires ikev2");
+		return false;
+	}
 	if (wm->policy & POLICY_IKEV2_ALLOW_NARROWING &&
 	    c->ike_version == IKEv1) {
 		loglog(RC_FATAL, "narrowing=yes requires ikev2");
@@ -1769,7 +1773,7 @@ static bool extract_connection(const struct fd *whackfd,
 			DBG_log("AA_2020 %s %d %s use head's reqid %u", __func__, __LINE__, c->name, c->spd.reqid);
 			if  (c->spd.reqid == 0) {
 				libreswan_log("AA_2020 can not find head reqid");
-				return;
+				return false;
 			}
 		}
 	} else {
