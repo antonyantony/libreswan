@@ -1787,6 +1787,38 @@ static void setup_esp_nic_offload(struct kernel_sa *sa, struct connection *c,
 }
 #endif
 
+static uint16_t csum16(uint32_t *ptr)
+{
+	register long sum = 0;
+	register uint16_t ans;
+	register int nbytes = sizeof(uint32_t);
+
+	while (nbytes > 1) {
+                sum += *ptr++;
+                nbytes -= 2;
+        }
+
+	sum  = (sum >> 16) + (sum & 0xffff); /* add high-16 to low-16 */
+        sum += (sum >> 16); /* add carry */
+        ans = ~sum; /* ones-complement, then truncate to 16 bits */
+
+        return(ans);
+}
+
+static uint16_t perturb_clone_port(uint16_t port, uint32_t clone_id, uint32_t seed)
+{
+	if (clone_id <= CLONE_SA_HEAD)
+		return port;
+
+	uint16_t csum = csum16(&seed);
+	/* check for 16 bit wraping and offset it */
+	uint16_t new_port = port + csum > 65535 ? csum : port + csum;
+
+	DBG_log("AA_2019 %s %d clone_id %u port %u seed 0x%x csum %u new port %u", __func__, __LINE__, clone_id, port, ntohl(seed), csum, new_port);
+
+	return (new_port);
+}
+
 /*
  * Set up one direction of the SA bundle
  */
@@ -2056,10 +2088,10 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		if (st->hidden_variables.st_nat_traversal & NAT_T_DETECTED) {
 			natt_type = ESPINUDP_WITH_NON_ESP;
 			if (inbound) {
-				natt_sport = st->st_remoteport;
+				natt_sport = perturb_clone_port(st->st_remoteport, c->sa_clone_id, esp_spi);
 				natt_dport = st->st_localport;
 			} else {
-				natt_sport = st->st_localport;
+				natt_sport = perturb_clone_port(st->st_localport, c->sa_clone_id, esp_spi);
 				natt_dport = st->st_remoteport;
 			}
 			natt_oa = st->hidden_variables.st_nat_oa;

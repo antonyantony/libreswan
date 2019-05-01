@@ -1378,7 +1378,7 @@ static bool extract_connection(const struct whack_message *wm, struct connection
 		}
 		if (wm->sa_clones != 0) {
 			loglog(RC_FATAL, "clones= requires ikev2");
-			return;
+			return false;
 		}
 	}
 
@@ -1922,7 +1922,7 @@ static bool extract_connection(const struct whack_message *wm, struct connection
 			DBG_log("AA_2019 %s %d %s use head's reqid %u", __func__, __LINE__, c->name, c->spd.reqid);
 			if  (c->spd.reqid == 0) {
 				libreswan_log("AA_2019 can not find head reqid");
-				return;
+				return false;
 			}
 		}
 	} else {
