@@ -52,6 +52,7 @@ KVM_UPGRADE_PACKAGES ?= \
     git \
     glibc-devel \
     hping3 \
+    iftop \
     ike-scan \
     iproute \
     ipsec-tools \
