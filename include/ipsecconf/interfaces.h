@@ -17,6 +17,8 @@
 #ifndef _STARTER_INTERFACES_H_
 #define _STARTER_INTERFACES_H_
 
+#include "ip_address.h"
+
 bool starter_iface_find(const char *iface, int af, ip_address *dst, ip_address *nh);
 
 #endif /* _STARTER_INTERFACES_H_ */

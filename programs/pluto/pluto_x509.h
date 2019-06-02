@@ -6,6 +6,8 @@
  * Copyright (C) 2002 Mario Strasser
  * Copyright (C) 2000-2003 Andreas Steffen, Zuercher Hochschule Winterthur
  * Copyright (C) 2015 Matt Rogers, <mrogers@libreswan.org>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 D. Hugh Redelmeier <hugh@mimosa.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -29,9 +31,17 @@
 #include <cert.h>
 
 /* forward reference */
+struct connection;
 struct msg_digest;
+struct certs;
+struct ike_sa;
 
-extern lsw_cert_ret ike_decode_cert(struct msg_digest *md);
+extern bool v2_decode_certs(struct ike_sa *ike, struct msg_digest *md);
+
+extern lsw_cert_ret v1_process_certs(struct msg_digest *md);
+
+bool match_certs_id(const struct certs *certs, struct id *peer_id /*ID_FROMCERT => updated*/);
+
 extern void ikev1_decode_cr(struct msg_digest *md);
 extern void ikev2_decode_cr(struct msg_digest *md);
 
@@ -60,9 +70,9 @@ extern bool ikev2_send_cert_decision(const struct state *st);
 extern stf_status ikev2_send_certreq(struct state *st, struct msg_digest *md,
 				     pb_stream *outpbs);
 
-stf_status ikev2_send_cert(struct state *st, pb_stream *outpbs);
+stf_status ikev2_send_cert(const struct state *st, pb_stream *outpbs);
 
-bool ikev2_send_certreq_INIT_decision(struct state *st,
+bool ikev2_send_certreq_INIT_decision(const struct state *st,
 				      enum original_role role);
 
 #endif /* _PLUTO_X509_H */

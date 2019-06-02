@@ -3,6 +3,8 @@
  * Copyright (C) 1996  John Ioannidis.
  * Copyright (C) 1998, 1999, 2000, 2001  Richard Guy Briggs.
  * Copyright (C) 2006 Michael Richardson <mcr@xelerance.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -171,7 +173,7 @@ int main(int argc, char *argv[])
 {
 	tool_init_log(argv[0]);
 	/* force pfkey logging */
-	pfkey_error_func = pfkey_debug_func = printf;
+	cur_debugging = DBG_BASE;
 
 	struct ifreq ifr;
 	struct ipsectunnelconf shc;
@@ -257,9 +259,9 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (stat("/proc/net/pfkey", &sts) == 0) {
+	if (stat("/proc/net/xfrm_stat", &sts) == 0) {
 		fprintf(stderr,
-			"%s: NETKEY does not support virtual interfaces.\n",
+			"%s: XFRM does not support virtual interfaces.\n",
 			progname);
 		exit(1);
 	}

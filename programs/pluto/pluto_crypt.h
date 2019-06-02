@@ -8,7 +8,7 @@
  * Copyright (C) 2012 Wes Hardaker <opensource@hardakers.net>
  * Copyright (C) 2013 Tuomo Soini <tis@foobar.fi>
  * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
- * Copyright (C) 2015 Andrew Cagney <andrew.cagney@gmail.com>
+ * Copyright (C) 2015-2019 Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2015 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -39,9 +39,38 @@
 
 #include "crypto.h"
 #include "chunk.h"
+#include "ike_spi.h"
 
 struct state;
 struct msg_digest;
+
+/*
+ * Offload work to the crypto thread pool (or the event loop if there
+ * are no threads).
+ */
+
+struct crypto_task;
+
+typedef void crypto_compute_fn(struct crypto_task *task, int my_thread);
+typedef stf_status crypto_completed_fn(struct state *st, struct msg_digest *mdp,
+				      struct crypto_task **task);
+typedef void crypto_cancelled_fn(struct crypto_task **task);
+
+struct crypto_handler {
+	crypto_compute_fn *compute;
+	crypto_completed_fn *completed_callback;
+	crypto_cancelled_fn *cancelled_callback;
+};
+
+struct pcr_crypto {
+	struct crypto_task *task;
+	const struct crypto_handler *handler;
+};
+
+void submit_crypto(struct state *st,
+		   struct crypto_task *task,
+		   const struct crypto_handler *handler,
+		   const char *name);
 
 /*
  * cryptographic helper operations.
@@ -52,6 +81,7 @@ enum pluto_crypto_requests {
 	pcr_compute_dh_iv,	/* calculate (g^x)(g^y) and skeyids for Phase 1 DH + prf */
 	pcr_compute_dh,		/* calculate (g^x)(g^y) for Phase 2 PFS */
 	pcr_compute_dh_v2,	/* perform IKEv2 SA calculation, create SKEYSEED */
+	pcr_crypto,
 };
 
 typedef unsigned int pcr_req_id;
@@ -210,8 +240,7 @@ struct pcr_dh_v2 {
 	wire_chunk_t gr;
 	wire_chunk_t ni;
 	wire_chunk_t nr;
-	wire_chunk_t icookie;
-	wire_chunk_t rcookie;
+	ike_spis_t ike_spis;
 	struct dh_secret *secret;
 	PK11SymKey *skey_d_old;
 	const struct prf_desc *old_prf;
@@ -238,6 +267,7 @@ struct pluto_crypto_req {
 		struct pcr_kenonce kn;		/* query and result */
 		struct pcr_dh_v2 dh_v2;		/* query and response v2 */
 		struct pcr_v1_dh v1_dh;		/* query and response v1 */
+		struct pcr_crypto crypto;
 	} pcr_d;
 };
 
@@ -343,8 +373,9 @@ extern void start_dh_v1_secret(crypto_req_cont_func fn, const char *name,
 extern void finish_dh_secret(struct state *st,
 			     struct pluto_crypto_req *r);
 
+/* internal */
 extern void calc_dh(struct pcr_v1_dh *dh);
-
+extern void calc_dh_iv(struct pcr_v1_dh *dh);
 extern void cancelled_v1_dh(struct pcr_v1_dh *dh);
 
 /*
@@ -356,11 +387,14 @@ extern void start_dh_v2(struct state *st,
 			enum original_role role,
 			PK11SymKey *skey_d_old,
 			const struct prf_desc *old_prf,
+			const ike_spis_t *ike_spis,
 			crypto_req_cont_func pcrc_func);
 
 extern bool finish_dh_v2(struct state *st,
 			 struct pluto_crypto_req *r, bool only_shared);
 
+/* internal */
+extern void calc_dh_v2(struct pluto_crypto_req *r);
 extern void cancelled_dh_v2(struct pcr_dh_v2 *dh);
 
 /*

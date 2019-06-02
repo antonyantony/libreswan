@@ -7,7 +7,9 @@ Usage:
 
     $0 <path-to-alg-parse> [ <test-files> ] [ | patch -p1 ]
 
-Piping to patch will apply the reported differences.
+Piping to patch will apply the reported differences.  For instance:
+
+    $0 'ipsec algparse'
 
 EOF
     exit 1

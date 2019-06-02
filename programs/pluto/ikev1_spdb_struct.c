@@ -4,7 +4,8 @@
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2012 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
- * Copyright (C) 2016-2018 Andrew Cagney
+ * Copyright (C) 2016-2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -47,7 +48,6 @@
 #include "crypto.h"
 
 #include "ikev1.h"
-#include "alg_info.h"
 #include "kernel_alg.h"
 #include "ike_alg.h"
 #include "ike_alg_encrypt.h"
@@ -56,7 +56,7 @@
 #include "lswfips.h" /* for libreswan_fipsmode */
 #include "crypt_prf.h"
 
-#include "ip_address.h"
+#include "ip_endpoint.h"
 #include "nat_traversal.h"
 
 #ifdef HAVE_LABELED_IPSEC
@@ -216,8 +216,7 @@ static bool ikev1_verify_esp(const struct connection *c,
 			     const struct trans_attrs *ta)
 {
 	if (!(c->policy & POLICY_ENCRYPT)) {
-		DBGF(DBG_PARSING,
-		     "ignoring ESP proposal as POLICY_ENCRYPT unset");
+		dbg("ignoring ESP proposal as POLICY_ENCRYPT unset");
 		return false;       /* try another */
 	}
 
@@ -234,7 +233,7 @@ static bool ikev1_verify_esp(const struct connection *c,
 		 * because it was NULLed to force the proposal's
 		 * rejection.
 		 */
-		DBGF(DBG_PARSING,
+		dbg(
 		     "ignoring ESP proposal with NULLed or unknown encryption");
 		return false;       /* try another */
 	}
@@ -244,20 +243,19 @@ static bool ikev1_verify_esp(const struct connection *c,
 		 * will act as a wild card.  XXX: but is ALG_INFO ever
 		 * NULL?
 		 */
-		DBGF(DBG_KERNEL|DBG_PARSING,
-		     "ignoring ESP proposal with alg %s not present in kernel",
-		     ta->ta_encrypt->common.fqn);
+		dbg("ignoring ESP proposal with alg %s not present in kernel",
+		    ta->ta_encrypt->common.fqn);
 		return false;
 	}
 	if (!encrypt_has_key_bit_length(ta->ta_encrypt, ta->enckeylen)) {
 		loglog(RC_LOG_SERIOUS,
 		       "kernel algorithm does not like: %s key_len %u is incorrect",
 		       ta->ta_encrypt->common.fqn, ta->enckeylen);
-		LSWLOG_RC(RC_LOG_SERIOUS, buf) {
-			lswlogf(buf, "unsupported ESP Transform %s from ",
-				ta->ta_encrypt->common.fqn);
-			lswlog_ip(buf, &c->spd.that.host_addr);
-		}
+		ip_endpoint_buf epb;
+		loglog(RC_LOG_SERIOUS,
+		       "unsupported ESP Transform %s from %s",
+		       ta->ta_encrypt->common.fqn,
+		       str_sensitive_endpoint(&c->spd.that.host_addr, &epb));
 		return false; /* try another */
 	}
 
@@ -271,7 +269,7 @@ static bool ikev1_verify_esp(const struct connection *c,
 		 * NULL), a NULL here must indicate that integrity was
 		 * present but the lookup failed.
 		 */
-		DBGF(DBG_PARSING, "ignoring ESP proposal with unknown integrity");
+		dbg("ignoring ESP proposal with unknown integrity");
 		return false;       /* try another */
 	}
 	if (ta->ta_integ != &ike_alg_integ_none && !kernel_alg_integ_ok(ta->ta_integ)) {
@@ -284,9 +282,8 @@ static bool ikev1_verify_esp(const struct connection *c,
 		 * XXX: check for NONE comes from old code just
 		 * assumed NONE was supported.
 		 */
-		DBGF(DBG_KERNEL|DBG_PARSING,
-		     "ignoring ESP proposal with alg %s not present in kernel",
-		     ta->ta_integ->common.fqn);
+		dbg("ignoring ESP proposal with alg %s not present in kernel",
+		    ta->ta_integ->common.fqn);
 		return false;
 	}
 
@@ -305,17 +302,18 @@ static bool ikev1_verify_esp(const struct connection *c,
 		return false;
 	}
 
-	if (c->alg_info_esp== NULL) {
-		DBGF(DBG_CONTROL, "ESP IPsec Transform verified unconditionally; no alg_info to check against");
+	if (c->child_proposals.p == NULL) {
+		dbg("ESP IPsec Transform verified unconditionally; no alg_info to check against");
 		return true;
 	}
 
-	FOR_EACH_ESP_INFO(c->alg_info_esp, esp_info) {
-		if (esp_info->encrypt == ta->ta_encrypt &&
-		    (esp_info->enckeylen == 0 ||
+	FOR_EACH_PROPOSAL(c->child_proposals.p, proposal) {
+		struct v1_proposal algs = v1_proposal(proposal);
+		if (algs.encrypt == ta->ta_encrypt &&
+		    (algs.enckeylen == 0 ||
 		     ta->enckeylen == 0 ||
-		     esp_info->enckeylen == ta->enckeylen) &&
-		    esp_info->integ == ta->ta_integ) {
+		     algs.enckeylen == ta->enckeylen) &&
+		    algs.integ == ta->ta_integ) {
 			DBG(DBG_CONTROL,
 			    DBG_log("ESP IPsec Transform verified; matches alg_info entry"));
 			return true;
@@ -328,8 +326,7 @@ static bool ikev1_verify_ah(const struct connection *c,
 			    const struct trans_attrs *ta)
 {
 	if (!(c->policy & POLICY_AUTHENTICATE)) {
-		DBGF(DBG_PARSING,
-		     "ignoring AH proposal as POLICY_AUTHENTICATE unset");
+		dbg("ignoring AH proposal as POLICY_AUTHENTICATE unset");
 		return false;       /* try another */
 	}
 	if (ta->ta_encrypt != NULL) {
@@ -351,14 +348,15 @@ static bool ikev1_verify_ah(const struct connection *c,
 			    ta->ta_dh->common.fqn);
 		return false;
 	}
-	if (c->alg_info_esp == NULL) {
+	if (c->child_proposals.p == NULL) {
 		DBG(DBG_CONTROL,
 		    DBG_log("AH IPsec Transform verified unconditionally; no alg_info to check against"));
 		return true;
 	}
 
-	FOR_EACH_ESP_INFO(c->alg_info_esp, esp_info) {	/* really AH */
-		if (esp_info->integ == ta->ta_integ) {
+	FOR_EACH_PROPOSAL(c->child_proposals.p, proposal) {	/* really AH */
+		struct v1_proposal algs = v1_proposal(proposal);
+		if (algs.integ == ta->ta_integ) {
 			DBG(DBG_CONTROL,
 			    DBG_log("ESP IPsec Transform verified; matches alg_info entry"));
 			return true;
@@ -401,12 +399,12 @@ bool ikev1_out_sa(pb_stream *outs,
 		 * Aggr-Mode - Max transforms == 2 - Multiple
 		 * transforms, 1 DH group
 		 */
-		revised_sadb = oakley_alg_makedb(st->st_connection->alg_info_ike,
+		revised_sadb = oakley_alg_makedb(st->st_connection->ike_proposals,
 						 auth_method,
 						 aggressive_mode);
 	} else {
 		revised_sadb = kernel_alg_makedb(st->st_connection->policy,
-						 st->st_connection->alg_info_esp,
+						 st->st_connection->child_proposals,
 						 TRUE);
 
 		/* add IPcomp proposal if policy asks for it */
@@ -625,8 +623,7 @@ bool ikev1_out_sa(pb_stream *outs,
 					 * CPI is stored in network low order end of an
 					 * ipsec_spi_t.  So we start a couple of bytes in.
 					 */
-					if (!out_raw((u_char *)&st->st_ipcomp.
-						     our_spi +
+					if (!out_raw((u_char *)&st->st_ipcomp.our_spi +
 						     IPSEC_DOI_SPI_SIZE -
 						     IPCOMP_CPI_SIZE,
 						     IPCOMP_CPI_SIZE,
@@ -984,7 +981,7 @@ lset_t preparse_isakmp_sa_body(pb_stream sa_pbs /* by value! */)
 }
 
 static bool ikev1_verify_ike(const struct trans_attrs *ta,
-			     struct alg_info_ike *alg_info_ike)
+			     struct ike_proposals ike_proposals)
 {
 	if (ta->ta_encrypt == NULL) {
 		loglog(RC_LOG_SERIOUS,
@@ -1005,7 +1002,7 @@ static bool ikev1_verify_ike(const struct trans_attrs *ta,
 		loglog(RC_LOG_SERIOUS, "OAKLEY proposal refused: missing DH");
 		return false;
 	}
-	if (alg_info_ike == NULL) {
+	if (ike_proposals.p == NULL) {
 		DBG(DBG_CONTROL,
 		    DBG_log("OAKLEY proposal verified unconditionally; no alg_info to check against"));
 		return true;
@@ -1017,21 +1014,23 @@ static bool ikev1_verify_ike(const struct trans_attrs *ta,
 	 */
 	bool ealg_insecure = (ta->enckeylen < 128);
 
-	FOR_EACH_IKE_INFO(alg_info_ike, ike_info) {
-		if (ike_info->encrypt == ta->ta_encrypt &&
-		    (ike_info->enckeylen == 0 ||
+	FOR_EACH_PROPOSAL(ike_proposals.p, proposal) {
+		struct v1_proposal algs = v1_proposal(proposal);
+		if (algs.encrypt == ta->ta_encrypt &&
+		    (algs.enckeylen == 0 ||
 		     ta->enckeylen == 0 ||
-		     ike_info->enckeylen == ta->enckeylen) &&
-		    ike_info->prf == ta->ta_prf &&
-		    ike_info->dh == ta->ta_dh) {
+		     algs.enckeylen == ta->enckeylen) &&
+		    algs.prf == ta->ta_prf &&
+		    algs.dh == ta->ta_dh) {
 			if (ealg_insecure) {
 				loglog(RC_LOG_SERIOUS,
 				       "You should NOT use insecure/broken IKE algorithms (%s)!",
 				       ta->ta_encrypt->common.fqn);
+			} else {
+				DBG(DBG_CONTROL,
+					DBG_log("OAKLEY proposal verified; matching alg_info found"));
+				return true;
 			}
-			DBG(DBG_CONTROL,
-			    DBG_log("OAKLEY proposal verified; matching alg_info found"));
-			return true;
 		}
 	}
 	libreswan_log("Oakley Transform [%s (%d), %s, %s] refused%s",
@@ -1522,7 +1521,7 @@ rsasig_common:
 				}
 				/*
 				 * check if this keylen is compatible
-				 * with specified alg_info_ike.
+				 * with specified ike_proposals.
 				 */
 				if (!encrypt_has_key_bit_length(ta.ta_encrypt, val)) {
 					ugh = "peer proposed key_len not valid for encrypt algo setup specified";
@@ -1584,9 +1583,9 @@ rsasig_common:
 			}
 
 			/*
-			 * ML: at last check for allowed transforms in alg_info_ike
+			 * ML: at last check for allowed transforms in ike_proposals
 			 */
-			if (!ikev1_verify_ike(&ta, c->alg_info_ike)) {
+			if (!ikev1_verify_ike(&ta, c->ike_proposals)) {
 				/*
 				 * already logged; UGH acts as a skip
 				 * rest of checks flag
@@ -1715,7 +1714,7 @@ bool init_aggr_st_oakley(struct state *st, lset_t policy)
 	const struct connection *c = st->st_connection;
 
 	/*
-	 * Construct the proposals by combining ALG_INFO_IKE with the
+	 * Construct the proposals by combining IKE_PROPOSALS with the
 	 * AUTH (proof of identity) extracted from the aggressive mode
 	 * SADB.  As if by magic, attrs[2] is always the
 	 * authentication method.
@@ -1733,7 +1732,7 @@ bool init_aggr_st_oakley(struct state *st, lset_t policy)
 		 * Max transforms == 2 - Multiple transforms, 1 DH
 		 * group
 		 */
-		revised_sadb = oakley_alg_makedb(c->alg_info_ike,
+		revised_sadb = oakley_alg_makedb(c->ike_proposals,
 						 auth_method, TRUE);
 	}
 
@@ -2434,8 +2433,7 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 				switch (ntohl(next_spi)) {
 				case IPCOMP_DEFLATE:
 					well_known_cpi = ntohl(next_spi);
-					next_spi = uniquify_his_cpi(next_spi,
-								    st);
+					next_spi = uniquify_his_cpi(next_spi, st, 0);
 					if (next_spi == 0) {
 						loglog(RC_LOG_SERIOUS,
 						       "IPsec Proposal contains well-known CPI that I cannot uniquify");
@@ -2667,7 +2665,7 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 					    !ah_seen) {
 						LSWDBGP(DBG_PARSING, buf) {
 							lswlogs(buf, "ESP from ");
-							lswlog_ip(buf, &c->spd.that.host_addr);
+							fmt_endpoint(buf, &c->spd.that.host_addr);
 							lswlogs(buf, " must either have AUTH or be combined with AH");
 						};
 						continue; /* try another */

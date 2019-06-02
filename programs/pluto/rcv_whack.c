@@ -1,6 +1,4 @@
-
-/*
- * hack communicating routines
+/* whack communicating routines, for libreswan
  *
  * Copyright (C) 1997 Angelos D. Keromytis.
  * Copyright (C) 1998-2001,2013-2016 D. Hugh Redelmeier <hugh@mimosa.com>
@@ -10,8 +8,9 @@
  * Copyright (C) 2010 David McCullough <david_mccullough@securecomputing.com>
  * Copyright (C) 2011 Mika Ilmaranta <ilmis@foobar.fi>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2014-2018 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2014-2019 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2014-2017 Antony Antony <antony@phenome.org>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -70,6 +69,7 @@
 #include "timer.h"
 #include "pluto_crypt.h"  /* for pluto_crypto_req & pluto_crypto_req_cont */
 #include "ikev2.h"
+#include "ikev2_redirect.h"
 #include "server.h" /* for pluto_seccomp */
 #include "kernel_alg.h"
 #include "ike_alg.h"
@@ -164,7 +164,7 @@ static void do_whacklisten(void)
 
 static void key_add_request(const struct whack_message *msg)
 {
-	DBG_log("add keyid %s", msg->keyid);
+	log_to_log("add keyid %s", msg->keyid);
 	struct id keyid;
 	err_t ugh = atoid(msg->keyid, &keyid, FALSE);
 
@@ -383,19 +383,35 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 	 * To make this more useful, in only this combination,
 	 * delete will silently ignore the lack of the connection.
 	 */
-	if (m->whack_delete)
-		delete_connections_by_name(m->name, !m->whack_connection);
+	if (m->whack_delete) {
+		if (m->name == NULL) {
+			whack_log(RC_FATAL, "received whack command to delete a connection, but did not receive the connection name - ignored");
+		} else {
+			terminate_connection(m->name, TRUE);
+			delete_connections_by_name(m->name, !m->whack_connection);
+		}
+	}
 
 	if (m->whack_deleteuser) {
-		DBG_log("received whack to delete connection by user %s",
+		if (m->name == NULL ) {
+			whack_log(RC_FATAL, "received whack command to delete a connection by username, but did not receive the username - ignored");
+		} else {
+			log_to_log("received whack to delete connection by user %s",
 				m->name);
-		for_each_state(v1_delete_state_by_username, m->name);
+			dbg("FOR_EACH_STATE_... via for_each_state in %s", __func__);
+			for_each_state(v1_delete_state_by_username, m->name);
+		}
 	}
 
 	if (m->whack_deleteid) {
-		DBG_log("received whack to delete connection by id %s",
+		if (m->name == NULL ) {
+			whack_log(RC_FATAL, "received whack command to delete a connection by id, but did not receive the id - ignored");
+		} else {
+			log_to_log("received whack to delete connection by id %s",
 				m->name);
-		for_each_state(delete_state_by_id_name, m->name);
+			dbg("FOR_EACH_STATE_... via for_each_state in %s", __func__);
+			for_each_state(delete_state_by_id_name, m->name);
+		}
 	}
 
 	if (m->whack_deletestate) {
@@ -407,13 +423,13 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 					m->whack_deletestateno);
 		} else {
 			set_cur_state(st);
-			DBG_log("received whack to delete %s state #%lu %s",
-				st->st_ikev2 ? "IKEv2" : "IKEv1",
-				st->st_serialno,
-				st->st_state_name);
+			log_to_log("received whack to delete %s state #%lu %s",
+				   enum_name(&ike_version_names, st->st_ike_version),
+				   st->st_serialno,
+				   st->st_state_name);
 
-			if (st->st_ikev2 && !IS_CHILD_SA(st)) {
-				DBG_log("Also deleting any corresponding CHILD_SAs");
+			if ((st->st_ike_version == IKEv2) && !IS_CHILD_SA(st)) {
+				log_to_log("Also deleting any corresponding CHILD_SAs");
 				delete_my_family(st, FALSE);
 				/* note: no md->st to clear */
 			} else {
@@ -429,6 +445,24 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 	if (m->whack_connection) {
 		add_connection(m);
 	}
+
+	if (m->active_redirect) {
+		ipstr_buf b;
+		char *redirect_gw;
+
+		redirect_gw = clone_str(ipstr(&m->active_redirect_gw, &b),
+				"active redirect gw ip");
+
+		if (!isanyaddr(&m->active_redirect_peer)) {
+			/* if we are redirecting one specific peer */
+			find_states_and_redirect(NULL, m->active_redirect_peer, redirect_gw);
+		} else {
+			/* we are redirecting all peers of one connection */
+			find_states_and_redirect(m->name, m->active_redirect_peer, redirect_gw);
+		}
+
+	}
+
 	/* update any socket buffer size before calling listen */
 	if (m->ike_buf_size != 0) {
 		pluto_sock_bufsize = m->ike_buf_size;
@@ -578,7 +612,7 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 
 	if (m->whack_terminate) {
 		passert(m->name != NULL);
-		terminate_connection(m->name);
+		terminate_connection(m->name, TRUE);
 	}
 
 	if (m->whack_status)
@@ -598,6 +632,9 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 
 	if (m->whack_fips_status)
 		show_fips_status();
+
+	if (m->whack_brief_status)
+		show_states_status(TRUE);
 
 #ifdef HAVE_SECCOMP
 	if (m->whack_seccomp_crashtest) {

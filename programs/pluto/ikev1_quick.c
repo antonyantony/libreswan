@@ -7,8 +7,9 @@
  * Copyright (C) 2003-2009 Paul Wouters <paul@xelerance.com>
  * Copyright (C) 2009 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
- * Copyright (C) 2013 Andrew Cagney
+ * Copyright (C) 2013-2019 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2013-2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -48,7 +49,6 @@
 #include "demux.h"      /* needs packet.h */
 #include "kernel.h"     /* needs connections.h */
 #include "log.h"
-#include "cookie.h"
 #include "server.h"
 #include "spdb.h"
 #include "timer.h"
@@ -79,20 +79,22 @@
 #include "virtual.h"	/* needs connections.h */
 #include "ikev1_dpd.h"
 #include "pluto_x509.h"
-#include "alg_info.h"
 #include "ip_address.h"
+#include "af_info.h"
 
 #include <blapit.h>
 
-const struct oakley_group_desc *ikev1_quick_pfs(struct alg_info_esp *aie)
+const struct oakley_group_desc *ikev1_quick_pfs(const struct child_proposals proposals)
 {
-	if (aie == NULL) {
+	if (proposals.p == NULL) {
 		return NULL;
 	}
-	if (aie->ai.alg_info_cnt == 0) {
+	struct proposal *proposal = next_proposal(proposals.p, NULL);
+	struct algorithm *dh = next_algorithm(proposal, PROPOSAL_dh, NULL);
+	if (dh == NULL) {
 		return NULL;
 	}
-	return aie->ai.proposals[0].dh;
+	return dh_desc(dh->desc);
 }
 
 /* accept_PFS_KE
@@ -126,8 +128,10 @@ static notification_t accept_PFS_KE(struct msg_digest *md, chunk_t *dest,
 			       msg_name);
 			return INVALID_KEY_INFORMATION; /* ??? */
 		}
-		return accept_KE(dest, val_name, st->st_pfs_group,
-				 &ke_pd->pbs);
+		if (!accept_KE(dest, val_name, st->st_pfs_group, ke_pd)) {
+			return INVALID_KEY_INFORMATION;
+		}
+		return NOTHING_WRONG;
 	}
 }
 
@@ -362,8 +366,8 @@ static void compute_proto_keymat(struct state *st,
 
 		for (i = 0;; ) {
 			if (st->st_shared_nss != NULL) {
-				crypt_prf_update_symkey("g^xy", ctx_me.prf, st->st_shared_nss);
-				crypt_prf_update_symkey("g^xy", ctx_peer.prf, st->st_shared_nss);
+				crypt_prf_update_symkey(ctx_me.prf, "g^xy", st->st_shared_nss);
+				crypt_prf_update_symkey(ctx_peer.prf, "g^xy", st->st_shared_nss);
 			}
 			hmac_update(&ctx_me, &protoid, sizeof(protoid));
 			hmac_update(&ctx_peer, &protoid, sizeof(protoid));
@@ -677,16 +681,18 @@ static size_t quick_mode_hash12(u_char *dest, const u_char *start,
 	DBG_dump("hash key", st->st_skeyid_a.ptr, st->st_skeyid_a.len);
 #endif
 	hmac_init(&ctx, st->st_oakley.ta_prf, st->st_skeyid_a_nss);
-	hmac_update(&ctx, (const void *) msgid, sizeof(msgid_t));
+	passert(sizeof(msgid_t) == sizeof(uint32_t));
+	msgid_t raw_msgid = htonl(*msgid);
+	hmac_update(&ctx, (const void *)&raw_msgid, sizeof(raw_msgid));
 	if (hash2)
 		hmac_update_chunk(&ctx, st->st_ni); /* include Ni_b in the hash */
 	hmac_update(&ctx, start, roof - start);
 	hmac_final(dest, &ctx);
 
 	DBG(DBG_CRYPT, {
-		    DBG_log("HASH(%d) computed:", hash2 + 1);
-		    DBG_dump("", dest, ctx.hmac_digest_len);
-	    });
+			DBG_log("HASH(%d) computed:", hash2 + 1);
+			DBG_dump("", dest, ctx.hmac_digest_len);
+		});
 	return ctx.hmac_digest_len;
 
 #   undef hmac_update
@@ -704,12 +710,16 @@ static size_t quick_mode_hash3(u_char *dest, struct state *st)
 
 	hmac_init(&ctx, st->st_oakley.ta_prf, st->st_skeyid_a_nss);
 	hmac_update(&ctx, (const u_char *)"\0", 1);
-	hmac_update(&ctx, (u_char *) &st->st_msgid, sizeof(st->st_msgid));
+	passert(sizeof(msgid_t) == sizeof(uint32_t));
+	msgid_t raw_msgid = htonl(st->st_msgid);
+	hmac_update(&ctx, (const void*)&raw_msgid, sizeof(raw_msgid));
 	hmac_update_chunk(&ctx, st->st_ni);
 	hmac_update_chunk(&ctx, st->st_nr);
 	hmac_final(dest, &ctx);
-	DBG_cond_dump(DBG_CRYPT, "HASH(3) computed:", dest,
-		      ctx.hmac_digest_len);
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump("HASH(3) computed:", dest,
+			 ctx.hmac_digest_len);
+	}
 	return ctx.hmac_digest_len;
 }
 
@@ -719,25 +729,28 @@ static size_t quick_mode_hash3(u_char *dest, struct state *st)
 void init_phase2_iv(struct state *st, const msgid_t *msgid)
 {
 	const struct hash_desc *h = st->st_oakley.ta_prf->hasher;
-	passert(h);
+	passert(h != NULL);
 
-	DBG_cond_dump(DBG_CRYPT, "last Phase 1 IV:",
-		      st->st_ph1_iv, st->st_ph1_iv_len);
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump("last Phase 1 IV:",
+			 st->st_ph1_iv, st->st_ph1_iv_len);
+	}
 
 	st->st_new_iv_len = h->hash_digest_size;
 	passert(st->st_new_iv_len <= sizeof(st->st_new_iv));
 
-	DBG_cond_dump(DBG_CRYPT, "current Phase 1 IV:",
-		      st->st_iv, st->st_iv_len);
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump("current Phase 1 IV:",
+			 st->st_iv, st->st_iv_len);
+	}
 
-	struct crypt_hash *ctx = crypt_hash_init(h, "IV", DBG_CRYPT);
+	struct crypt_hash *ctx = crypt_hash_init("Phase 2 IV", h);
 	crypt_hash_digest_bytes(ctx, "PH1_IV", st->st_ph1_iv, st->st_ph1_iv_len);
 	passert(*msgid != 0);
-	crypt_hash_digest_bytes(ctx, "MSGID", (const u_char *)msgid, sizeof(*msgid));
+	passert(sizeof(msgid_t) == sizeof(uint32_t));
+	msgid_t raw_msgid = htonl(*msgid);
+	crypt_hash_digest_bytes(ctx, "MSGID", (void*) &raw_msgid, sizeof(raw_msgid));
 	crypt_hash_final_bytes(&ctx, st->st_new_iv, st->st_new_iv_len);
-
-	DBG_cond_dump(DBG_CRYPT, "computed Phase 2 IV:",
-		      st->st_new_iv, st->st_new_iv_len);
 }
 
 static stf_status quick_outI1_tail(struct pluto_crypto_req *r,
@@ -758,7 +771,7 @@ static void quick_outI1_continue(struct state *st, struct msg_digest **mdp UNUSE
 	if (e == STF_INTERNAL_ERROR) {
 		loglog(RC_LOG_SERIOUS,
 		       "%s: quick_outI1_tail() failed with STF_INTERNAL_ERROR",
-		       __FUNCTION__);
+		       __func__);
 	}
 }
 
@@ -800,7 +813,7 @@ void quick_outI1(fd_t whack_sock,
 	st->st_msgid = generate_msgid(isakmp_sa);
 	change_state(st, STATE_QUICK_I1); /* from STATE_UNDEFINED */
 
-	insert_state(st); /* needs cookies, connection, and msgid */
+	binlog_refresh_state(st);
 
 	/* figure out PFS group, if any */
 
@@ -816,7 +829,7 @@ void quick_outI1(fd_t whack_sock,
 		 * use that group.
 		 * if not, fallback to old use-same-as-P1 behaviour
 		 */
-		st->st_pfs_group = ikev1_quick_pfs(c->alg_info_esp);
+		st->st_pfs_group = ikev1_quick_pfs(c->child_proposals);
 		/* otherwise, use the same group as during Phase 1:
 		 * since no negotiation is possible, we pick one that is
 		 * very likely supported.
@@ -832,8 +845,8 @@ void quick_outI1(fd_t whack_sock,
 		}
 		lswlogf(buf, " {using isakmp#%lu msgid:%08" PRIx32 " proposal=",
 			isakmp_sa->st_serialno, st->st_msgid);
-		if (st->st_connection->alg_info_esp != NULL) {
-			lswlog_alg_info(buf, &st->st_connection->alg_info_esp->ai);
+		if (st->st_connection->child_proposals.p != NULL) {
+			fmt_proposals(buf, st->st_connection->child_proposals.p);
 		} else {
 			lswlogf(buf, "defaults");
 		}
@@ -907,8 +920,8 @@ static stf_status quick_outI1_tail(struct pluto_crypto_req *r,
 			.isa_msgid = st->st_msgid,
 			.isa_flags = ISAKMP_FLAGS_v1_ENCRYPTION,
 		};
-		memcpy(hdr.isa_icookie, st->st_icookie, COOKIE_SIZE);
-		memcpy(hdr.isa_rcookie, st->st_rcookie, COOKIE_SIZE);
+		hdr.isa_ike_initiator_spi = st->st_ike_spis.initiator;
+		hdr.isa_ike_responder_spi = st->st_ike_spis.responder;
 		if (!out_struct(&hdr, &isakmp_hdr_desc, &reply_stream,
 				&rbody)) {
 			reset_cur_state();
@@ -925,15 +938,15 @@ static stf_status quick_outI1_tail(struct pluto_crypto_req *r,
 	 * POLICY_COMPRESS is considered iff we can do IPcomp.
 	 */
 	{
-		lset_t pm = POLICY_ENCRYPT | POLICY_AUTHENTICATE;
-
-		if (can_do_IPcomp)
-			pm |= POLICY_COMPRESS;
+		lset_t pm = st->st_policy & (POLICY_ENCRYPT |
+					     POLICY_AUTHENTICATE |
+					     can_do_IPcomp ? POLICY_COMPRESS : 0);
+		dbg("emitting quick defaults using policy %s",
+		     bitnamesof(sa_policy_bit_names, pm));
 
 		if (!ikev1_out_sa(&rbody,
-			    &ipsec_sadb[(st->st_policy &
-					 pm) >> POLICY_IPSEC_SHIFT],
-			    st, FALSE, FALSE, ISAKMP_NEXT_NONCE)) {
+				  &ipsec_sadb[pm >> POLICY_IPSEC_SHIFT],
+				  st, FALSE, FALSE, ISAKMP_NEXT_NONCE)) {
 			reset_cur_state();
 			return STF_INTERNAL_ERROR;
 		}
@@ -1014,7 +1027,7 @@ static stf_status quick_outI1_tail(struct pluto_crypto_req *r,
 		"reply packet from quick_outI1");
 
 	delete_event(st);
-	start_retransmits(st, EVENT_v1_RETRANSMIT);
+	start_retransmits(st);
 
 	if (st->st_ipsec_pred == SOS_NOBODY) {
 		whack_log(RC_NEW_STATE + STATE_QUICK_I1,
@@ -1406,7 +1419,7 @@ static stf_status quick_inI1_outR1_tail(struct verify_oppo_bundle *b)
 
 		change_state(st, STATE_QUICK_R0);
 
-		insert_state(st); /* needs cookies, connection, and msgid */
+		binlog_refresh_state(st);
 
 		/* copy hidden variables (possibly with changes) */
 		st->hidden_variables = hv;
@@ -1532,7 +1545,7 @@ static void quick_inI1_outR1_continue2(struct state *st,
 }
 
 /*
- * Spit out the IPSec ID payload we got.
+ * Spit out the IPsec ID payload we got.
  *
  * We go to some trouble to use out_struct so NP
  * for adjacent packets is handled correctly.
@@ -1960,14 +1973,9 @@ stf_status quick_inR1_outI2_tail(struct msg_digest *md,
 
 	set_newest_ipsec_sa("inR1_outI2", st);
 
-	/* If we have dpd delay and dpdtimeout set, then we are doing DPD
-	    on this conn, so initialize it */
-	if (deltasecs(st->st_connection->dpd_delay) != 0 &&
-	    deltasecs(st->st_connection->dpd_timeout) != 0) {
-		if (dpd_init(st) != STF_OK) {
-			delete_ipsec_sa(st);
-			return STF_FAIL;
-		}
+	if (dpd_init(st) != STF_OK) {
+		delete_ipsec_sa(st);
+		return STF_FAIL;
 	}
 
 	return STF_OK;
@@ -2001,12 +2009,9 @@ stf_status quick_inI2(struct state *st, struct msg_digest *md)
 	 * If we have dpd delay and dpdtimeout set, then we are doing DPD
 	 * on this conn, so initialize it
 	 */
-	if (deltasecs(st->st_connection->dpd_delay) != 0 &&
-	    deltasecs(st->st_connection->dpd_timeout) != 0) {
-		if (dpd_init(st) != STF_OK) {
-			delete_ipsec_sa(st);
-			return STF_FAIL;
-		}
+	if (dpd_init(st) != STF_OK) {
+		delete_ipsec_sa(st);
+		return STF_FAIL;
 	}
 
 	return STF_OK;

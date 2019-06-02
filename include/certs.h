@@ -7,6 +7,8 @@
  * Copyright (C) 2017 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 Tuomo Soini <tis@foobar.fi>
  * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 D. Hugh Redelmeier <hugh@mimosa.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -20,8 +22,8 @@
  *
  */
 
-#ifndef _CERTS_H
-#define _CERTS_H
+#ifndef CERTS_H
+#define CERTS_H
 
 /* workaround for NSS/NSPR bug on MIPS with cert.h */
 #ifndef _ABIO32
@@ -62,4 +64,18 @@ typedef struct {
 const char *cert_nickname(const cert_t *cert);
 
 extern void list_certs(void);
-#endif /* _CERTS_H */
+
+/*
+ * Maintain a list of certificates.
+ */
+
+struct certs {
+	CERTCertificate *cert;	/* never NULL */
+	struct certs *next;
+};
+
+void release_certs(struct certs **head);
+void add_cert(struct certs **head, CERTCertificate *cert);
+CERTCertificate *make_end_cert_first(struct certs **head);
+
+#endif

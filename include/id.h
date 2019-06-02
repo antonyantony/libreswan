@@ -1,5 +1,6 @@
 /* identity representation, as in IKE ID Payloads (RFC 2407 DOI 4.6.2.1)
  * Copyright (C) 1999-2001  D. Hugh Redelmeier
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -18,6 +19,7 @@
 #include "ietf_constants.h"	/* for enum ike_id_type */
 #include "chunk.h"
 #include "err.h"
+#include "ip_address.h"
 
 struct id {
 	enum ike_id_type kind;
@@ -37,7 +39,6 @@ struct id_list {
 extern const struct id empty_id;	/* ID_NONE */
 
 extern err_t atoid(char *src, struct id *id, bool oe_only);
-extern unsigned char *temporary_cyclic_buffer(void);
 extern int idtoa(const struct id *id, char *dst, size_t dstlen);
 #define IDTOA_BUF	512
 extern void escape_metachar(const char *src, char *dst, size_t dstlen);

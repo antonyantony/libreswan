@@ -5,6 +5,7 @@
  * Copyright (C) 1998-2002,2015  D. Hugh Redelmeier.
  * Copyright (C) 2016-2017 Andrew Cagney
  * Copyright (C) 2017 Vukasin Karadzic <vukasin.karadzic@gmail.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -35,6 +36,7 @@
 #include "constants.h"
 #include "enum_names.h"
 #include "lswlog.h"
+#include "ip_said.h"		/* for SPI_PASS et.al. */
 
 const char *bool_str(bool b)
 {
@@ -152,6 +154,30 @@ enum_names version_names = {
 	&version_names_1
 };
 
+static const char *const ike_version_liveness_name[] = {
+	"IKEv1 DPD",
+	"IKEv2 liveness",
+};
+
+enum_names ike_version_liveness_names = {
+	IKEv1, IKEv2,
+	ARRAY_REF(ike_version_liveness_name),
+	"IKE", /* prefix */
+	NULL,
+};
+
+static const char *const ike_version_name[] = {
+	"IKEv1",
+	"IKEv2",
+};
+
+enum_names ike_version_names = {
+	IKEv1, IKEv2,
+	ARRAY_REF(ike_version_name),
+	"IKE", /* prefix */
+	NULL,
+};
+
 /* Domain of Interpretation */
 static const char *const doi_name[] = {
 	"ISAKMP_DOI_ISAKMP",
@@ -168,6 +194,7 @@ enum_names doi_names = {
 
 /* kind of struct connection */
 static const char *const connection_kind_name[] = {
+	"CK_INVALID",
 	"CK_GROUP",	/* policy group: instantiates to template */
 	"CK_TEMPLATE",	/* abstract connection, with wildcard */
 	"CK_PERMANENT",	/* normal connection */
@@ -176,7 +203,7 @@ static const char *const connection_kind_name[] = {
 };
 
 enum_names connection_kind_names = {
-	CK_GROUP,
+	CK_INVALID,
 	CK_GOING_AWAY,
 	ARRAY_REF(connection_kind_name),
 	NULL, /* prefix */
@@ -315,6 +342,15 @@ enum_names payload_names_ikev1orv2 = {
 	&payload_names_ikev2copy_main
 };
 
+static enum_names *const payload_type_names_table[] = {
+	[IKEv1 - IKEv1] = &ikev1_payload_names,
+	[IKEv2 - IKEv1] = &ikev2_payload_names,
+};
+
+enum_enum_names payload_type_names = {
+	IKEv1, IKEv2,
+	ARRAY_REF(payload_type_names_table)
+};
 
 static const char *const ikev2_last_proposal_names[] = {
 	"v2_PROPOSAL_LAST",
@@ -366,8 +402,8 @@ static const char *const exchange_name_doi[] = {
 
 /* https://www.iana.org/assignments/ikev2-parameters/ikev2-parameters.xhtml#ikev2-parameters-1 */
 static const char *const exchange_name_ikev2[] = {
-	"ISAKMP_v2_SA_INIT", /* RFC 7296 */
-	"ISAKMP_v2_AUTH",
+	"ISAKMP_v2_IKE_SA_INIT", /* RFC 7296 */
+	"ISAKMP_v2_IKE_AUTH",
 	"ISAKMP_v2_CREATE_CHILD_SA",
 	"ISAKMP_v2_INFORMATIONAL",
 	"ISAKMP_v2_IKE_SESSION_RESUME", /* RFC 5753 */
@@ -403,12 +439,12 @@ enum_names ikev1_exchange_names = {
 	ISAKMP_XCHG_NONE,
 	ISAKMP_XCHG_MODE_CFG,
 	ARRAY_REF(exchange_name_ikev1),
-	NULL, /* prefix */
+	"ISAKMP_XCHG_", /* prefix */
 	&exchange_names_doi
 };
 
 enum_names ikev2_exchange_names = {
-	ISAKMP_v2_SA_INIT,
+	ISAKMP_v2_IKE_SA_INIT,
 	ISAKMP_v2_IKE_SESSION_RESUME,
 	ARRAY_REF(exchange_name_ikev2),
 	"ISAKMP_v2_", /* prefix */
@@ -429,6 +465,16 @@ enum_names exchange_names_ikev1orv2 = {
 	ARRAY_REF(exchange_name_ikev1),
 	NULL, /* prefix */
 	&exchange_names_doi_and_v2
+};
+
+static enum_names *const exchange_type_names_table[] = {
+	[IKEv1 - IKEv1] = &ikev1_exchange_names,
+	[IKEv2 - IKEv1] = &ikev2_exchange_names,
+};
+
+enum_enum_names exchange_type_names = {
+	IKEv1, IKEv2,
+	ARRAY_REF(exchange_type_names_table),
 };
 
 /* Flag BITS */
@@ -2000,52 +2046,6 @@ enum_names ikev2_trans_attr_descs = {
 	NULL
 };
 
-static ip_address ipv4_any, ipv6_any;
-static ip_subnet ipv4_wildcard, ipv6_wildcard;
-static ip_subnet ipv4_all, ipv6_all;
-
-const struct af_info af_inet4_info = {
-	AF_INET,
-	"AF_INET",
-	sizeof(struct in_addr),
-	sizeof(struct sockaddr_in),
-	32,
-	ID_IPV4_ADDR, ID_IPV4_ADDR_SUBNET, ID_IPV4_ADDR_RANGE,
-	&ipv4_any, &ipv4_wildcard, &ipv4_all,
-};
-
-const struct af_info af_inet6_info = {
-	AF_INET6,
-	"AF_INET6",
-	sizeof(struct in6_addr),
-	sizeof(struct sockaddr_in6),
-	128,
-	ID_IPV6_ADDR, ID_IPV6_ADDR_SUBNET, ID_IPV6_ADDR_RANGE,
-	&ipv6_any, &ipv6_wildcard, &ipv6_all,
-};
-
-const struct af_info *aftoinfo(int af)
-{
-	switch (af) {
-	case AF_INET:
-		return &af_inet4_info;
-
-	case AF_INET6:
-		return &af_inet6_info;
-
-	default:
-		return NULL;
-	}
-}
-
-bool subnetisnone(const ip_subnet *sn)
-{
-	ip_address base;
-
-	networkof(sn, &base);
-	return isanyaddr(&base) && subnetishost(sn);
-}
-
 static const char *const pkk_name[] = {
 	"PKK_PSK",
 	"PKK_RSA",
@@ -2080,6 +2080,24 @@ enum_names ikev2_ppk_id_type_names = {
 	PPK_ID_FIXED,
 	ARRAY_REF(ikev2_ppk_id_type_name),
 	"PPK_ID_", /* prefix */
+	NULL
+};
+
+/* IKEv2 Redirect Mechanism - RFC 5685 */
+static const char *const ikev2_redirect_gw_name[] = {
+	/* 0 - Reserved */
+	"GW_IPv4",
+	"GW_IPv6",
+	"GW_FQDN",
+	/* 4 - 240	Unassigned */
+	/* 241 - 255	Private Use */
+};
+
+enum_names ikev2_redirect_gw_names = {
+	GW_IPV4,
+	GW_FQDN,
+	ARRAY_REF(ikev2_redirect_gw_name),
+	"GW_",	/* prefix */
 	NULL
 };
 
@@ -2380,86 +2398,6 @@ size_t lswlog_enum_enum_short(struct lswlog *buf, enum_enum_names *een,
 	return lswlog_enum_short(buf, en, val);
 }
 
-/*
- * construct a string to name the bits on in a set
- *
- * Result of bitnamesof may be in STATIC buffer -- NOT RE-ENTRANT!
- * Note: prettypolicy depends on internal details of bitnamesofb.
- * binamesofb is re-entrant since the caller provides the buffer.
- */
-const char *bitnamesofb(const char *const table[], lset_t val,
-			char *b, size_t blen)
-{
-	char *const roof = b + blen;
-	char *p = b;
-	lset_t bit;
-	const char *const *tp;
-
-	passert(blen != 0); /* need room for NUL */
-
-	/* if nothing gets filled in, default to "none" rather than "" */
-	(void) jam_str(b, blen, "none");
-
-	for (tp = table, bit = 01; val != 0; bit <<= 1) {
-		if (val & bit) {
-			const char *n = *tp;
-
-			if (p != b)
-				p = jam_str(p, (size_t)(roof - p), "+");
-
-			if (n == NULL || *n == '\0') {
-				/*
-				 * No name for this bit, so use hex.
-				 * if snprintf returns a different value from
-				 * strlen, truncation happened
-				 */
-				(void)snprintf(p, (size_t)(roof - p),
-					"0x%" PRIxLSET,
-					bit);
-				p += strlen(p);
-			} else {
-				p = jam_str(p, (size_t)(roof - p), n);
-			}
-			val -= bit;
-		}
-		/*
-		 * Move on in the table, but not past end.
-		 * This is a bit of a trick: while we are at stuck the end,
-		 * the loop will print out the remaining bits in hex.
-		 */
-		if (*tp != NULL)
-			tp++;
-	}
-	return b;
-}
-
-/*
- * NOT RE-ENTRANT!
- */
-const char *bitnamesof(const char *const table[], lset_t val)
-{
-	static char bitnamesbuf[8192]; /* I hope that it is big enough! */
-
-	return bitnamesofb(table, val, bitnamesbuf, sizeof(bitnamesbuf));
-}
-
-/* test a set by seeing if all bits have names */
-bool testset(const char *const table[], lset_t val)
-{
-	lset_t bit;
-	const char *const *tp;
-
-	for (tp = table, bit = 01; val != 0; bit <<= 1, tp++) {
-		const char *n = *tp;
-
-		if (n == NULL || ((val & bit) && *n == '\0'))
-			return FALSE;
-
-		val &= ~bit;
-	}
-	return TRUE;
-}
-
 const char sparse_end[] = "end of sparse names";
 
 /* look up enum names in a sparse_names */
@@ -2545,6 +2483,7 @@ static const enum_names *en_checklist[] = {
 	&ikev2_trans_attr_descs,
 	&pkk_names,
 	&ikev2_ppk_id_type_names,
+	&ikev2_redirect_gw_names,
 };
 
 void check_enum_names(enum_names *checklist[], size_t tl)
@@ -2564,15 +2503,6 @@ void check_enum_names(enum_names *checklist[], size_t tl)
 
 void init_constants(void)
 {
-	happy(anyaddr(AF_INET, &ipv4_any));
-	happy(anyaddr(AF_INET6, &ipv6_any));
-
-	happy(addrtosubnet(&ipv4_any, &ipv4_wildcard));
-	happy(addrtosubnet(&ipv6_any, &ipv6_wildcard));
-
-	happy(initsubnet(&ipv4_any, 0, '0', &ipv4_all));
-	happy(initsubnet(&ipv6_any, 0, '0', &ipv6_all));
-
 	check_enum_names(ARRAY_REF(en_checklist));
 
 	/* check v2_transform_ID_enums, the only enum_enum_names */

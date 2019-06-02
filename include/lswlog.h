@@ -3,7 +3,7 @@
  * Copyright (C) 1998-2001,2013 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2004 Michael Richardson <mcr@xelerance.com>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2017-2018 Andrew Cagney
+ * Copyright (C) 2017-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -26,9 +26,11 @@
 
 #include "lset.h"
 #include "lswcdefs.h"
-
+#include "fmtbuf.h"
 #include "libreswan/passert.h"
 #include "constants.h"		/* for DBG_... */
+
+extern bool log_ip; /* false -> redact ip addresses */
 
 /* Build up a diagnostic in a static buffer -- NOT RE-ENTRANT.
  * Although this would be a generally useful function, it is very
@@ -200,11 +202,12 @@ extern int libreswan_log(const char *fmt, ...) PRINTF_LIKE(1);
  * Log to the main log stream, but _not_ the whack log stream.
  */
 
-#define LSWLOG_LOG(BUF)							\
+#define LOG_TO_LOG(BUF)							\
 	LSWLOG_(true, BUF,						\
 		lswlog_log_prefix(BUF),					\
 		lswlog_to_log_stream(BUF))
-
+void log_to_log(const char *message, ...) PRINTF_LIKE(1);
+/* to_all(), to_whack(), ... */
 
 /*
  * Log, at level RC, to the whack log (if attached).
@@ -291,9 +294,14 @@ void libreswan_exit_log_errno(int e, const char *message, ...) PRINTF_LIKE(2) NE
  * If it does, they will be interpreted by the C preprocesser
  * as macro argument separators.  This happens accidentally if
  * multiple variables are declared in one declaration.
+ *
+ * Naming: All DBG_*() prefixed functions send stuff to the debug
+ * stream unconditionally.  Hence they should be wrapped in DBGP().
  */
 
 extern lset_t cur_debugging;	/* current debugging level */
+
+void dbg(const char *fmt, ...) PRINTF_LIKE(1);
 
 #define DBGP(cond)	(cur_debugging & (cond))
 
@@ -301,19 +309,9 @@ extern lset_t cur_debugging;	/* current debugging level */
 
 #define DBG(cond, action)	{ if (DBGP(cond)) { action; } }
 #define DBGF(cond, ...) { if (DBGP(cond)) { DBG_log(__VA_ARGS__); } }
+void DBG_log(const char *message, ...) PRINTF_LIKE(1);
+void DBG_dump(const char *label, const void *p, size_t len);
 
-/* signature needs to match printf() */
-#define DBG_log libreswan_DBG_log
-int libreswan_DBG_log(const char *message, ...) PRINTF_LIKE(1);
-
-#define DBG_dump libreswan_DBG_dump
-extern void libreswan_DBG_dump(const char *label, const void *p, size_t len);
-
-#define DBG_dump_chunk(label, ch) DBG_dump(label, (ch).ptr, (ch).len)
-
-#define DBG_cond_dump(cond, label, p, len) DBG(cond, DBG_dump(label, p, len))
-#define DBG_cond_dump_chunk(cond, label, ch) DBG(cond, DBG_dump_chunk(label, \
-								      ch))
 void lswlog_dbg_pre(struct lswlog *buf);
 
 #define LSWDBG_(PREDICATE, BUF)						\
@@ -405,27 +403,6 @@ size_t lswlog_bytes(struct lswlog *log, const uint8_t *bytes,
 #define LSWBUF_(BUF)							\
 	for (char lswbuf[LOG_WIDTH]; lswlog_p; lswlog_p = false)	\
 		LSWBUF_ARRAY_(lswbuf, sizeof(lswbuf), BUF)
-
-/*
- * Create an LSWLOG using an existing array.
- *
- * Useful when a function passed an array wants to use lswlog routines
- * or wants to capture the output for later use.  For instance:
- */
-
-#if 0
-void lswbuf_array(char *array, size_t sizeof_array)
-{
-	LSWBUF_ARRAY(array, sizeof_array, buf) {
-		lswlogf(buf, "written to the array");
-	}
-}
-#endif
-
-#define LSWBUF_ARRAY(ARRAY, SIZEOF_ARRAY, BUF)				\
-	for (bool lswlog_p = true; lswlog_p; lswlog_p = false)		\
-		LSWBUF_ARRAY_(ARRAY, SIZEOF_ARRAY, BUF)
-
 
 /*
  * Scratch buffer for accumulating extra output.
@@ -577,7 +554,7 @@ void libreswan_pexpect_log(const char *func,
 #define PEXPECT_LOG(FMT, ...)						\
 	libreswan_pexpect_log(__func__,					\
 			      PASSERT_BASENAME, __LINE__,		\
-			      FMT, __VA_ARGS__)
+			      FMT,##__VA_ARGS__)
 
 
 /*
@@ -649,54 +626,7 @@ void lswlog_errno_suffix(struct lswlog *buf, int e);
 		lswlog_log_prefix(BUF),		\
 		lswlog_to_error_stream(buf))
 
-/*
- * ARRAY, a previously allocated array, containing the accumulated
- * NUL-terminated output.
- *
- * The following offsets into ARRAY are maintained:
- *
- *    0 <= LEN <= BOUND < ROOF < sizeof(ARRAY)
- *
- * ROOF < sizeof(ARRAY); ARRAY[ROOF]==CANARY
- *
- * The offset to the last character in the array.  It contains a
- * canary intended to catch overflows.  When sizeof(ARRAY) is needed,
- * ROOF should be used as otherwise the canary may be corrupted.
- *
- * BOUND < ROOF; ARRAY[BOUND]=='\0'
- *
- * Limit on how many characters can be appended.
- *
- * LEN < BOUND; ARRAY[LEN]=='\0'
- *
- * Equivalent to strlen(BUF).  BOUND-LEN is always the amount of
- * unused space in the array.
- *
- * When LEN<BOUND, space for BOUND-LEN characters, including the
- * terminating NUL, is still available (when BOUND-LEN==1, a single
- * NUL (empty string) write is possible).
- *
- * When LEN==BOUND, the array is full and writes are discarded.
- *
- * When the ARRAY fills, the last few characters are overwritten with
- * DOTS.
- */
-
-struct lswlog {
-	char *array;
-	/* 0 <= LEN < BOUND < ROOF */
-	size_t len;
-	size_t bound;
-	size_t roof;
-	const char *dots;
-};
-
 struct lswlog *lswlog(struct lswlog *buf, char *array, size_t sizeof_array);
-
-/*
- * To debug, set this to printf or similar.
- */
-extern int (*lswlog_debugf)(const char *format, ...) PRINTF_LIKE(1);
 
 /*
  * Since 'char' can be unsigned need to cast -2 onto a char sized

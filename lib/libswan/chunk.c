@@ -1,6 +1,7 @@
 /* memory chunks, for libreswan
  *
  * Copyright (C) 2018 Andrew Cagney
+ * Copyright (C) 2019 D. Hugh Redelmeier <hugh@mimosa.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -16,18 +17,35 @@
 
 #include "chunk.h"
 #include "lswalloc.h"
+#include "lswlog.h"	/* for DBG_dump() */
 
-const chunk_t empty_chunk = { NULL, 0 };
+/*
+ * Compiler note: some older versions of GCC claim that EMPTY_CHUNK
+ * isn't a constant so we cannot use it as an initializer for empty_chunk.
+ */
+const chunk_t empty_chunk = { .ptr = NULL, .len = 0 };
 
 chunk_t chunk(void *ptr, size_t len)
 {
 	return (chunk_t) { .ptr = ptr, .len = len, };
 }
 
+chunk_t alloc_chunk(size_t count, const char *name)
+{
+	uint8_t *ptr = alloc_things(uint8_t, count, name);
+	return chunk(ptr, count);
+}
+
+void free_chunk_contents(chunk_t *chunk)
+{
+	pfreeany(chunk->ptr);
+	*chunk = EMPTY_CHUNK;
+}
+
 chunk_t clone_chunk(chunk_t chunk, const char *name)
 {
 	if (chunk.ptr == NULL) {
-		return empty_chunk;
+		return EMPTY_CHUNK;
 	} else {
 		chunk_t clone = {
 			.ptr = clone_bytes(chunk.ptr, chunk.len, name),
@@ -35,19 +53,6 @@ chunk_t clone_chunk(chunk_t chunk, const char *name)
 		};
 		return clone;
 	}
-}
-
-/* note: the caller must free the result */
-char *str_from_chunk(chunk_t c, const char *name)
-{
-	if (c.len == 0)
-		return NULL;
-
-	char *s = alloc_bytes(c.len + 1, name);
-
-	memcpy(s, c.ptr, c.len);
-	s[c.len] = '\0';	/* redundant */
-	return s;
 }
 
 chunk_t clone_chunk_chunk(chunk_t lhs, chunk_t rhs, const char *name)
@@ -73,4 +78,19 @@ char *clone_chunk_as_string(chunk_t chunk, const char *name)
 		memcpy(string, chunk.ptr, chunk.len);
 		return string;
 	}
+}
+
+chunk_t clone_bytes_as_chunk(void *bytes, size_t sizeof_bytes, const char *name)
+{
+	return chunk(clone_bytes(bytes, sizeof_bytes, name), sizeof_bytes);
+}
+
+bool chunk_eq(chunk_t a, chunk_t b)
+{
+	return a.len == b.len && memeq(a.ptr, b.ptr, b.len);
+}
+
+void DBG_dump_chunk(const char *prefix, chunk_t chunk)
+{
+	DBG_dump(prefix, chunk.ptr, chunk.len);
 }

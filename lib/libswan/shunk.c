@@ -1,6 +1,6 @@
-/* string fragments, for libreswan
+/* Constant string (octet) fragments, for libreswan
  *
- * Copyright (C) 2018 Andrew Cagney
+ * Copyright (C) 2018-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -20,12 +20,17 @@
 
 #include "shunk.h"
 
-const shunk_t empty_shunk;
+/*
+ * Don't mistake a NULL_SHUNK for an empty shunk - just like for
+ * strings they are different.
+ */
+
+const shunk_t null_shunk = NULL_SHUNK;
 
 shunk_t shunk1(const char *ptr)
 {
 	if (ptr == NULL) {
-		return empty_shunk;
+		return null_shunk;
 	} else {
 		return shunk2(ptr, strlen(ptr));
 	}
@@ -34,28 +39,37 @@ shunk_t shunk1(const char *ptr)
 shunk_t shunk2(const char *ptr, int len)
 {
 	/*
-	 * Since a zero length string and a NULL string pointer are
-	 * considered to be different, don't convert the former into
-	 * an empty_chunk.
+	 * Since a zero length string is not the same as a NULL
+	 * string, don't try to be smart and convert the former into
+	 * the latter.
 	 */
 	return (shunk_t) { .ptr = ptr, .len = len, };
 }
 
-shunk_t shunk_strsep(shunk_t *shunk, const char *delim)
+shunk_t shunk_strsep(shunk_t *input, const char *delim)
 {
-	shunk_t token = shunk2(shunk->ptr, 0);
-	while (shunk->len > 0) {
-		if (strchr(delim, *shunk->ptr) != NULL) {
+	/*
+	 * If INPUT is NULL, the loop is skipped and NULL is
+	 * returned.
+	 */
+	shunk_t token = shunk2(input->ptr, 0);
+	while (input->len > 0) {
+		if (strchr(delim, *input->ptr) != NULL) {
 			/* discard delim */
-			shunk->ptr++;
-			shunk->len--;
+			input->ptr++;
+			input->len--;
 			return token;
 		}
 		/* advance, transfering the char */
 		token.len++;
-		shunk->ptr++;
-		shunk->len--;
+		input->ptr++;
+		input->len--;
 	}
+	/*
+	 * Flag this as the last token by setting INPUT to NULL; next
+	 * call will return the NULL shunk.
+	 */
+	*input = null_shunk;
 	return token;
 }
 

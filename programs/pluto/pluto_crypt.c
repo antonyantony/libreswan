@@ -9,7 +9,9 @@
  * Copyright (C) 2009 Stefan Arentz <stefan@arentz.ca>
  * Copyright (C) 2010 Tuomo Soini <tis@foobar.fi>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2017 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2017-2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2019 D. Hugh Redelmeier <hugh@mimosa.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -54,6 +56,9 @@
 #include "ikev1_prf.h"
 #include "state_db.h"
 
+#include "ikev1.h"	/* for complete_v1_state_transition() */
+#include "ikev2.h"	/* for complete_v2_state_transition() */
+
 #ifdef HAVE_SECCOMP
 # include "pluto_seccomp.h"
 #endif
@@ -91,6 +96,7 @@ struct pluto_crypto_req_cont {
 	struct pluto_crypto_req pcrc_pcr;
 	pcr_req_id pcrc_id;
 	int pcrc_helpernum;
+	double pcrc_threadtime_used;
 };
 
 /*
@@ -118,8 +124,7 @@ static size_t log_backlog(struct lswlog *buf, void *data)
 	return size;
 }
 
-struct list_info backlog_info = {
-	.debug = DBG_CONTROLMORE,
+static const struct list_info backlog_info = {
 	.name = "backlog",
 	.log = log_backlog,
 };
@@ -190,10 +195,11 @@ static const char *const pluto_cryptoop_strings[] = {
 	"compute dh+iv (V1 Phase 1)",	/* calculate (g^x)(g^y) and skeyids for Phase 1 DH + prf */
 	"compute dh (V1 Phase 2 PFS)",	/* calculate (g^x)(g^y) for Phase 2 PFS */
 	"compute dh (V2)",	/* perform IKEv2 PARENT SA calculation, create SKEYSEED */
+	"computation",		/* generic crypto */
 };
 
 static enum_names pluto_cryptoop_names = {
-	pcr_build_ke_and_nonce, pcr_compute_dh_v2,
+	pcr_build_ke_and_nonce, pcr_crypto,
 	ARRAY_REF(pluto_cryptoop_strings),
 	NULL, /* prefix */
 	NULL
@@ -228,6 +234,10 @@ static void pcr_release(struct pluto_crypto_req *r)
 	case pcr_compute_dh_iv:
 	case pcr_compute_dh:
 		cancelled_v1_dh(&r->pcr_d.v1_dh);
+		break;
+	case pcr_crypto:
+		r->pcr_d.crypto.handler->cancelled_callback(&r->pcr_d.crypto.task);
+		pexpect(r->pcr_d.crypto.task == NULL);
 		break;
 	}
 }
@@ -278,13 +288,12 @@ static int crypto_helper_delay;
 static void pluto_do_crypto_op(struct pluto_crypto_req_cont *cn, int helpernum)
 {
 	realtime_t tv0 = realnow();
+	threadtime_t start = threadtime_start();
 	struct pluto_crypto_req *r = &cn->pcrc_pcr;
 
-	DBG(DBG_CONTROL,
-	    DBG_log("crypto helper %d doing %s; request ID %u",
-		    helpernum,
-		    enum_show(&pluto_cryptoop_names, r->pcr_type),
-		    cn->pcrc_id));
+	dbg("crypto helper %d doing %s (%s); request ID %u",
+	    helpernum, enum_show(&pluto_cryptoop_names, r->pcr_type),
+	    cn->pcrc_name, cn->pcrc_id);
 	if (crypto_helper_delay > 0) {
 		DBG_log("crypto helper is pausing for %u seconds",
 			crypto_helper_delay);
@@ -313,26 +322,35 @@ static void pluto_do_crypto_op(struct pluto_crypto_req_cont *cn, int helpernum)
 	case pcr_compute_dh_v2:
 		calc_dh_v2(r);
 		break;
+
+	case pcr_crypto:
+		r->pcr_d.crypto.handler->compute(r->pcr_d.crypto.task,
+						 helpernum);
+		break;
 	}
 
 	LSWDBGP(DBG_CONTROL, buf) {
 		realtime_t tv1 = realnow();
 		deltatime_t tv_diff = realtimediff(tv1, tv0);
-		lswlogf(buf, "crypto helper %d finished %s; request ID %u time elapsed ",
-			helpernum,
-			enum_show(&pluto_cryptoop_names, r->pcr_type),
-			cn->pcrc_id);
+		lswlogf(buf, "crypto helper %d finished %s (%s); request ID %u time elapsed ",
+			helpernum, enum_show(&pluto_cryptoop_names, r->pcr_type),
+			cn->pcrc_name, cn->pcrc_id);
 		lswlog_deltatime(buf, tv_diff);
 		lswlogs(buf, " seconds");
 	}
 
+	cn->pcrc_threadtime_used =
+		threadtime_stop(&start, cn->pcrc_serialno,
+				"crypto helper computing work-order %u: %s (%s)",
+				cn->pcrc_id, enum_show(&pluto_cryptoop_names, r->pcr_type),
+				cn->pcrc_name);
 }
 
 /* IN A HELPER THREAD */
 static void *pluto_crypto_helper_thread(void *arg)
 {
 	struct pluto_crypto_worker *w = arg;
-	DBGF(DBG_CONTROL, "starting up helper thread %d", w->pcw_helpernum);
+	dbg("starting up helper thread %d", w->pcw_helpernum);
 
 #ifdef HAVE_SECCOMP
 	switch (pluto_seccomp_mode) {
@@ -406,7 +424,7 @@ static void *pluto_crypto_helper_thread(void *arg)
 		pluto_event_now("sending helper answer", w->pcw_pcrc_serialno,
 				handle_helper_answer, cn);
 	}
-	DBGF(DBG_CONTROL, "shutting down helper thread %d", w->pcw_helpernum);
+	dbg("shutting down helper thread %d", w->pcw_helpernum);
 	return NULL;
 }
 
@@ -472,7 +490,7 @@ void send_crypto_helper_request(struct state *st,
 	cn->pcrc_serialno = st->st_serialno;
 
 	/* set up the id */
-	static pcr_req_id pcw_id;	/* counter for generating unique request IDs */
+	static pcr_req_id pcw_id = 0;	/* counter for generating unique request IDs */
 	cn->pcrc_id = ++pcw_id;
 
 	/*
@@ -521,14 +539,15 @@ void delete_cryptographic_continuation(struct state *st)
 	if (pc_workers != NULL) {
 		/* remove it from any queue */
 		pthread_mutex_lock(&backlog_mutex);
-		if (remove_list_entry(&cn->pcrc_backlog)) {
-			backlog_queue_len--;
-		} else {
+		if (detached_list_entry(&cn->pcrc_backlog)) {
 			/*
 			 * Already grabbed by the helper thread so
 			 * can't delete it here.
 			 */
 			cn = NULL;
+		} else {
+			remove_list_entry(&cn->pcrc_backlog);
+			backlog_queue_len--;
 		}
 		pthread_mutex_unlock(&backlog_mutex);
 		if (cn != NULL) {
@@ -547,6 +566,7 @@ static void handle_helper_answer(struct state *st,
 				 void *arg)
 {
 	struct pluto_crypto_req_cont *cn = arg;
+ 	struct pluto_crypto_req *r = &cn->pcrc_pcr;
 
 	DBG(DBG_CONTROL,
 		DBG_log("crypto helper %d replies to request ID %u",
@@ -577,7 +597,14 @@ static void handle_helper_answer(struct state *st,
 	} else {
 		st->st_offloaded_task = NULL;
 		st->st_v1_offloaded_task_in_background = false;
+		/* bill the thread time */
+		st->st_timing.approx_seconds += cn->pcrc_threadtime_used;
+		statetime_t start = statetime_start(st);
 		(*cn->pcrc_func)(st, mdp, &cn->pcrc_pcr);
+		statetime_stop(&start, "callback for work-order %u: %s (%s)",
+			       cn->pcrc_id,
+			       enum_show(&pluto_cryptoop_names, r->pcr_type),
+			       cn->pcrc_name);
 	}
 
 	/* now free up the continuation */
@@ -659,13 +686,11 @@ void init_crypto_helpers(int nhelpers)
 		len = sizeof(numcpu);
 		ncpu_online = sysctl(mib, 2, &numcpu, &len, NULL, 0);
 #endif
-
-		/* magic numbers from experience */
-		if (ncpu_online > 2) {
+		libreswan_log("%d CPU cores online", ncpu_online);
+		if (ncpu_online < 4)
+			nhelpers = ncpu_online;
+		else
 			nhelpers = ncpu_online - 1;
-		} else {
-			nhelpers = ncpu_online * 2;
-		}
 	}
 
 	if (nhelpers > 0) {
@@ -681,4 +706,42 @@ void init_crypto_helpers(int nhelpers)
 		libreswan_log(
 			"no crypto helpers will be started; all cryptographic operations will be done inline");
 	}
+}
+
+/*
+ * This function is called when a helper passes work back to the main
+ * thread using the event loop.
+ */
+static crypto_req_cont_func crypto_finished;
+
+static void crypto_finished(struct state *st,
+			    struct msg_digest **mdp,
+			    struct pluto_crypto_req *r)
+{
+	stf_status status = r->pcr_d.crypto.handler->completed_callback(st, *mdp,
+									&r->pcr_d.crypto.task);
+	pexpect(r->pcr_d.crypto.task == NULL);
+	switch (st->st_ike_version) {
+	case IKEv1:
+		complete_v1_state_transition(mdp, status);
+		break;
+	case IKEv2:
+		complete_v2_state_transition(st, mdp, status);
+		break;
+	default:
+		bad_case(st->st_ike_version);
+	}
+}
+
+void submit_crypto(struct state *st,
+		   struct crypto_task *crypto_task,
+		   const struct crypto_handler *crypto_handler,
+		   const char *name)
+{
+	struct pluto_crypto_req_cont *cn = new_pcrc(crypto_finished, name);
+	struct pluto_crypto_req *r = &cn->pcrc_pcr;
+	pcr_init(r, pcr_crypto);
+	r->pcr_d.crypto.task = crypto_task;
+	r->pcr_d.crypto.handler = crypto_handler;
+	send_crypto_helper_request(st, cn);
 }

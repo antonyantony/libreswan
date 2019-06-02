@@ -5,6 +5,7 @@
  * Copyright (C) 2005-2006 Michael Richardson <mcr@xelerance.com>
  * Copyright (C) 2007-2009 Paul Wouters <paul@xelerance.com>
  * Copyright (C) 2008 David McCullough <david_mccullough@securecomputing.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -195,8 +196,7 @@ struct raw_iface *find_raw_ifaces4(void)
 
 		/* ignore if our interface names were specified, and this isn't one - for KLIPS/MAST only */
 		if (pluto_ifn_roof != 0 &&
-		    (kern_interface == USE_MASTKLIPS ||
-		     kern_interface == USE_KLIPS)) {
+		    kern_interface == USE_KLIPS) {
 			int i;
 
 			DBG(DBG_CONTROLMORE,
@@ -264,6 +264,81 @@ struct raw_iface *find_raw_ifaces4(void)
 	free(buf);	/* was allocated via realloc() */
 	close(master_sock);
 	return rifaces;
+}
+
+static int cmp_iface(const void *lv, const void *rv)
+{
+	const struct raw_iface *const *ll = lv;
+	const struct raw_iface *const *rr = rv;
+	const struct raw_iface *l = *ll;
+	const struct raw_iface *r = *rr;
+	/* return l - r */
+	int i;
+	/* protocol */
+	i = addrtypeof(&l->addr) - addrtypeof(&r->addr);
+	if (i != 0) {
+		return i;
+	}
+	/* loopback=0 < addr=1 < any=2 < ??? */
+#define SCORE(I) (isloopbackaddr(&I->addr) ? 0				\
+		  : isanyaddr(&I->addr) ? 2				\
+		  : 1)
+	i = SCORE(l) - SCORE(r);
+	if (i != 0) {
+		return i;
+	}
+#undef SCORE
+	/* name */
+	i = strcmp(l->name, r->name);
+	if (i != 0) {
+		return i;
+	}
+	/*
+	 * address
+	 */
+	i = addrcmp(&l->addr, &r->addr);
+	if (i != 0) {
+		return i;
+	}
+	/* port */
+	i = hportof(&l->addr) - hportof(&r->addr);
+	if (i != 0) {
+		return i;
+	}
+	/* what else */
+	dbg("interface sort not stable or duplicate");
+	return 0;
+}
+
+static void sort_ifaces(struct raw_iface **rifaces)
+{
+	/* how many? */
+	unsigned nr_ifaces = 0;
+	for (struct raw_iface *i = *rifaces; i != NULL; i = i->next) {
+		nr_ifaces++;
+	}
+	if (nr_ifaces == 0) {
+		dbg("no interfaces to sort");
+		return;
+	}
+	/* turn the list into an array */
+	struct raw_iface **ifaces = alloc_things(struct raw_iface *, nr_ifaces,
+						 "ifaces for sorting");
+	ifaces[0] = *rifaces;
+	for (unsigned i = 1; i < nr_ifaces; i++) {
+		ifaces[i] = ifaces[i-1]->next;
+	}
+	/* sort */
+	dbg("sorting %u interfaces", nr_ifaces);
+	qsort(ifaces, nr_ifaces, sizeof(ifaces[0]), cmp_iface);
+	/* turn the array back into a list */
+	for (unsigned i = 0; i < nr_ifaces - 1; i++) {
+		ifaces[i]->next = ifaces[i+1];
+	}
+	ifaces[nr_ifaces-1]->next = NULL;
+	/* clean up and return */
+	*rifaces = ifaces[0];
+	pfree(ifaces);
 }
 
 struct raw_iface *find_raw_ifaces6(void)
@@ -348,6 +423,16 @@ struct raw_iface *find_raw_ifaces6(void)
 			}
 		}
 		fclose(proc_sock);
+		/*
+		 * Sort the list by IPv6 address in assending order.
+		 *
+		 * XXX: The code then inserts these interfaces in
+		 * _reverse_ order (why I don't know) - the loop-back
+		 * interface ends up last.  Should the insert code
+		 * (scattered between kernel_*.c files) instead
+		 * maintain the "interfaces" structure?
+		 */
+		sort_ifaces(&rifaces);
 	}
 
 	return rifaces;

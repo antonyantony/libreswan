@@ -174,10 +174,6 @@ conn northnet-eastnet-ipv4
 	also=northnet-ipv4
 	also=eastnet-ipv4
 
-conn rad-eastnet-fqdn-ikev2
-	also=rad-eastnet-fqdn
-	ikev2=insist
-
 conn road-eastnet
 	also=road-east-base
 	also=road-east-base-id-nss
@@ -187,10 +183,6 @@ conn rad-eastnet-fqdn
 	also=road-east-base-fqdn-default-route
 	also=road-east-base-id-nss
 	also=eastnet-ipv4
-
-conn westnet-eastnet-fqdn-ikev2
-	also=westnet-eastnet-fqdn
-	ikev2=insist
 
 conn westnet-eastnet-fqdn
 	also=west-east-base-fqdn
@@ -339,7 +331,7 @@ conn west-leftrsasigkey
 
 conn road-leftrsasigkey
 	leftrsasigkey=0sAQPHFfpyJ3Ck4fMKcCH5DD/iZRKH2f0Sy6/U4MLj3Xeg76rH1qKyMPJksMXmx6cnF1R6jjLJrP2/j7MzuXR0c90jgxFT1tSRDjZ+Z/yJHkis6douZp1uT+KYp9xBs6Q39QepnCNpg1SHe+oAp1urLUE00aMXHqdkLX//RXpdhVxz3WPnQK3rceZfIUOA9SNMPUoRLMqa1nnFwlFur8NumfUmHGfuij4wS8GTp5I0Noy/5tDT/ngLCmQERMqMg/3xLrUAdmGm3vFZZyttwlfg8n1rn9NGQYwxwv3EYHIIO7tW+wH8HVdOz3wPxG9ybyoO8zDboID5cMy7B6n513aZY0tqDxo3lcub6hf3VWJrioMF/0N4V929CIWc8WI1bmnHBAtLxBvSOImM3lbQyCxRVDIbfSfczTd6Tssa7NLOSO1DSJyK/DCfsVccqZjlhJNs2k3MleP18qWznXCuJI0IOw+M6Vql8E2cPC9/vBCVNByWdCn8q/uPS3GqCya18DKYkGr9MfWr
-        
+
 conn road-leftckaid
         leftckaid=1a15cce89273439c2bf4202ac1066ef259b0ef45
 
@@ -482,14 +474,14 @@ conn west-east-x509
         # Left security gateway, subnet behind it, next hop toward right.
         left=192.1.2.45
         leftrsasigkey=%cert
-        leftcert=west
+        #leftcert=west
         leftnexthop=192.1.2.23
         leftid=%fromcert
         # Right security gateway, subnet behind it, next hop toward left.
         right=192.1.2.23
         rightid=%fromcert
         rightrsasigkey=%cert
-        rightcert=east
+        #rightcert=east
         rightnexthop=192.1.2.45
 
 conn road-east-x509

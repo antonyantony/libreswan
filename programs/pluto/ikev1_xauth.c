@@ -5,13 +5,13 @@
  * Copyright (C) 2003-2004 Xelerance Corporation
  * Copyright (C) 2009 Ken Wilson <Ken_Wilson@securecomputing.com>
  * Copyright (C) 2009 Avesh Agarwal <avagarwa@redhat.com>
- * Copyright (C) 2010,2013 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2010-2019 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2012 Wes Hardaker <opensource@hardakers.net>
- * Copyright (C) 2012-2013 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2012-2019 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2012-2013 Philippe Vouters <philippe.vouters@laposte.net>
  * Copyright (C) 2013 David McCullough <ucdevel@gmail.com>
  * Copyright (C) 2013 Antony Antony <antony@phenome.org>
- * Copyright (C) 2017 Andrew Cagney
+ * Copyright (C) 2017-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -77,6 +77,7 @@
 #include "ip_address.h"
 #include "send.h"		/* for send without recording */
 #include "ikev1_send.h"
+#include "af_info.h"
 
 /* forward declarations */
 static stf_status xauth_client_ackstatus(struct state *st,
@@ -205,8 +206,9 @@ static size_t xauth_mode_cfg_hash(u_char *dest,
 	struct hmac_ctx ctx;
 
 	hmac_init(&ctx, st->st_oakley.ta_prf, st->st_skeyid_a_nss);
-	hmac_update(&ctx, (const u_char *) &st->st_msgid_phase15,
-		    sizeof(st->st_msgid_phase15));
+	passert(sizeof(msgid_t) == sizeof(uint32_t));
+	msgid_t raw_msgid = htonl(st->st_msgid_phase15);
+	hmac_update(&ctx, (const void *)&raw_msgid, sizeof(raw_msgid));
 	hmac_update(&ctx, start, roof - start);
 	hmac_final(dest, &ctx);
 
@@ -533,8 +535,8 @@ static stf_status modecfg_send_set(struct state *st)
 			hdr.isa_flags |= ISAKMP_FLAGS_RESERVED_BIT6;
 		}
 
-		memcpy(hdr.isa_icookie, st->st_icookie, COOKIE_SIZE);
-		memcpy(hdr.isa_rcookie, st->st_rcookie, COOKIE_SIZE);
+		hdr.isa_ike_initiator_spi = st->st_ike_spis.initiator;
+		hdr.isa_ike_responder_spi = st->st_ike_spis.responder;
 
 		if (!out_struct(&hdr, &isakmp_hdr_desc, &reply, &rbody))
 			return STF_INTERNAL_ERROR;
@@ -567,10 +569,10 @@ static stf_status modecfg_send_set(struct state *st)
 	/* Transmit */
 	record_and_send_v1_ike_msg(st, &reply, "ModeCfg set");
 
-	if (st->st_event->ev_type != EVENT_v1_RETRANSMIT &&
+	if (st->st_event->ev_type != EVENT_RETRANSMIT &&
 	    st->st_event->ev_type != EVENT_NULL) {
 		delete_event(st);
-		start_retransmits(st, EVENT_v1_RETRANSMIT);
+		start_retransmits(st);
 	}
 
 	return STF_OK;
@@ -629,8 +631,8 @@ stf_status xauth_send_request(struct state *st)
 		if (IMPAIR(SEND_BOGUS_ISAKMP_FLAG)) {
 			hdr.isa_flags |= ISAKMP_FLAGS_RESERVED_BIT6;
 		}
-		memcpy(hdr.isa_icookie, st->st_icookie, COOKIE_SIZE);
-		memcpy(hdr.isa_rcookie, st->st_rcookie, COOKIE_SIZE);
+		hdr.isa_ike_initiator_spi = st->st_ike_spis.initiator;
+		hdr.isa_ike_responder_spi = st->st_ike_spis.responder;
 
 		if (!out_struct(&hdr, &isakmp_hdr_desc, &reply, &rbody))
 			return STF_INTERNAL_ERROR;
@@ -700,9 +702,9 @@ stf_status xauth_send_request(struct state *st)
 		}
 	}
 
-	if (st->st_event->ev_type != EVENT_v1_RETRANSMIT) {
+	if (st->st_event->ev_type != EVENT_RETRANSMIT) {
 		delete_event(st);
-		start_retransmits(st, EVENT_v1_RETRANSMIT);
+		start_retransmits(st);
 	}
 
 	return STF_OK;
@@ -743,8 +745,8 @@ stf_status modecfg_send_request(struct state *st)
 			hdr.isa_flags |= ISAKMP_FLAGS_RESERVED_BIT6;
 		}
 
-		memcpy(hdr.isa_icookie, st->st_icookie, COOKIE_SIZE);
-		memcpy(hdr.isa_rcookie, st->st_rcookie, COOKIE_SIZE);
+		hdr.isa_ike_initiator_spi = st->st_ike_spis.initiator;
+		hdr.isa_ike_responder_spi = st->st_ike_spis.responder;
 
 		if (!out_struct(&hdr, &isakmp_hdr_desc, &reply, &rbody))
 			return STF_INTERNAL_ERROR;
@@ -798,9 +800,9 @@ stf_status modecfg_send_request(struct state *st)
 	/* Transmit */
 	record_and_send_v1_ike_msg(st, &reply, "modecfg: req");
 
-	if (st->st_event->ev_type != EVENT_v1_RETRANSMIT) {
+	if (st->st_event->ev_type != EVENT_RETRANSMIT) {
 		delete_event(st);
-		start_retransmits(st, EVENT_v1_RETRANSMIT);
+		start_retransmits(st);
 	}
 	st->hidden_variables.st_modecfg_started = TRUE;
 
@@ -841,8 +843,8 @@ static stf_status xauth_send_status(struct state *st, int status)
 		if (IMPAIR(SEND_BOGUS_ISAKMP_FLAG)) {
 			hdr.isa_flags |= ISAKMP_FLAGS_RESERVED_BIT6;
 		}
-		memcpy(hdr.isa_icookie, st->st_icookie, COOKIE_SIZE);
-		memcpy(hdr.isa_rcookie, st->st_rcookie, COOKIE_SIZE);
+		hdr.isa_ike_initiator_spi = st->st_ike_spis.initiator;
+		hdr.isa_ike_responder_spi = st->st_ike_spis.responder;
 
 		if (!out_struct(&hdr, &isakmp_hdr_desc, &reply, &rbody))
 			return STF_INTERNAL_ERROR;
@@ -886,7 +888,7 @@ static stf_status xauth_send_status(struct state *st, int status)
 	/* Set up a retransmission event, half a minute hence */
 	/* Schedule retransmit before sending, to avoid race with master thread */
 	delete_event(st);
-	start_retransmits(st, EVENT_v1_RETRANSMIT);
+	start_retransmits(st);
 
 	/* Transmit */
 	record_and_send_v1_ike_msg(st, &reply, "XAUTH: status");
@@ -1059,17 +1061,12 @@ static bool do_file_authentication(struct state *st, const char *name,
 		    (connectionname == NULL || streq(connectionname, connname)))
 		{
 			const char *cp;
-#if defined(__CYGWIN32__)
-			/* password is in the clear! */
-			cp = password;
-#else
 			/*
 			 * keep the passwords using whatever utilities
 			 * we have NOTE: crypt() may not be
 			 * thread-safe
 			 */
 			cp = crypt(password, passwdhash);
-#endif
 			win = cp != NULL && streq(cp, passwdhash);
 
 			DBG(DBG_PRIVATE,
@@ -1207,10 +1204,8 @@ static void xauth_launch_authent(struct state *st,
 
 	/*
 	 * For XAUTH, we're flipping between retransmitting the packet
-	 * in the retransmit slot, and the XAUTH packet, two
-	 * alternative events can be outstanding.
-	 *
-	 * Cancel both.
+	 * in the retransmit slot, and the XAUTH packet.
+	 * Two alternative events can be outstanding. Cancel both.
 	 */
 	delete_event(st);
 	delete_state_event(st, &st->st_send_xauth_event);
@@ -1220,7 +1215,7 @@ static void xauth_launch_authent(struct state *st,
 	case XAUTHBY_PAM:
 		libreswan_log("XAUTH: PAM authentication method requested to authenticate user '%s'",
 			      arg_name);
-		xauth_start_pam_thread(st,
+		xauth_fork_pam_process(st,
 				       arg_name, arg_password,
 				       "XAUTH",
 				       ikev1_xauth_callback);
@@ -1280,8 +1275,8 @@ stf_status xauth_inR0(struct state *st, struct msg_digest *md)
 	 * references to parts of the input packet.
 	 */
 	static unsigned char unknown[] = "<unknown>";	/* never written to */
-	chunk_t name,
-		password = empty_chunk;
+	chunk_t name;
+	chunk_t password = EMPTY_CHUNK;
 	bool gotname = FALSE,
 		gotpassword = FALSE;
 
@@ -1819,7 +1814,6 @@ stf_status modecfg_inR1(struct state *st, struct msg_digest *md)
 			case INTERNAL_IP4_DNS | ISAKMP_ATTR_AF_TLV:
 			{
 				ip_address a;
-				char ipstr[SUBNETTOT_BUF];
 
 				uint32_t *ap =
 					(uint32_t *)(strattr.cur);
@@ -1829,11 +1823,12 @@ stf_status modecfg_inR1(struct state *st, struct msg_digest *md)
 				memcpy(&a.u.v4.sin_addr.s_addr, ap,
 				       sizeof(a.u.v4.sin_addr.s_addr));
 
-				addrtot(&a, 0, ipstr, sizeof(ipstr));
+				ip_address_buf a_buf;
+				const char *a_str = ipstr(&a, &a_buf);
 				loglog(RC_INFORMATIONAL, "Received DNS server %s",
-					ipstr);
+				       a_str);
 
-				append_st_cfg_dns(st, ipstr);
+				append_st_cfg_dns(st, a_str);
 
 				resp |= LELEM(attr.isaat_af_type & ISAKMP_ATTR_RTYPE_MASK);
 				break;
@@ -1914,16 +1909,16 @@ stf_status modecfg_inR1(struct state *st, struct msg_digest *md)
 								"remote subnets policies");
 							sr->spd_next = NULL;
 
-							sr->this.id.name = empty_chunk;
-							sr->that.id.name = empty_chunk;
+							sr->this.id.name = EMPTY_CHUNK;
+							sr->that.id.name = EMPTY_CHUNK;
 
 							sr->this.host_addr_name = NULL;
 							sr->that.client = subnet;
 							sr->this.cert.ty = CERT_NONE;
 							sr->that.cert.ty = CERT_NONE;
 
-							sr->this.ca.ptr = NULL;
-							sr->that.ca.ptr = NULL;
+							sr->this.ca = EMPTY_CHUNK;
+							sr->that.ca = EMPTY_CHUNK;
 
 							sr->this.virt = NULL;
 							sr->that.virt = NULL;
@@ -2054,7 +2049,7 @@ static stf_status xauth_client_resp(struct state *st,
 						if (!fd_p(st->st_whack_sock)) {
 							loglog(RC_LOG_SERIOUS,
 							       "XAUTH username requested, but no file descriptor available for prompt");
-							return STF_FAIL;
+							return STF_FATAL;
 						}
 
 						if (!whack_prompt_for(st->
@@ -2067,7 +2062,7 @@ static stf_status xauth_client_resp(struct state *st,
 						{
 							loglog(RC_LOG_SERIOUS,
 							       "XAUTH username prompt failed.");
-							return STF_FAIL;
+							return STF_FATAL;
 						}
 						/* replace the first newline character with a string-terminating \0. */
 						char *cptr = memchr(
@@ -2107,7 +2102,6 @@ static stf_status xauth_client_resp(struct state *st,
 					{
 						struct secret *s =
 							lsw_get_xauthsecret(
-								st->st_connection,
 								st->st_xauth_username);
 
 						DBG(DBG_CONTROLMORE,
@@ -2139,7 +2133,7 @@ static stf_status xauth_client_resp(struct state *st,
 						if (!fd_p(st->st_whack_sock)) {
 							loglog(RC_LOG_SERIOUS,
 							       "XAUTH password requested, but no file descriptor available for prompt");
-							return STF_FAIL;
+							return STF_FATAL;
 						}
 
 						if (!whack_prompt_for(st->
@@ -2152,7 +2146,7 @@ static stf_status xauth_client_resp(struct state *st,
 						{
 							loglog(RC_LOG_SERIOUS,
 							       "XAUTH password prompt failed.");
-							return STF_FAIL;
+							return STF_FATAL;
 						}
 
 						/* replace the first newline character with a string-terminating \0. */
@@ -2163,11 +2157,11 @@ static stf_status xauth_client_resp(struct state *st,
 							if (cptr != NULL)
 								*cptr = '\0';
 						}
-						clonereplacechunk(
-							st->st_xauth_password,
-							xauth_password,
-							strlen(xauth_password),
-							"XAUTH password");
+						/* see above */
+						pexpect(st->st_xauth_password.ptr == NULL);
+						st->st_xauth_password = clone_bytes_as_chunk(xauth_password,
+											     strlen(xauth_password),
+											     "XAUTH password");
 						discard_pw = TRUE;
 					}
 

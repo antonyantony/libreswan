@@ -11,15 +11,16 @@
     INC_RCDEFAULT=%{_initrddir} \\\
     INC_USRLOCAL=%{_prefix} \\\
     INITSYSTEM=systemd \\\
-    NSS_REQ_AVA_COPY=false \\\
     USE_DNSSEC=true \\\
     USE_FIPSCHECK=true \\\
+    USE_KLIPS=false \\\
     USE_LABELED_IPSEC=true \\\
     USE_LDAP=true \\\
     USE_LIBCAP_NG=true \\\
     USE_LIBCURL=true \\\
     USE_LINUX_AUDIT=true \\\
     USE_NM=true \\\
+    USE_NSS_IPSEC_PROFILE=true \\\
     USE_SECCOMP=true \\\
     USE_XAUTHPAM=true \\\
 %{nil}
@@ -27,9 +28,9 @@
 #global prever rc1
 
 Name: libreswan
-Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
+Summary: Internet Key Exchange (IKEv1 and IKEv2) implementation for IPsec
 # version is generated in the release script
-Version: 3.27
+Version: 3.28
 Release: %{?prever:0.}1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Url: https://libreswan.org/
@@ -85,7 +86,7 @@ decrypted by the gateway at the other end of the tunnel.  The resulting
 tunnel is a virtual private network or VPN.
 
 This package contains the daemons and userland tools for setting up
-Libreswan. To build KLIPS, see the kmod-libreswan.spec file.
+Libreswan.
 
 Libreswan also supports IKEv2 (RFC7296) and Secure Labeling
 
@@ -100,8 +101,11 @@ sed -i "s:/usr/bin/python:/usr/bin/python3:" testing/cert_verify/usage_test
 sed -i "s:/usr/bin/python:/usr/bin/python3:" testing/pluto/ikev1-01-fuzzer/cve-2015-3204.py
 sed -i "s:/usr/bin/python:/usr/bin/python3:" testing/pluto/ikev2-15-fuzzer/send_bad_packets.py
 sed -i "s:/usr/bin/python:/usr/bin/python3:" testing/x509/dist_certs.py
+sed -i "s:/usr/bin/python:/usr/bin/python3:" programs/_unbound-hook/_unbound-hook.in
 # enable crypto-policies support
 sed -i "s:#[ ]*include \(.*\)\(/crypto-policies/back-ends/libreswan.config\)$:include \1\2:" programs/configs/ipsec.conf.in
+# linking to freebl is no longer needed
+sed -i "s/-lfreebl //" mk/config.mk
 
 %build
 %if 0%{with_efence}
@@ -135,6 +139,7 @@ make \
     install
 FS=$(pwd)
 rm -rf %{buildroot}/usr/share/doc/libreswan
+rm -rf %{buildroot}%{_libexecdir}/ipsec/*check
 
 install -d -m 0755 %{buildroot}%{_rundir}/pluto
 # used when setting --perpeerlog without --perpeerlogbase
@@ -144,10 +149,6 @@ install -d %{buildroot}%{_sbindir}
 install -d %{buildroot}%{_sysconfdir}/sysctl.d
 install -m 0644 packaging/fedora/libreswan-sysctl.conf \
     %{buildroot}%{_sysconfdir}/sysctl.d/50-libreswan.conf
-
-install -d %{buildroot}%{_tmpfilesdir}
-install -m 0644 packaging/fedora/libreswan-tmpfiles.conf  \
-    %{buildroot}%{_tmpfilesdir}/libreswan.conf
 
 mkdir -p %{buildroot}%{_libdir}/fipscheck
 
@@ -208,5 +209,5 @@ export NSS_DISABLE_HW_GCM=1
 %{_libdir}/fipscheck/pluto.hmac
 
 %changelog
-* Sun Oct 07 2018 Team Libreswan <team@libreswan.org> - 3.27-1
+* Mon May 20 2019 Team Libreswan <team@libreswan.org> - 3.28-1
 - Automated build from release tar ball

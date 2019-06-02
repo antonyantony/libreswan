@@ -2,8 +2,9 @@
 # IPsec startup and shutdown command
 # Copyright (C) 1998, 1999, 2001  Henry Spencer.
 # Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
-# Copyright (C) 2013-2018 Tuomo Soini <tis@foobar.fi>
+# Copyright (C) 2013-2019 Tuomo Soini <tis@foobar.fi>
 # Copyright (C) 2016 Kim B. Heino <b@bbbs.net>
+# Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -53,8 +54,6 @@ case "$1" in
 	# preliminaries
 	mkdir -p ${rundir}
 	chmod 700 ${rundir} > /dev/null 2>/dev/null
-	# starting a stack will unload any loaded stack first (same or different stack)
-	[ -f /proc/modules ] && ipsec _stackmanager start
 	# Finally start the pluto daemon in a restart loop
 	if [ ${initsystem} = systemd ]; then
 	    systemctl status ipsec.service > /dev/null
@@ -111,7 +110,7 @@ case "$1" in
 
 	# If stack is non-modular, we want to force clean too
 	[ -f /proc/net/pf_key ] && ipsec eroute --clear
-	[ -f /proc/net/pfkey ] && ip xfrm state flush && ip xfrm policy flush
+	[ -f /proc/net/xfrm_stat ] && ip xfrm state flush && ip xfrm policy flush
 
 	# Cleaning up backup resolv.conf
 	if [ -e ${LIBRESWAN_RESOLV_CONF} ]; then

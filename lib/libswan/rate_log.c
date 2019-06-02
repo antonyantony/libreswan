@@ -1,6 +1,6 @@
 /* Rate limit logging, for libreswan
  *
- * Copyright (C) 2018 Andrew Cagney
+ * Copyright (C) 2018-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -30,7 +30,7 @@ void rate_log(const char *fmt, ...)
 			libreswan_log("rate limited log exceed %d entries",
 				      RATE_LIMIT);
 		}
-		LSWDBGP(DBG_MASK, buf) {
+		LSWDBGP(DBG_BASE, buf) {
 			va_list ap;
 			va_start(ap, fmt);
 			lswlogvf(buf, fmt, ap);

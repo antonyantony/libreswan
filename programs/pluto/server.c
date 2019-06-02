@@ -10,7 +10,7 @@
  * Copyright (C) 2010 Tuomo Soini <tis@foobar.fi>
  * Copyright (C) 2012-2017 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 Wolfgang Nothdurft <wolfgang@linogate.de>
- * Copyright (C) 2016 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2016-2019 Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2017 D. Hugh Redelmeier <hugh@mimosa.com>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -84,6 +84,7 @@
 #include "whack.h"              /* for RC_LOG_SERIOUS */
 #include "pluto_crypt.h"        /* cryptographic helper functions */
 #include "udpfromto.h"
+#include "monotime.h"
 
 #include "nat_traversal.h"
 
@@ -253,20 +254,11 @@ static void free_dead_ifaces(void)
 		delete_states_dead_interfaces();
 		for (pp = &interfaces; (p = *pp) != NULL; ) {
 			if (p->change == IFN_DELETE) {
-				struct iface_dev *id;
-
 				*pp = p->next; /* advance *pp */
-
-				if (p->pev != NULL) {
-					delete_pluto_event(&p->pev);
-				}
-
+				delete_pluto_event(&p->pev);
 				close(p->fd);
-
-				id = p->ip_dev;
+				free_dead_iface_dev(p->ip_dev);
 				pfree(p);
-
-				free_dead_iface_dev(id);
 			} else {
 				pp = &p->next; /* advance pp */
 			}
@@ -425,6 +417,222 @@ int create_socket(struct raw_iface *ifp, const char *v_name, int port)
 	return fd;
 }
 
+/*
+ * Static events.
+ */
+
+static void free_static_event(struct event *ev)
+{
+	/*
+	 * "If the event has already executed or has never been added
+	 * the [event_del()] call will have no effect.
+	 */
+	passert(event_del(ev) >= 0);
+	/*
+	 * "When debugging mode is enabled, informs Libevent that an
+	 * event should no longer be considered as assigned."
+	 */
+	event_debug_unassign(ev);
+	zero(ev);
+}
+
+/*
+ * Global timer events.
+ */
+
+struct global_timer {
+	struct event ev;
+	global_timer_cb *cb;
+	const char *name;
+};
+
+static struct global_timer global_timers[GLOBAL_TIMERS_ROOF];
+
+static void global_timer_event(evutil_socket_t fd UNUSED,
+			       const short event,
+			       void *arg)
+{
+	passert(in_main_thread());
+	struct global_timer *gt = arg;
+	passert(event & EV_TIMEOUT);
+	passert(gt >= global_timers);
+	passert(gt < global_timers + elemsof(global_timers));
+	dbg("global timer %s event", gt->name);
+	gt->cb();
+}
+
+void enable_periodic_timer(enum event_type type, global_timer_cb *cb,
+			   deltatime_t period)
+{
+	passert(in_main_thread());
+	passert(type < elemsof(global_timers));
+	struct global_timer *gt = &global_timers[type];
+	/* initialize */
+	passert(!event_initialized(&gt->ev));
+	event_assign(&gt->ev, pluto_eb, (evutil_socket_t)-1,
+		     EV_TIMEOUT|EV_PERSIST, global_timer_event, gt/*arg*/);
+	gt->name = enum_name(&timer_event_names, type);
+	gt->cb = cb;
+	passert(event_get_events(&gt->ev) == (EV_TIMEOUT|EV_PERSIST));
+	/* enable */
+	struct timeval t = deltatimeval(period);
+	passert(event_add(&gt->ev, &t) >= 0);
+	/* log */
+	deltatime_buf buf;
+	dbg("global periodic timer %s enabled with interval of %s seconds",
+	    gt->name, str_deltatime(period, &buf));
+}
+
+void init_oneshot_timer(enum event_type type, global_timer_cb *cb)
+{
+	passert(in_main_thread());
+	passert(type < elemsof(global_timers));
+	struct global_timer *gt = &global_timers[type];
+	passert(!event_initialized(&gt->ev));
+	event_assign(&gt->ev, pluto_eb, (evutil_socket_t)-1,
+		     EV_TIMEOUT, global_timer_event, gt/*arg*/);
+	gt->name = enum_name(&timer_event_names, type);
+	gt->cb = cb;
+	passert(event_get_events(&gt->ev) == (EV_TIMEOUT));
+	dbg("global one-shot timer %s initialized", gt->name);
+}
+
+void schedule_oneshot_timer(enum event_type type, deltatime_t delay)
+{
+	passert(type < elemsof(global_timers));
+	struct global_timer *gt = &global_timers[type];
+	deltatime_buf buf;
+	dbg("global one-shot timer %s scheduled in %s seconds",
+	    gt->name, str_deltatime(delay, &buf));
+	passert(event_initialized(&gt->ev));
+	passert(event_get_events(&gt->ev) == (EV_TIMEOUT));
+	struct timeval t = deltatimeval(delay);
+	passert(event_add(&gt->ev, &t) >= 0);
+}
+
+/* urban dictionary says deschedule is a word */
+void deschedule_oneshot_timer(enum event_type type)
+{
+	passert(type < elemsof(global_timers));
+	struct global_timer *gt = &global_timers[type];
+	dbg("global one-shot timer %s disabled", gt->name);
+	passert(event_initialized(&gt->ev));
+	passert(event_del(&gt->ev) >= 0);
+}
+
+static void free_global_timers(void)
+{
+	for (unsigned u = 0; u < elemsof(global_timers); u++) {
+		struct global_timer *gt = &global_timers[u];
+		if (event_initialized(&gt->ev)) {
+			free_static_event(&gt->ev);
+			dbg("global timer %s uninitialized", gt->name);
+		}
+	}
+}
+
+static void list_global_timers(monotime_t now)
+{
+	for (unsigned u = 0; u < elemsof(global_timers); u++) {
+		struct global_timer *gt = &global_timers[u];
+		/*
+		 * XXX: DUE.mt is "set to hold the time at which the
+		 * timeout will expire" which is presumably a time and
+		 * not a delay (event_add() takes a delay).
+		*/
+		monotime_t due = monotime_epoch;
+		if (event_initialized(&gt->ev) &&
+		    event_pending(&gt->ev, EV_TIMEOUT, &due.mt) > 0) {
+			const char *what = (event_get_events(&gt->ev) & EV_PERSIST) ? "periodic" : "one-shot";
+			deltatime_t delay = monotimediff(due, now);
+			deltatime_buf delay_buf;
+			whack_log(RC_LOG, "global %s timer %s is scheduled for %jd (in %s seconds)",
+				  what, gt->name,
+				  monosecs(due), /* XXX: useful? */
+				  str_deltatime(delay, &delay_buf));
+		}
+	}
+}
+
+/*
+ * Global signal events.
+ */
+
+typedef void (signal_handler_cb)(void);
+
+struct signal_handler {
+	struct event ev;
+	signal_handler_cb *cb;
+	int signal;
+	bool persist;
+	const char *name;
+};
+
+static signal_handler_cb childhandler_cb;
+static signal_handler_cb termhandler_cb;
+static signal_handler_cb huphandler_cb;
+#ifdef HAVE_SECCOMP
+static signal_handler_cb syshandler_cb;
+#endif
+
+static struct signal_handler signal_handlers[] = {
+	{ .signal = SIGCHLD, .cb = childhandler_cb, .persist = true, .name = "PLUTO_SIGCHLD", },
+	{ .signal = SIGTERM, .cb = termhandler_cb, .persist = false, .name = "PLUTO_SIGTERM", },
+	{ .signal = SIGHUP, .cb = huphandler_cb, .persist = true, .name = "PLUTO_SIGHUP", },
+#ifdef HAVE_SECCOMP
+	{ .signal = SIGSYS, .cb = syshandler_cb, .persist = true, .name = "PLUTO_SIGSYS", },
+#endif
+};
+
+static void signal_handler_handler(evutil_socket_t fd UNUSED,
+				 const short event,
+				 void *arg)
+{
+	passert(in_main_thread());
+	struct signal_handler *se = arg;
+	passert(event & EV_SIGNAL);
+	dbg("signal %s event", se->name);
+	se->cb();
+}
+
+static void install_signal_handlers(void)
+{
+	for (unsigned i = 0; i < elemsof(signal_handlers); i++) {
+		struct signal_handler *se = &signal_handlers[i];
+		passert(!event_initialized(&se->ev));
+		event_assign(&se->ev, pluto_eb, (evutil_socket_t)se->signal,
+			     EV_SIGNAL | (se->persist ? EV_PERSIST : 0),
+			     signal_handler_handler, se);
+		passert(event_add(&se->ev, NULL) >= 0);
+		dbg("signal event handler %s installed", se->name);
+	}
+}
+
+static void free_signal_handlers(void)
+{
+	for (unsigned i = 0; i < elemsof(signal_handlers); i++) {
+		struct signal_handler *se = &signal_handlers[i];
+		passert(event_initialized(&se->ev));
+		free_static_event(&se->ev);
+		dbg("signal event handler %s uninstalled", se->name);
+	}
+}
+
+static void list_signal_handlers(void)
+{
+	for (unsigned i = 0; i < elemsof(signal_handlers); i++) {
+		struct signal_handler *se = &signal_handlers[i];
+		if (event_initialized(&se->ev) &&
+		    event_pending(&se->ev, EV_SIGNAL, NULL) > 0) {
+			whack_log(RC_LOG, "signal event handler %s", se->name);
+		}
+	}
+}
+
+/*
+ * Pluto events.
+ */
+
 static struct pluto_event *free_event_entry(struct pluto_event **evp)
 {
 	struct pluto_event *e = *evp;
@@ -445,25 +653,36 @@ static struct pluto_event *free_event_entry(struct pluto_event **evp)
 	return next;
 }
 
-static void unlink_pluto_event_list(struct pluto_event **evp) {
-	struct pluto_event **pp;
-	struct pluto_event *p;
-	struct pluto_event *e = *evp;
-
-	for (pp = &pluto_events_head; (p = *pp) != NULL; pp = &p->next) {
-		if (p == e) {
-			*pp = free_event_entry(evp); /* unlink this entry from the list */
-			return;
-		}
-	}
-}
-
 void free_pluto_event_list(void)
 {
 	struct pluto_event **head = &pluto_events_head;
 	while (*head != NULL)
 		*head = free_event_entry(head);
+	free_global_timers();
+	free_signal_handlers();
 
+	dbg("releasing event base");
+	event_base_free(pluto_eb);
+	pluto_eb = NULL;
+#if LIBEVENT_VERSION_NUMBER >= 0x02010100
+	/*
+	 * Release any global event data such as that allocated by
+	 * evthread_use_pthreads().
+	 *
+	 * The function was added to the code base in 2011 and was
+	 * first published in April 2012 as part of 2.1.1-alpha (aka
+	 * above magic number). The first stable release was
+	 * 2.1.8-stable in January 2017.
+	 *
+	 * As of 2019, the following OSs are known to not include the
+	 * function: RHEL 7.6 / CentOS 7.x (2.0.21-stable); Ubuntu
+	 * 16.04.6 LTS (Xenial Xerus) (2.0.21-stable).
+	 */
+	dbg("releasing global libevent data");
+	libevent_global_shutdown();
+#else
+	dbg("leaking global libevent data (libevent is old)");
+#endif
 }
 
 void link_pluto_event_list(struct pluto_event *e) {
@@ -471,14 +690,29 @@ void link_pluto_event_list(struct pluto_event *e) {
 	pluto_events_head = e;
 }
 
+/* delete pluto event (if any); leave *evp == NULL */
 void delete_pluto_event(struct pluto_event **evp)
 {
-	if (*evp == NULL) {
-		DBG(DBG_CONTROLMORE, DBG_log("%s cannot delete NULL event", __func__));
-		return;
-	}
+	if (*evp != NULL) {
+		if ((*evp)->ev_state != NULL) {
+			pexpect((*evp)->next == NULL);
+			free_event_entry(evp);
+		} else {
+			for (struct pluto_event **pp = &pluto_events_head; ; ) {
+				struct pluto_event *p = *pp;
 
-	unlink_pluto_event_list(evp);
+				passert(p != NULL);
+
+				if (p == *evp) {
+					/* found it; unlink this from the list */
+					*pp = free_event_entry(evp);
+					break;
+				}
+				pp = &p->next;
+			}
+			*evp = NULL;
+		}
+	}
 }
 
 /*
@@ -514,6 +748,26 @@ static void fire_event_photon_torpedo(struct event **evp,
 	passert(r >= 0);
 }
 
+void fire_timer_photon_torpedo(struct event **evp,
+			       event_callback_fn cb, void *arg,
+			       const deltatime_t delay)
+{
+	struct event *ev = event_new(pluto_eb, (evutil_socket_t)-1,
+				     EV_TIMEOUT, cb, arg);
+	passert(ev != NULL);
+	/*
+	 * Because this code can run on the non-main thread, the EV
+	 * timer-event must be saved in its final destination before
+	 * the event is enabled.
+	 *
+	 * Otherwise the event on the main thread will try to use EV
+	 * before it has been saved by the helper thread.
+	 */
+	*evp = ev;
+	struct timeval t = deltatimeval(delay);
+	passert(event_add(ev, &t) >= 0);
+}
+
 /*
  * Schedule an event now.
  *
@@ -538,9 +792,8 @@ static void schedule_event_now_cb(evutil_socket_t fd UNUSED,
 				  void *arg)
 {
 	struct now_event *ne = (struct now_event *)arg;
-	DBG(DBG_CONTROLMORE,
-	    DBG_log("executing now-event %s for %lu",
-		    ne->ne_name, ne->ne_serialno));
+	dbg("start executing now-event %s for #%lu",
+	    ne->ne_name, ne->ne_serialno);
 
 	/*
 	 * At one point, .ne_event was was being set after the event
@@ -561,7 +814,9 @@ static void schedule_event_now_cb(evutil_socket_t fd UNUSED,
 		pop_cur_state(old_state);
 	}
 	passert(ne->ne_event != NULL);
-	event_del(ne->ne_event);
+	dbg("stop executing now-event %s for #%lu",
+	    ne->ne_name, ne->ne_serialno);
+	event_free(ne->ne_event);
 	pfree(ne);
 }
 
@@ -578,27 +833,12 @@ void pluto_event_now(const char *name, so_serial_t serialno,
 		    ne->ne_name, ne->ne_serialno));
 
 	/*
-	 * Everything set up; arm and fire torpedo.  Event may have
-	 * even run before the below function returns.
+	 * Everything set up; arm and fire the timer's photon torpedo.
+	 * Event may have even run on another thread before the below
+	 * call returns.
 	 */
-	static const deltatime_t no_delay = DELTATIME_INIT(0);
-	fire_event_photon_torpedo(&ne->ne_event,
-				  NULL_FD, EV_TIMEOUT,
-				  schedule_event_now_cb, ne,
-				  &no_delay);
-}
-
-/*
- * XXX: custom version of event new used only by timer.c.  If you're
- * looking for how to set up a timer, then don't look here and don't
- * look at timer.c.  Why?
- */
-void timer_private_pluto_event_new(struct event **evp,
-				   evutil_socket_t fd, short events,
-				   event_callback_fn cb, void *arg,
-				   deltatime_t delay)
-{
-	fire_event_photon_torpedo(evp, fd, events, cb, arg, &delay);
+	fire_timer_photon_torpedo(&ne->ne_event, schedule_event_now_cb, ne,
+				  deltatime(0)/*now*/);
 }
 
 struct pluto_event *pluto_event_add(evutil_socket_t fd, short events,
@@ -607,6 +847,7 @@ struct pluto_event *pluto_event_add(evutil_socket_t fd, short events,
 				    const char *name)
 {
 	struct pluto_event *e = alloc_thing(struct pluto_event, name);
+	dbg("%s: new %s-pe@%p", __func__, name, e);
 	e->ev_type = EVENT_NULL;
 	e->ev_name = name;
 	link_pluto_event_list(e);
@@ -614,7 +855,7 @@ struct pluto_event *pluto_event_add(evutil_socket_t fd, short events,
 		e->ev_time = monotimesum(mononow(), *delay);
 	}
 	fire_event_photon_torpedo(&e->ev, fd, events, cb, arg, delay);
-	return e; /* compaitable with pluto_event_new for the time being */
+	return e; /* compatible with pluto_event_new for the time being */
 }
 
 /*
@@ -622,22 +863,17 @@ struct pluto_event *pluto_event_add(evutil_socket_t fd, short events,
  */
 void timer_list(void)
 {
-	monotime_t nw;
-	struct pluto_event *ev = pluto_events_head;
-
-	if (ev == NULL) {
-		/* Just paranoid */
-		whack_log(RC_LOG, "no events are queued");
-		return;
-	}
-
-	nw = mononow();
+	monotime_t nw = mononow();
 
 	whack_log(RC_LOG, "It is now: %jd seconds since monotonic epoch",
 		  monosecs(nw));
 
-	while (ev != NULL) {
-		struct state *st = ev->ev_state;
+	list_global_timers(nw);
+	list_signal_handlers();
+
+	for (struct pluto_event *ev = pluto_events_head;
+	     ev != NULL; ev = ev->next) {
+		pexpect(ev->ev_state == NULL);
 		char buf[256] = "not timer based";
 
 		if (ev->ev_type != EVENT_NULL) {
@@ -645,35 +881,21 @@ void timer_list(void)
 				 monosecs(ev->ev_time),
 				 deltasecs(monotimediff(ev->ev_time, nw)));
 		}
-
-		if (st != NULL && st->st_connection != NULL) {
-			char cib[CONN_INST_BUF];
-			whack_log(RC_LOG, "event %s is %s \"%s\"%s #%lu",
-					ev->ev_name, buf,
-					st->st_connection->name,
-					fmt_conn_instance(st->st_connection, cib),
-					st->st_serialno);
-		} else {
-			whack_log(RC_LOG, "event %s is %s", ev->ev_name, buf);
-		}
-
-		ev = ev->next;
+		whack_log(RC_LOG, "event %s is %s", ev->ev_name, buf);
 	}
+
+	list_state_events(nw);
 }
 
 void find_ifaces(bool rm_dead)
 {
-	struct iface_port *ifp;
-
 	if (rm_dead)
 		mark_ifaces_dead();
 
-	if (kernel_ops->process_ifaces != NULL) {
-#if !defined(__CYGWIN32__)
-		kernel_ops->process_ifaces(find_raw_ifaces4());
-		kernel_ops->process_ifaces(find_raw_ifaces6());
-#endif
-		kernel_ops->process_ifaces(static_ifn);
+	if (kernel_ops->process_raw_ifaces != NULL) {
+		kernel_ops->process_raw_ifaces(find_raw_ifaces4());
+		kernel_ops->process_raw_ifaces(find_raw_ifaces6());
+		kernel_ops->process_raw_ifaces(static_ifn);
 	}
 
 	if (rm_dead)
@@ -683,24 +905,15 @@ void find_ifaces(bool rm_dead)
 		loglog(RC_LOG_SERIOUS, "no public interfaces found");
 
 	if (listening) {
+		struct iface_port *ifp;
+
 		for (ifp = interfaces; ifp != NULL; ifp = ifp->next) {
-			if (ifp->pev != NULL) {
-				delete_pluto_event(&ifp->pev);
-				DBG_log("refresh. setup callback for interface %s:%u %d",
-						ifp->ip_dev->id_rname, ifp->port,
-						ifp->fd);
-			}
-			char prefix[] ="INTERFACE_FD-";
-			char ifp_str[sizeof(prefix) +
-				strlen(ifp->ip_dev->id_rname) +
-				5 + 1 + 1 /* : + NUL */];
-			snprintf(ifp_str, sizeof(ifp_str), "%s:%u",
-					ifp->ip_dev->id_rname, ifp->port);
+			delete_pluto_event(&ifp->pev);
 			ifp->pev = pluto_event_add(ifp->fd,
 					EV_READ | EV_PERSIST, comm_handle_cb,
-					ifp, NULL, ifp_str);
-			DBG_log("setup callback for interface %s fd %d",
-					ifp_str, ifp->fd);
+					ifp, NULL, "ethX");
+			dbg("setup callback for interface %s:%u fd %d",
+			    ifp->ip_dev->id_rname, ifp->port, ifp->fd);
 		}
 	}
 }
@@ -727,7 +940,6 @@ void show_ifaces_status(void)
 			  p->ip_dev->id_vname, p->ip_dev->id_rname,
 			  ipstr(&p->ip_addr, &b), p->port);
 	}
-	whack_log(RC_COMMENT, " ");     /* spacer */
 }
 
 void show_debug_status(void)
@@ -739,11 +951,7 @@ void show_debug_status(void)
 			lswlog_enum_lset_short(buf, &debug_names,
 					       "+", cur_debugging & DBG_MASK);
 		}
-		if (cur_debugging & IMPAIR_MASK) {
-			lswlogs(buf, " impair: ");
-			lswlog_enum_lset_short(buf, &impair_names,
-					       "+", cur_debugging & IMPAIR_MASK);
-		}
+		lswlog_impairments(buf, " impair: "/*prefix*/, "+");
 	}
 }
 
@@ -763,19 +971,19 @@ void show_fips_status(void)
 		IMPAIR(FORCE_FIPS) ? "enabled [forced]" : "enabled");
 }
 
-static void huphandler_cb(int unused UNUSED, const short event UNUSED, void *arg UNUSED)
+static void huphandler_cb(void)
 {
 	/* logging is probably not signal handling / threa safe */
 	libreswan_log("Pluto ignores SIGHUP -- perhaps you want \"whack --listen\"");
 }
 
-static void termhandler_cb(int unused UNUSED, const short event UNUSED, void *arg UNUSED)
+static void termhandler_cb(void)
 {
 	exit_pluto(PLUTO_EXIT_OK);
 }
 
 #ifdef HAVE_SECCOMP
-static void syshandler_cb(int unused UNUSED, const short event UNUSED, void *arg UNUSED)
+static void syshandler_cb(void)
 {
 	loglog(RC_LOG_SERIOUS, "pluto received SIGSYS - possible SECCOMP violation!");
 	if (pluto_seccomp_mode == SECCOMP_ENABLED) {
@@ -795,6 +1003,7 @@ struct pid_entry {
 	pluto_fork_cb *callback;
 	so_serial_t serialno;
 	const char *name;
+	monotime_t start_time;
 };
 
 static size_t log_pid_entry(struct lswlog *buf, void *data)
@@ -824,7 +1033,6 @@ static struct list_head pid_entry_slots[23];
 
 static struct hash_table pids_hash_table = {
 	.info = {
-		.debug = DBG_CONTROLMORE,
 		.name = "pid table",
 		.log = log_pid_entry,
 	},
@@ -845,6 +1053,7 @@ static void add_pid(const char *name, so_serial_t serialno, pid_t pid,
 	new_pid->context = context;
 	new_pid->serialno = serialno;
 	new_pid->name = name;
+	new_pid->start_time = mononow();
 	add_hash_table_entry(&pids_hash_table,
 			     new_pid, &new_pid->hash_entry);
 }
@@ -907,7 +1116,7 @@ static void log_status(struct lswlog *buf, int status)
 	lswlogs(buf, ")");
 }
 
-static void childhandler_cb(int unused UNUSED, const short event UNUSED, void *arg UNUSED)
+static void childhandler_cb(void)
 {
 	while (true) {
 		int status;
@@ -961,8 +1170,17 @@ static void childhandler_cb(int unused UNUSED, const short event UNUSED, void *a
 				} else {
 					so_serial_t old_state = push_cur_state(st);
 					struct msg_digest *md = unsuspend_md(st);
+					if (DBGP(DBG_CPU_USAGE)) {
+						deltatime_t took = monotimediff(mononow(), pid_entry->start_time);
+						DBG_log("#%lu waited "PRI_DELTATIME" for '%s' fork()",
+							st->st_serialno, pri_deltatime(took),
+							pid_entry->name);
+					}
+					statetime_t start = statetime_start(st);
 					pid_entry->callback(st, &md, status,
 							    pid_entry->context);
+					statetime_stop(&start, "callback for %s",
+						       pid_entry->name);
 					release_any_md(&md);
 					pop_cur_state(old_state);
 				}
@@ -975,7 +1193,48 @@ static void childhandler_cb(int unused UNUSED, const short event UNUSED, void *a
 	}
 }
 
-void init_event_base(void) {
+#ifdef EVENT_SET_MEM_FUNCTIONS_IMPLEMENTED
+static void *libevent_malloc(size_t size)
+{
+	void *ptr = alloc_bytes(size, __func__);
+	dbg("%s: new ptr-libevent@%p size %zu", __func__, ptr, size);
+	return ptr;
+}
+static void *libevent_realloc(void *ptr, size_t size)
+{
+	if (ptr == NULL) {
+		ptr = alloc_bytes(size, __func__);
+		dbg("%s: new ptr-libevent@%p size %zu", __func__, ptr, size);
+		return ptr;
+	} else {
+		/* enough to keep count-pointers.awk happy */
+		dbg("%s: release ptr-libevent@%p", __func__, ptr);
+		resize_bytes(&ptr, size);
+		dbg("%s: new ptr-libevent@%p size %zu", __func__, ptr, size);
+		return ptr;
+	}
+}
+static void libevent_free(void *ptr)
+{
+	dbg("%s: release ptr-libevent@%p", __func__, ptr);
+	pfree(ptr);
+}
+#endif
+
+void init_event_base(void)
+{
+	/*
+	 * "... if you are going to call this function, you should do
+	 * so before any call to any Libevent function that does
+	 * allocation."
+	 */
+#ifdef EVENT_SET_MEM_FUNCTIONS_IMPLEMENTED
+	event_set_mem_functions(libevent_malloc, libevent_realloc,
+				libevent_free);
+	dbg("libevent is using pluto's memory allocator");
+#else
+	dbg("libevent is using its own memory allocator");
+#endif
 	libreswan_log("Initializing libevent in pthreads mode: headers: %s (%" PRIx32 "); library: %s (%" PRIx32 ")",
 		      LIBEVENT_VERSION, (ev_uint32_t)LIBEVENT_VERSION_NUMBER,
 		      event_get_version(), event_get_version_number());
@@ -986,10 +1245,12 @@ void init_event_base(void) {
 	int r = evthread_use_pthreads();
 	passert(r >= 0);
 	/* now do anything */
+	dbg("creating event base");
 	pluto_eb = event_base_new();
 	passert(pluto_eb != NULL);
 	int s = evthread_make_base_notifiable(pluto_eb);
 	passert(s >= 0);
+	dbg("libevent initialized");
 }
 
 /* call_server listens for incoming ISAKMP packets and Whack messages,
@@ -1008,19 +1269,7 @@ void call_server(void)
 	pluto_event_add(ctl_fd, EV_READ | EV_PERSIST, whack_handle_cb, NULL,
 			NULL, "PLUTO_CTL_FD");
 
-	pluto_event_add(SIGCHLD, EV_SIGNAL | EV_PERSIST, childhandler_cb, NULL, NULL,
-			"PLUTO_SIGCHLD");
-
-	pluto_event_add(SIGTERM, EV_SIGNAL, termhandler_cb, NULL, NULL,
-			"PLUTO_SIGTERM");
-
-	pluto_event_add(SIGHUP, EV_SIGNAL|EV_PERSIST, huphandler_cb, NULL,
-			NULL,  "PLUTO_SIGHUP");
-
-#ifdef HAVE_SECCOMP
-	pluto_event_add(SIGSYS, EV_SIGNAL, syshandler_cb, NULL, NULL,
-			"PLUTO_SIGSYS");
-#endif
+	install_signal_handlers();
 
 	/* do_whacklisten() is now done by the addconn fork */
 
@@ -1254,13 +1503,14 @@ static bool check_msg_errqueue(const struct iface_port *ifp, short interest, con
 			sender = find_likely_sender((size_t) packet_len, buffer);
 		}
 
-		if (packet_len > 0) {
-			DBG_cond_dump(DBG_ALL, "rejected packet:\n", buffer,
-			      packet_len);
+		if (DBGP(DBG_BASE)) {
+			if (packet_len > 0) {
+				DBG_dump("rejected packet:\n", buffer,
+					  packet_len);
+			}
+			DBG_dump("control:\n", emh.msg_control,
+				 emh.msg_controllen);
 		}
-
-		DBG_cond_dump(DBG_ALL, "control:\n", emh.msg_control,
-			      emh.msg_controllen);
 
 		/* ??? Andi Kleen <ak@suse.de> and misc documentation
 		 * suggests that name will have the original destination
@@ -1269,8 +1519,9 @@ static bool check_msg_errqueue(const struct iface_port *ifp, short interest, con
 		 * Perhaps in 2.2.18/2.4.0.
 		 */
 		passert(emh.msg_name == &from.sa);
-		DBG_cond_dump(DBG_ALL, "name:\n", emh.msg_name,
-			      emh.msg_namelen);
+		if (DBGP(DBG_BASE)) {
+			DBG_dump("name:\n", emh.msg_name, emh.msg_namelen);
+		}
 
 		fromstr[0] = '\0'; /* usual case :-( */
 		switch (from.sa.sa_family) {

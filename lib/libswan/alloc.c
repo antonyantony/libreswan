@@ -3,7 +3,7 @@
  * Header: "lswalloc.h"
  *
  * Copyright (C) 1998-2001  D. Hugh Redelmeier.
- * Copyright (C) 2017 Andrew Cagney
+ * Copyright (C) 2017-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -176,7 +176,9 @@ void report_leaks(void)
 		pprev = p;
 		p = p->i.older;
 		n++;
-		if (p == NULL || pprev->i.name != p->i.name) {
+		if (p == NULL ||
+		    pprev->i.name != p->i.name ||
+		    pprev->i.size != p->i.size) {
 			/* filter out one-time leaks we prefer to not fix */
 			if (strstr(pprev->i.name, "(ignore)") == NULL) {
 				if (n != 1)
@@ -216,4 +218,38 @@ void *clone_bytes(const void *orig, size_t size, const char *name)
 
 	memcpy(p, orig, size);
 	return p;
+}
+
+/*
+ * Re-size something on the HEAP.
+ *
+ * Unlike the more traditional realloc() this code doesn't allow a
+ * NULL pointer.  The caller, which is presumably implementing some
+ * sort of realloc() wrapper, gets to handle this.  So as to avoid any
+ * confusion, give this a different name and function signature.
+ *
+ * Efficiency isn't this code's strong point.
+ */
+
+void resize_bytes(void **ptr, size_t new_size)
+{
+	void *old = *ptr;
+	passert(old != NULL);
+	if (leak_detective) {
+		const union mhdr *p = ((const union mhdr *)old) - 1;
+		passert(p->i.magic == LEAK_MAGIC);
+		void *new = alloc_bytes_raw(new_size, p->i.name);
+		/*
+		 * XXX: Use PMIN(unsigned long,size_t) and not
+		 * min(unsigned long,size_t) as the latter doesn't
+		 * always compile - 32-bit systems (i.e.,
+		 * sizeof(unsigned long)==4) can have
+		 * sizeof(size_t)==8.
+		 */
+		memcpy(new, old, PMIN(p->i.size, new_size));
+		pfree(old);
+		*ptr = new;
+	} else {
+		*ptr = realloc(old, new_size);
+	}
 }

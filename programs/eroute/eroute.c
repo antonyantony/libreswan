@@ -3,7 +3,8 @@
  * Copyright (C) 1996  John Ioannidis.
  * Copyright (C) 1997, 1998, 1999, 2000, 2001  Richard Guy Briggs.
  * Copyright (C) 2013 - 2017 D. Hugh Redelmeier
- * Copyright (C) 2017 Paul Wouters
+ * Copyright (C) 2017-2019 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -47,6 +48,8 @@
 #include "pfkey_help.h"
 #include "libreswan/pfkey_debug.h"
 #include "ip_address.h"
+#include "ip_said.h"
+#include "ip_subnet.h"
 
 const char *progname;
 static const char me[] = "ipsec eroute";
@@ -178,7 +181,7 @@ int main(int argc, char **argv)
 		switch (c) {
 		case 'g':
 			debug = 1;
-			pfkey_lib_debug = PF_KEY_DEBUG_PARSE_MAX;
+			cur_debugging = DBG_BASE;
 			argcount--;
 			break;
 		case 'a':
@@ -492,7 +495,7 @@ int main(int argc, char **argv)
 	if (argcount == 1) {
 		struct stat sts;
 
-		if (stat("/proc/net/pfkey", &sts) == 0) {
+		if (stat("/proc/net/xfrm_stat", &sts) == 0) {
 			fprintf(stderr,
 				"%s: NETKEY does not support eroute table.\n",
 				progname);

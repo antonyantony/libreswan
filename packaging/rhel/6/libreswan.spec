@@ -8,6 +8,7 @@
 %{!?_rundir:%global _rundir %{_localstatedir}/run}
 # Libreswan config options
 %global libreswan_config \\\
+    WERROR_CFLAGS= \\\
     FINALLIBEXECDIR=%{_libexecdir}/ipsec \\\
     FINALMANDIR=%{_mandir} \\\
     FINALRUNDIR=%{_rundir}/pluto \\\
@@ -17,12 +18,15 @@
     INITSYSTEM=sysvinit \\\
     USE_DNSSEC=%{USE_DNSSEC} \\\
     USE_FIPSCHECK=true \\\
+    USE_KLIPS=false \\\
     USE_LABELED_IPSEC=true \\\
     USE_LDAP=true \\\
     USE_LIBCAP_NG=true \\\
     USE_LIBCURL=true \\\
     USE_LINUX_AUDIT=true \\\
     USE_NM=true \\\
+    USE_NSS_AVA_COPY=true \\\
+    USE_NSS_IPSEC_PROFILE=false \\\
     USE_SECCOMP=false \\\
     USE_XAUTHPAM=true \\\
 %{nil}
@@ -30,8 +34,8 @@
 #global prever rc1
 
 Name: libreswan
-Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
-Version: 3.27
+Summary: Internet Key Exchange (IKEv1 and IKEv2) implementation for IPsec
+Version: 3.28
 Release: %{?prever:0.}1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Url: https://libreswan.org/
@@ -114,7 +118,7 @@ make %{?_smp_mflags} \
 %else
     USERCOMPILE="-g -DGCC_LINT %{optflags} %{?efence} -fPIE -pie -fno-strict-aliasing -Wformat-nonliteral -Wformat-security" \
 %endif
-    USERLINK="-g -pie -Wl,-z,relro,-z,now %{?efence}" \
+    USERLINK="-g -pie -lrt -Wl,-z,relro,-z,now %{?efence}" \
     %{libreswan_config} \
     programs
 FS=$(pwd)
@@ -134,6 +138,7 @@ make \
     install
 FS=$(pwd)
 rm -rf %{buildroot}/usr/share/doc/libreswan
+rm -rf %{buildroot}%{_libexecdir}/ipsec/*check
 
 install -d -m 0755 %{buildroot}%{_rundir}/pluto
 # used when setting --perpeerlog without --perpeerlogbase
@@ -213,5 +218,5 @@ fi
 %{_sysconfdir}/prelink.conf.d/libreswan-fips.conf
 
 %changelog
-* Sun Oct 07 2018 Team Libreswan <team@libreswan.org> - 3.27-1
+* Mon May 20 2019 Team Libreswan <team@libreswan.org> - 3.28-1
 - Automated build from release tar ball

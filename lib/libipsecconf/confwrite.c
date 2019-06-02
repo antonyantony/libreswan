@@ -1,9 +1,9 @@
 /*
  * Libreswan config file writer (confwrite.c)
  * Copyright (C) 2004-2006 Michael Richardson <mcr@xelerance.com>
- * Copyright (C) 2012-2015 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2012-2019 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013-2015 Antony Antony <antony@phenome.org>
- * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2013-2019 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2013 David McCullough <ucdevel@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -290,8 +290,7 @@ static void confwrite_side(FILE *out,
 		break;
 
 	case KH_IPHOSTNAME:
-		if (end->strings_set[KSCF_IP])
-			fprintf(out, "\t%s=%s\n", side, end->strings[KSCF_IP]);
+		fprintf(out, "\t%s=%s\n", side, end->strings[KSCF_IP]);
 		break;
 
 	case KH_IPADDR:
@@ -366,8 +365,8 @@ static void confwrite_side(FILE *out,
 			protostr, portstr);
 	}
 
-	if (end->cert != NULL)
-		fprintf(out, "\t%scert=%s\n", side, end->cert);
+	if (end->certx != NULL)
+		fprintf(out, "\t%scert=%s\n", side, end->certx);
 
 	if (!isanyaddr(&end->sourceip)) {
 		ipstr_buf as;
@@ -375,7 +374,6 @@ static void confwrite_side(FILE *out,
 		fprintf(out, "\t%ssourceip=%s\n",
 			side, ipstr(&end->sourceip, &as));
 	}
-
 	confwrite_int(out, side,
 		      kv_conn | kv_leftright,
 		      end->options, end->options_set, end->strings);
@@ -466,7 +464,6 @@ static void confwrite_conn(FILE *out, struct starter_conn *conn, bool verbose)
 			(conn->policy &
 			 (POLICY_AUTHENTICATE | POLICY_ENCRYPT));
 		lset_t shunt_policy = (conn->policy & POLICY_SHUNT_MASK);
-		lset_t ikev2_policy = (conn->policy & POLICY_IKEV2_MASK);
 		lset_t ppk_policy = (conn->policy & (POLICY_PPK_ALLOW | POLICY_PPK_INSIST));
 		lset_t ike_frag_policy = (conn->policy & POLICY_IKE_FRAG_MASK);
 		static const char *const noyes[2 /*bool*/] = {"no", "yes"};
@@ -542,23 +539,12 @@ static void confwrite_conn(FILE *out, struct starter_conn *conn, bool verbose)
 			{
 				const char *v2ps = "UNKNOWN";
 
-				switch (ikev2_policy) {
-				case POLICY_IKEV1_ALLOW:
-					v2ps = "never";
-					break;
+				if (conn->policy & POLICY_IKEV2_ALLOW)
+					v2ps = "yes";
 
-				case POLICY_IKEV1_ALLOW | POLICY_IKEV2_ALLOW:
-					v2ps = "permit";
-					break;
+				if (conn->policy & POLICY_IKEV1_ALLOW)
+					v2ps = "no";
 
-				case POLICY_IKEV1_ALLOW | POLICY_IKEV2_ALLOW | POLICY_IKEV2_PROPOSE:
-					v2ps = "propose";
-					break;
-
-				case                      POLICY_IKEV2_ALLOW | POLICY_IKEV2_PROPOSE:
-					v2ps = "insist";
-					break;
-				}
 				cwf("ikev2", v2ps);
 			}
 
@@ -661,7 +647,7 @@ void confwrite(struct starter_config *cfg, FILE *out, bool setup, char *name, bo
 		      kv_config,
 		      cfg->setup.strings, cfg->setup.strings_set);
 
-		fprintf(out, "\n\n");
+		fprintf(out, "\n");
 	}
 
 	/* output connections */

@@ -4,7 +4,7 @@
  * Copyright (C) 2007 Michael C. Richardson <mcr@xelerance.com>
  * Copyright (C) 2010 Paul Wouters <paul@xelerance.com>
  * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
- * Copyright (C) 2015-2016 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2015-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -20,9 +20,11 @@
 #ifndef ikev1_prf_h
 #define ikev1_prf_h
 
+#include "lswnss.h"
 #include "chunk.h"
 
 struct prf_desc;
+struct encrypt_desc;
 
 /*
  * IKE SA SKEYID for authentication
@@ -59,11 +61,9 @@ PK11SymKey *ikev1_skeyid_e(const struct prf_desc *prf_desc,
 			   PK11SymKey *skeyid_a, PK11SymKey *dh_secret,
 			   chunk_t cky_i, chunk_t cky_r);
 
-/*
- * Old way.
- */
-struct pcr_v1_dh;
-
-void calc_dh_iv(struct pcr_v1_dh *r);
+PK11SymKey *appendix_b_keymat_e(const struct prf_desc *prf_desc,
+				const struct encrypt_desc *encrypter,
+				PK11SymKey *skeyid_e,
+				unsigned required_keymat);
 
 #endif

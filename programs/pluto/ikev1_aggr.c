@@ -5,8 +5,9 @@
  * Copyright (C) 2011 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2012 Philippe Vouters <philippe.vouters@laposte.net>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2013-2018 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2013-2019 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 David McCullough <ucdevel@gmail.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -24,7 +25,6 @@
 
 #include "constants.h"		/* for dup_any()!?! ... */
 #include "lswlog.h"
-#include "alg_info.h"
 
 #include "defs.h"
 #include "state.h"
@@ -32,7 +32,7 @@
 #include "packet.h"
 #include "demux.h"      /* needs packet.h */
 #include "log.h"
-#include "cookie.h"
+#include "ike_spi.h"
 #include "spdb.h"
 #include "ipsec_doi.h"  /* needs demux.h and state.h */
 #include "ikev1_send.h"
@@ -177,7 +177,7 @@ stf_status aggr_inI1_outR1(struct state *st, struct msg_digest *md)
 
 	/* Set up state */
 	pexpect(st == NULL);
-	st = new_rstate(md);
+	st = new_v1_rstate(md);
 
 	md->st = st;  /* (caller will reset cur_state) */
 	set_cur_state(st);
@@ -213,10 +213,7 @@ stf_status aggr_inI1_outR1(struct state *st, struct msg_digest *md)
 	st->st_try = 0;                                 /* Not our job to try again from start */
 	st->st_policy = c->policy & ~POLICY_IPSEC_MASK; /* only as accurate as connection */
 
-	memcpy(st->st_icookie, md->hdr.isa_icookie, COOKIE_SIZE);
-	get_cookie(FALSE, st->st_rcookie, &md->sender);
-
-	insert_state(st); /* needs cookies, connection, and msgid (0) */
+	binlog_refresh_state(st);
 
 	{
 		ipstr_buf b;
@@ -240,9 +237,7 @@ stf_status aggr_inI1_outR1(struct state *st, struct msg_digest *md)
 	 * be already filled-in.
 	 */
 	pexpect(st->st_p1isa.ptr == NULL);
-
-	clonereplacechunk(st->st_p1isa, sa_pd->pbs.start,
-		pbs_room(&sa_pd->pbs), "sa in aggr_inI1_outR1()");
+	st->st_p1isa = clone_in_pbs_as_chunk(&sa_pd->pbs, "sa in aggr_inI1_outR1()");
 
 	/*
 	 * parse_isakmp_sa picks the right group, which we need to know
@@ -259,8 +254,10 @@ stf_status aggr_inI1_outR1(struct state *st, struct msg_digest *md)
 	}
 
 	/* KE in */
-	RETURN_STF_FAILURE(accept_KE(&st->st_gi, "Gi", st->st_oakley.ta_dh,
-				     &md->chain[ISAKMP_NEXT_KE]->pbs));
+	if (!accept_KE(&st->st_gi, "Gi", st->st_oakley.ta_dh,
+		       md->chain[ISAKMP_NEXT_KE])) {
+		return STF_FAIL + INVALID_KEY_INFORMATION;
+	}
 
 	/* Ni in */
 	RETURN_STF_FAILURE(accept_v1_nonce(md, &st->st_ni, "Ni"));
@@ -350,7 +347,7 @@ static stf_status aggr_inI1_outR1_continue2_tail(struct msg_digest *md,
 		struct isakmp_hdr hdr = md->hdr;
 
 		hdr.isa_flags = 0; /* clear reserved fields */
-		memcpy(hdr.isa_rcookie, st->st_rcookie, COOKIE_SIZE);
+		hdr.isa_ike_responder_spi = st->st_ike_spis.responder;
 		hdr.isa_np = ISAKMP_NEXT_SA;
 
 		if (IMPAIR(SEND_BOGUS_ISAKMP_FLAG)) {
@@ -578,15 +575,17 @@ stf_status aggr_inR1_outI2(struct state *st, struct msg_digest *md)
 	set_nat_traversal(st, md);
 
 	/* KE in */
-	RETURN_STF_FAILURE(accept_KE(&st->st_gr, "Gr", st->st_oakley.ta_dh,
-				     &md->chain[ISAKMP_NEXT_KE]->pbs));
+	if (!accept_KE(&st->st_gr, "Gr", st->st_oakley.ta_dh,
+		       md->chain[ISAKMP_NEXT_KE])) {
+		return STF_FAIL + INVALID_KEY_INFORMATION;
+	}
 
 	/* Ni in */
 	RETURN_STF_FAILURE(accept_v1_nonce(md, &st->st_nr, "Nr"));
 
 	/* moved the following up as we need Rcookie for hash, skeyids */
 	/* Reinsert the state, using the responder cookie we just received */
-	rehash_state(st, NULL, md->hdr.isa_rcookie);
+	rehash_state(st, &md->hdr.isa_ike_responder_spi);
 
 	ikev1_natd_init(st, md);
 
@@ -699,7 +698,7 @@ static stf_status aggr_inR1_outI2_tail(struct msg_digest *md)
 		struct isakmp_hdr hdr = md->hdr;
 
 		hdr.isa_flags = 0; /* clear reserved fields */
-		memcpy(hdr.isa_rcookie, st->st_rcookie, COOKIE_SIZE);
+		hdr.isa_ike_responder_spi = st->st_ike_spis.responder;
 		hdr.isa_np = ISAKMP_NEXT_NONE,	/* rewritten */
 		hdr.isa_flags |= ISAKMP_FLAGS_v1_ENCRYPTION;
 
@@ -755,8 +754,9 @@ static stf_status aggr_inR1_outI2_tail(struct msg_digest *md)
 
 	/* HASH_I or SIG_I out */
 	{
-		/* first build an ID payload as a raw material */
+		dbg("next payload chain: creating a fake payload for hashing identity");
 
+		/* first build an ID payload as a raw material */
 		struct isakmp_ipsec_id id_hd;
 		chunk_t id_b;
 		build_id_payload(&id_hd, &id_b, &c->spd.this);
@@ -874,6 +874,8 @@ stf_status aggr_inI2(struct state *st, struct msg_digest *md)
 
 	/* Reconstruct the peer ID so the peer hash can be authenticated */
 	{
+		dbg("next payload chain: creating a fake payload for hashing identity");
+
 		struct isakmp_ipsec_id id_hd;
 		chunk_t id_b;
 		pb_stream pbs;
@@ -1015,7 +1017,7 @@ void aggr_outI1(fd_t whack_sock,
 	}
 
 	/* set up new state */
-	st = new_state();
+	st = new_v1_istate();
 	set_cur_state(st);
 	st->st_connection = c;	/* safe: from new_state */
 
@@ -1031,8 +1033,6 @@ void aggr_outI1(fd_t whack_sock,
 	st->st_try = try;
 	change_state(st, STATE_AGGR_I1);
 
-	get_cookie(TRUE, st->st_icookie, &c->spd.that.host_addr);
-
 	for (sr = &c->spd; sr != NULL; sr = sr->spd_next) {
 		if (sr->this.xauth_client) {
 			if (sr->this.xauth_username != NULL) {
@@ -1044,7 +1044,7 @@ void aggr_outI1(fd_t whack_sock,
 		}
 	}
 
-	insert_state(st); /* needs cookies, connection, and msgid (0) */
+	binlog_refresh_state(st);
 
 	if (!init_aggr_st_oakley(st, policy)) {
 		/*
@@ -1107,6 +1107,7 @@ static void aggr_outI1_continue(struct state *st,
 	fake_md->st = st;
 	fake_md->smc = NULL;	/* ??? */
 	fake_md->from_state = STATE_UNDEFINED;	/* ??? */
+	fake_md->fake_dne = true;
 
 	complete_v1_state_transition(&fake_md, e);
 	/*
@@ -1141,7 +1142,7 @@ static stf_status aggr_outI1_tail(struct state *st,
 			.isa_np = ISAKMP_NEXT_SA,
 			.isa_xchg = ISAKMP_XCHG_AGGR,
 		};
-		memcpy(hdr.isa_icookie, st->st_icookie, COOKIE_SIZE);
+		hdr.isa_ike_initiator_spi = st->st_ike_spis.initiator;
 		/* R-cookie, flags and MessageID are left zero */
 
 		if (!out_struct(&hdr, &isakmp_hdr_desc, &reply_stream,
@@ -1222,7 +1223,7 @@ static stf_status aggr_outI1_tail(struct state *st,
 
 	/* Set up a retransmission event, half a minute hence */
 	delete_event(st);
-	start_retransmits(st, EVENT_v1_RETRANSMIT);
+	start_retransmits(st);
 
 	whack_log(RC_NEW_STATE + STATE_AGGR_I1,
 		  "%s: initiate", st->st_state_name);

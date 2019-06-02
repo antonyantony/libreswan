@@ -2,7 +2,7 @@
  *
  * Copyright (C) 1997 Angelos D. Keromytis.
  * Copyright (C) 1998-2001  D. Hugh Redelmeier.
- * Copyright (C) 2018  Andrew Cagney
+ * Copyright (C) 2018-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -23,17 +23,25 @@
 #include "lswalloc.h"
 #include "realtime.h"
 
-/* type of serial number of a state object
- * Needed in connections.h and state.h; here to simplify dependencies.
+/*
+ * Type of serial number of a state object.
+ *
+ * Used everywhere as a safe proxy for a state object.  Needed in
+ * connections.h and state.h; here to simplify dependencies.
  */
 typedef unsigned long so_serial_t;
 #define SOS_NOBODY      0       /* null serial number */
 #define SOS_FIRST       1       /* first normal serial number */
+/* for wildcards */
+#define SOS_SOMEBODY	((unsigned long) -1)
+#define SOS_IGNORE	((unsigned long) -2)
 
-typedef enum {
-		IKE_SA,
-		IPSEC_SA
-	} sa_t;
+enum sa_type {
+#define SA_TYPE_FLOOR 0
+	IKE_SA = SA_TYPE_FLOOR,
+	IPSEC_SA,
+#define SA_TYPE_ROOF (IPSEC_SA+1)
+};
 
 /* warns a predefined interval before expiry */
 extern const char *check_expiry(realtime_t expiration_date,
@@ -55,7 +63,12 @@ extern const char *check_expiry(realtime_t expiration_date,
 extern volatile bool exiting_pluto;
 extern void exit_pluto(int /*status*/) NEVER_RETURNS;
 
-typedef uint32_t msgid_t;      /* Network order for ikev1, host order for ikev2 */
+typedef uint32_t msgid_t;      /* Host byte ordered */
+#define PRI_MSGID "%"PRIu32
+#define v1_MAINMODE_MSGID  ((msgid_t) 0)		/* network and host order */
+#define v2_FIRST_MSGID  ((msgid_t) 0)			/* network and host order */
+#define v2_INVALID_MSGID  ((msgid_t) 0xffffffff)	/* network and host order */
+
 
 /* are all bytes 0? */
 extern bool all_zero(const unsigned char *m, size_t len);

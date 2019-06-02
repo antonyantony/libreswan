@@ -8,6 +8,7 @@
  * Copyright (C) 2011 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -45,11 +46,18 @@ extern struct host_pair *find_host_pair(const ip_address *myaddr,
 					const ip_address *hisaddr,
 					uint16_t hisport);
 
-#define list_rm(etype, enext, e, ehead) { \
-		etype **ep; \
-		for (ep = &(ehead); *ep != (e); ep = &(*ep)->enext) \
-			passert(*ep != NULL); /* we must not come up empty-handed */ \
-		*ep = (e)->enext; \
+#define LIST_RM(ENEXT, E, EHEAD, EXPECTED)				\
+	{								\
+		bool found_ = false;					\
+		for (typeof(*(EHEAD)) **ep_ = &(EHEAD); *ep_ != NULL; ep_ = &(*ep_)->ENEXT) { \
+			if (*ep_ == (E)) {				\
+				*ep_ = (E)->ENEXT;			\
+				found_ = true;				\
+				break;					\
+			}						\
+		}							\
+		/* we must not come up empty-handed? */			\
+		pexpect(found_ || !(EXPECTED));				\
 	}
 
 void delete_oriented_hp(struct connection *c);

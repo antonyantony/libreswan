@@ -4,8 +4,16 @@ KVM_KICKSTART_FILE = testing/libvirt/fedora28.ks
 # LIE!
 KVM_OS_VARIANT ?= fedora26
 KVM_PACKAGE_INSTALL = dnf install -y
-KVM_DEBUGINFO_INSTALL = dnf  debuginfo-install -y
+KVM_PACKAGE_UPGRADE = dnf upgrade -y
+KVM_DEBUGINFO_INSTALL = dnf debuginfo-install -y
 KVM_INSTALL_RPM_LIST = 'rpm -aq > /var/tmp/rpm-qa-fedora-updates.log'
+
+# Force the NSS version - version 3.40 caused pluto to dump core while
+# loading the NSS DB.  Versions 3.36 and 3.41 (current at time of
+# writing) seem to work.
+
+# NSS_VERSION = -3.36.0-1.0.fc28.x86_64
+NSS_VERSION =
 
 KVM_PACKAGES = \
     ElectricFence \
@@ -23,7 +31,14 @@ KVM_PACKAGES = \
     glibc-devel \
     hping3 \
     ike-scan \
+    kernel-core \
+    kernel-devel \
+    kernel-headers \
+    kernel-modules \
+    kernel-modules-extra \
+    iproute \
     ipsec-tools \
+    iptables \
     ldns \
     ldns-devel \
     libcap-ng-devel \
@@ -31,18 +46,24 @@ KVM_PACKAGES = \
     libevent-devel \
     libseccomp-devel \
     libselinux-devel \
+    linux-firmware \
     lsof \
     mtr \
     nc \
     net-tools \
     nsd \
+    nspr \
     nspr-devel \
-    nss-devel \
-    nss-tools \
-    ocspd\
+    nss$(NSS_VERSION) \
+    nss-devel$(NSS_VERSION) \
+    nss-tools$(NSS_VERSION) \
+    nss-softokn$(NSS_VERSION) \
+    nss-softokn-freebl$(NSS_VERSION) \
+    ocspd \
     openldap-devel \
     pam-devel \
     patch \
+    perf \
     pexpect \
     policycoreutils-python-utils \
     psmisc \
@@ -89,10 +110,10 @@ KVM_DEBUGINFO = \
     libselinux \
     libssh2 \
     nspr \
-    nss \
-    nss-softokn \
-    nss-softokn-freebl \
-    nss-util \
+    nss$(NSS_VERSION) \
+    nss-softokn$(NSS_VERSION) \
+    nss-softokn-freebl$(NSS_VERSION) \
+    nss-util$(NSS_VERSION) \
     ocspd \
     openldap \
     openssl-libs \

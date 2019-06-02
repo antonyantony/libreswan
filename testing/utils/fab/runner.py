@@ -1,6 +1,6 @@
 # Test driver, for libreswan
 #
-# Copyright (C) 2015-2016 Andrew Cagney <cagney@gnu.org>
+# Copyright (C) 2015-2019  Andrew Cagney
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -388,9 +388,14 @@ def _process_test(domain_prefix, test, args, test_stats, result_stats, test_coun
                     try:
                         test_domains = _boot_test_domains(logger, test, domain_prefix, boot_executor)
                     except pexpect.TIMEOUT:
-                        logger.exception("timeout while booting domains")
                         # Bail.  Being unable to boot the domains is a
                         # disaster.  The test is UNRESOLVED.
+                        logger.exception("timeout while booting domains")
+                        return
+                    except pexpect.EOF:
+                        # Bail.  Being unable to attach to the domains
+                        # is a disaster.  The test is UNRESOLVED.
+                        logger.exception("eof (disconnect) while booting domains")
                         return
 
                 # Run the scripts directly
@@ -416,21 +421,24 @@ def _process_test(domain_prefix, test, args, test_stats, result_stats, test_coun
                                 test_domain = test_domains[host]
                                 try:
                                     test_domain.read_file_run(script)
+                                except pexpect.TIMEOUT as e:
+                                    # A test ending with a timeout
+                                    # gets treated as a FAIL.  A
+                                    # timeout while running a test
+                                    # script is a sign that a command
+                                    # hung.
+                                    post_timeout = "%s %s:%s" % (post.TIMEOUT, host, script)
+                                    logger.warning("*** %s ***" % post_timeout)
+                                    test_domain.console.child.logfile.write("%s %s %s" % (post.LHS, post_timeout, post.RHS))
+                                    break
                                 except BaseException as e:
                                     # if there is an exception, write
                                     # it to the console
-                                    test_domain.console.child.logfile.write("\n*** exception running script %s ***\n%s" % (script, str(e)))
+                                    test_domain.console.child.logfile.write("\n%s %s %s:%s %rhs\n%s" % (post.LHS, post.EXCEPTION, host, script, post.RHS, str(e)))
                                     raise
 
                             for test_domain in test_domains.values():
                                 test_domain.console.child.logfile.write(post.DONE)
-
-                        except pexpect.TIMEOUT as e:
-                            # A test ending with a timeout gets
-                            # treated as unresolved.  Timeouts
-                            # shouldn't occur so human intervention
-                            # is required.
-                            logger.error("**** timeout out while running test script %s ****", script)
 
                         finally:
 

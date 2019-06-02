@@ -25,7 +25,7 @@ SUBDIRS=
 SUBDIRS+=pluto
 SUBDIRS+=whack
 SUBDIRS+=proc addconn
-SUBDIRS+=configs _keycensor _plutorun _stackmanager
+SUBDIRS+=configs _plutorun _stackmanager
 SUBDIRS+=_secretcensor _updown _unbound-hook
 SUBDIRS+=auto barf verify show ipsec look newhostkey
 SUBDIRS+=rsasigkey setup showhostkey
@@ -40,9 +40,6 @@ endif
 
 ifeq ($(USE_KLIPS),true)
 SUBDIRS+= _updown.klips eroute klipsdebug pf_key spi spigrp tncfg
-endif
-ifeq ($(USE_MAST),true)
-SUBDIRS+= _updown.mast
 endif
 ifeq ($(USE_NETKEY),true)
 SUBDIRS+= _updown.netkey

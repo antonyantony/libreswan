@@ -4,7 +4,8 @@
  * Copyright (C) 2008 Michael Richardson <mcr@xelerance.com>
  * Copyright (C) 2009 Paul Wouters <paul@xelerance.com>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2013 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2013-2019 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -53,7 +54,6 @@
 #include "log.h"
 #include "keys.h"
 #include "whack.h"
-#include "alg_info.h"
 #include "spdb.h"
 #include "ike_alg.h"
 #include "kernel_alg.h"
@@ -69,6 +69,7 @@ static int terminate_a_connection(struct connection *c, void *arg UNUSED)
 {
 	set_cur_connection(c);
 	libreswan_log("terminating SAs using this connection");
+	dbg("connection '%s' -POLICY_UP", c->name);
 	c->policy &= ~POLICY_UP;
 	flush_pending_by_connection(c);
 
@@ -89,7 +90,7 @@ static int terminate_a_connection(struct connection *c, void *arg UNUSED)
 	return 1;
 }
 
-void terminate_connection(const char *name)
+void terminate_connection(const char *name, bool quiet)
 {
 	/*
 	 * Loop because more than one may match (master and instances)
@@ -111,8 +112,9 @@ void terminate_connection(const char *name)
 	} else {
 		int count = foreach_connection_by_alias(name, terminate_a_connection, NULL);
 		if (count == 0) {
-			loglog(RC_UNKNOWN_NAME,
-				  "no such connection or aliased connection named \"%s\"", name);
+			if (!quiet)
+				loglog(RC_UNKNOWN_NAME,
+					"no such connection or aliased connection named \"%s\"", name);
 		} else {
 			loglog(RC_COMMENT, "terminated %d connections from aliased connection \"%s\"",
 				count, name);

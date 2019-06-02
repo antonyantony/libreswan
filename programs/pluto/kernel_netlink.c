@@ -18,9 +18,11 @@
  * Copyright (C) 2012 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2013 Kim B. Heino <b@bbbs.net>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2013-2019 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2017 Richard Guy Briggs <rgb@tricolour.ca>
- * Copyright (C) 2016-2018  Andrew Cagney
+ * Copyright (C) 2016-2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2019 Antony Antony <antony@phenome.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -40,7 +42,6 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <stdint.h>
-#include <linux/pfkeyv2.h>
 #include <linux/ethtool.h>
 #include <linux/sockios.h>
 #include <unistd.h>
@@ -59,9 +60,6 @@
 # include "libreswan.h"
 # include "linux/xfrm.h" /* local (if configured) or system copy */
 #endif
-
-#include "libreswan/pfkeyv2.h"
-#include "libreswan/pfkey.h"
 
 #include "sysdep.h"
 #include "socketwrapper.h"
@@ -264,7 +262,7 @@ static void init_netlink(void)
 	 * it supports.  OTOH, the query might happen before the
 	 * crypto module gets loaded.
 	 */
-	DBGF(DBG_KERNEL, "Hard-wiring algorithms");
+	dbg("Hard-wiring algorithms");
 	for (const struct encrypt_desc **algp = next_encrypt_desc(NULL);
 	     algp != NULL; algp = next_encrypt_desc(algp)) {
 		const struct encrypt_desc *alg = *algp;
@@ -1047,8 +1045,9 @@ static bool netlink_migrate_sa(struct state *st)
 }
 
 
-
 #ifdef USE_NIC_OFFLOAD
+
+/* see /usr/include/linux/ethtool.h */
 
 enum nic_offload_state {
 	NIC_OFFLOAD_UNKNOWN,
@@ -1062,70 +1061,66 @@ static struct {
 	enum nic_offload_state state;
 } netlink_esp_hw_offload;
 
+static bool siocethtool(const char *ifname, void *data, const char *action)
+{
+	struct ifreq ifr = { .ifr_data = data };
+	jam_str(ifr.ifr_name, sizeof(ifr.ifr_name), ifname);
+	if (ioctl(nl_send_fd, SIOCETHTOOL, &ifr) != 0) {
+		LOG_ERRNO(errno, "can't offload to %s because SIOCETHTOOL %s failed", ifname, action);
+		return false;
+	} else {
+		return true;
+	}
+}
+
 static void netlink_find_offload_feature(const char *ifname)
 {
-	struct ethtool_sset_info *sset_info = NULL;
-	struct ethtool_gstrings *cmd = NULL;
-	struct ifreq ifr;
-	uint32_t sset_len, i;
-	char *str;
-	int err;
-
 	netlink_esp_hw_offload.state = NIC_OFFLOAD_UNSUPPORTED;
 
 	/* Determine number of device-features */
-	sset_info = alloc_bytes(sizeof(*sset_info) + sizeof(sset_info->data[0]),
-			"ethtool_sset_info");
+
+	struct ethtool_sset_info *sset_info = alloc_bytes(
+		sizeof(*sset_info) + sizeof(sset_info->data[0]),
+		"ethtool_sset_info");
 	sset_info->cmd = ETHTOOL_GSSET_INFO;
 	sset_info->sset_mask = 1ULL << ETH_SS_FEATURES;
-	jam_str(ifr.ifr_name, sizeof(ifr.ifr_name), ifname);
-	ifr.ifr_data = (void *)sset_info;
-	err = ioctl(nl_send_fd, SIOCETHTOOL, &ifr);
-	if (err != 0)
-		goto out;
 
-	if (sset_info->sset_mask != 1ULL << ETH_SS_FEATURES)
-		goto out;
-	sset_len = sset_info->data[0];
+	if (!siocethtool(ifname, sset_info, "ETHTOOL_GSSET_INFO") ||
+	    sset_info->sset_mask != 1ULL << ETH_SS_FEATURES) {
+		pfree(sset_info);
+		return;
+	}
+
+	uint32_t sset_len = sset_info->data[0];
+
+	pfree(sset_info);
 
 	/* Retrieve names of device-features */
-	cmd = alloc_bytes(sizeof(*cmd) + ETH_GSTRING_LEN * sset_len, "ethtool_gstrings");
+
+	struct ethtool_gstrings *cmd = alloc_bytes(
+		sizeof(*cmd) + ETH_GSTRING_LEN * sset_len, "ethtool_gstrings");
 	cmd->cmd = ETHTOOL_GSTRINGS;
 	cmd->string_set = ETH_SS_FEATURES;
-	jam_str(ifr.ifr_name, sizeof(ifr.ifr_name), ifname);
-	ifr.ifr_data = (void *)cmd;
-	err = ioctl(nl_send_fd, SIOCETHTOOL, &ifr);
-	if (err)
-		goto out;
 
-	/* Look for the ESP_HW feature bit */
-	str = (char *)cmd->data;
-	for (i = 0; i < cmd->len; i++) {
-		if (strneq(str, "esp-hw-offload", ETH_GSTRING_LEN) == 1)
-			break;
-		str += ETH_GSTRING_LEN;
+	if (siocethtool(ifname, cmd, "ETHTOOL_GSTRINGS")) {
+		/* Look for the ESP_HW feature bit */
+		char *str = (char *)cmd->data;
+		for (uint32_t i = 0; i < cmd->len; i++) {
+			if (strneq(str, "esp-hw-offload", ETH_GSTRING_LEN)) {
+				netlink_esp_hw_offload.bit = i;
+				netlink_esp_hw_offload.total_blocks = (sset_len + 31) / 32;
+				netlink_esp_hw_offload.state = NIC_OFFLOAD_SUPPORTED;
+				break;
+			}
+			str += ETH_GSTRING_LEN;
+		}
 	}
-	if (i >= cmd->len)
-		goto out;
 
-	netlink_esp_hw_offload.bit = i;
-	netlink_esp_hw_offload.total_blocks = (sset_len + 31) / 32;
-	netlink_esp_hw_offload.state = NIC_OFFLOAD_SUPPORTED;
-
-out:
-	pfree(sset_info);
-	if (cmd != NULL)
-		pfree(cmd);
+	pfree(cmd);
 }
 
 static bool netlink_detect_offload(const char *ifname)
 {
-	struct ethtool_gfeatures *cmd;
-	uint32_t feature_bit;
-	struct ifreq ifr;
-	bool ret = false;
-	int block;
-
 	/*
 	 * Kernel requires a real interface in order to query the kernel-wide
 	 * capability, so we do it here on first invocation.
@@ -1133,26 +1128,30 @@ static bool netlink_detect_offload(const char *ifname)
 	if (netlink_esp_hw_offload.state == NIC_OFFLOAD_UNKNOWN)
 		netlink_find_offload_feature(ifname);
 
-	if (netlink_esp_hw_offload.state == NIC_OFFLOAD_UNSUPPORTED)
-		return FALSE;
+	if (netlink_esp_hw_offload.state == NIC_OFFLOAD_UNSUPPORTED) {
+		libreswan_log("Kernel does not support NIC esp-hw-offload");
+		return false;
+	}
 
 	/* Feature is supported by kernel. Query device features */
-	cmd = alloc_bytes(sizeof(*cmd) + sizeof(cmd->features[0]) *
-		netlink_esp_hw_offload.total_blocks,
+
+	libreswan_log("Kernel supports NIC esp-hw-offload");
+
+	struct ethtool_gfeatures *cmd = alloc_bytes(
+		sizeof(*cmd) + sizeof(cmd->features[0]) * netlink_esp_hw_offload.total_blocks,
 		"ethtool_gfeatures");
-	jam_str(ifr.ifr_name, sizeof(ifr.ifr_name), ifname);
-	ifr.ifr_data = (void *)cmd;
+
 	cmd->cmd = ETHTOOL_GFEATURES;
 	cmd->size = netlink_esp_hw_offload.total_blocks;
-	if (ioctl(nl_send_fd, SIOCETHTOOL, &ifr))
-		goto out;
 
-	block = netlink_esp_hw_offload.bit / 32;
-	feature_bit = 1U << (netlink_esp_hw_offload.bit % 32);
-	if (cmd->features[block].active & feature_bit)
-		ret = TRUE;
+	bool ret = false;
 
-out:
+	if (siocethtool(ifname, cmd, "ETHTOOL_GFEATURES")) {
+		int block = netlink_esp_hw_offload.bit / 32;
+		uint32_t feature_bit = 1U << (netlink_esp_hw_offload.bit % 32);
+		if (cmd->features[block].active & feature_bit)
+			ret = true;
+	}
 	pfree(cmd);
 	return ret;
 }
@@ -1499,7 +1498,12 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 		req.n.nlmsg_len += attr->rta_len;
 		/* attr not subsequently used unless HAVE_LABELED_IPSEC */
 		attr = (struct rtattr *)((char *)attr + attr->rta_len);
+		DBG(DBG_KERNEL, DBG_log("netlink: esp-hw-offload set via interface %s for IPsec SA", sa->nic_offload_dev));
+	} else {
+		DBG(DBG_KERNEL, DBG_log("netlink: esp-hw-offload not set for IPsec SA"));
 	}
+#else
+		DBG(DBG_KERNEL, DBG_log("netlink: libreswan not compiled with esp-hw-offload support"));
 #endif
 
 #ifdef HAVE_LABELED_IPSEC
@@ -1791,8 +1795,8 @@ static void process_addr_chage(struct nlmsghdr *n)
 	struct ifaddrmsg *nl_msg = NLMSG_DATA(n);
 	struct rtattr *rta = IFLA_RTA(nl_msg);
 	size_t msg_size = IFA_PAYLOAD (n);
-	chunk_t local_addr = empty_chunk;
-	chunk_t addr = empty_chunk;
+	chunk_t local_addr = EMPTY_CHUNK;
+	chunk_t addr = EMPTY_CHUNK;
 	ip_address ip;
 	ipstr_buf ip_str;
 
@@ -1921,7 +1925,8 @@ static bool netlink_get(int fd)
 			return FALSE;
 
 		if (errno != EINTR) {
-			LOG_ERRNO(errno, "recvfrom() failed in netlink_get");
+			LOG_ERRNO(errno, "recvfrom() failed in netlink_get: errno(%d): %s",
+				errno, strerror(errno));
 		}
 		return TRUE;
 	} else if ((size_t)r < sizeof(rsp.n)) {
@@ -2007,6 +2012,7 @@ static ipsec_spi_t netlink_get_spi(const ip_address *src,
 
 	req.spi.min = min;
 	req.spi.max = max;
+
 	if (!send_netlink_msg(&req.n, XFRM_MSG_NEWSA, &rsp, "Get SPI",
 				text_said)) {
 		return 0;
@@ -2446,12 +2452,16 @@ static void netlink_process_raw_ifaces(struct raw_iface *rifaces)
 				interfaces = q;
 
 				libreswan_log(
-					"adding interface %s/%s %s:%d",
+					"adding interface %s/%s (%s) %s:%d",
 					q->ip_dev->id_vname,
 					q->ip_dev->id_rname,
+#ifndef USE_NIC_OFFLOAD
+					"esp-hw-offload not supported by kernel",
+#else
+					id->id_nic_offload ? "esp-hw-offload=yes" : "esp-hw-offload=no",
+#endif
 					ipstr(&q->ip_addr, &b),
 					q->port);
-
 				/*
 				 * right now, we do not support NAT-T
 				 * on IPv6, because  the kernel did
@@ -2668,7 +2678,7 @@ static bool netlink_bypass_policy(int family, int proto, int port)
 	return TRUE;
 }
 
-static bool netlink_v6holes()
+static bool netlink_v6holes(void)
 {
 	/* this could be per interface specific too */
 	char proc_f[] = "/proc/sys/net/ipv6/conf/all/disable_ipv6";
@@ -2810,37 +2820,32 @@ static err_t netlink_migrate_sa_check(void)
 
 static bool netlink_poke_ipsec_policy_hole(struct raw_iface *ifp, int fd)
 {
-	struct sadb_x_policy policy;
-	int level, opt;
+	int opt, sol;
+	struct xfrm_userpolicy_info policy;
 
 	zero(&policy);
-	policy.sadb_x_policy_len = sizeof(policy) /
-		IPSEC_PFKEYv2_ALIGN;
-	policy.sadb_x_policy_exttype = SADB_X_EXT_POLICY;
-	policy.sadb_x_policy_type = IPSEC_POLICY_BYPASS;
-	policy.sadb_x_policy_dir = IPSEC_DIR_INBOUND;
-	policy.sadb_x_policy_id = 0;
+	policy.action = XFRM_POLICY_ALLOW;
+	policy.sel.family = addrtypeof(&ifp->addr);
 
 	if (addrtypeof(&ifp->addr) == AF_INET6) {
-		level = IPPROTO_IPV6;
-		opt = IPV6_IPSEC_POLICY;
+		sol = IPPROTO_IPV6;
+		opt = IPV6_XFRM_POLICY;
 	} else {
-		level = IPPROTO_IP;
-		opt = IP_IPSEC_POLICY;
+		sol = SOL_IP;
+		opt = IP_XFRM_POLICY;
 	}
 
-	if (setsockopt(fd, level, opt,
-		       &policy, sizeof(policy)) < 0) {
-		LOG_ERRNO(errno, "setsockopt IPSEC_POLICY in process_raw_ifaces()");
+	policy.dir = XFRM_POLICY_IN;
+	if (setsockopt(fd, sol, opt, &policy, sizeof(policy)) < 0) {
+		LOG_ERRNO(errno, "setsockopt IP_XFRM_POLICY XFRM_POLICY_IN in process_raw_ifaces();");
 		close(fd);
 		return false;
 	}
 
-	policy.sadb_x_policy_dir = IPSEC_DIR_OUTBOUND;
+	policy.dir = XFRM_POLICY_OUT;
 
-	if (setsockopt(fd, level, opt,
-		       &policy, sizeof(policy)) < 0) {
-		LOG_ERRNO(errno, "setsockopt IPSEC_POLICY in process_raw_ifaces()");
+	if (setsockopt(fd, sol, opt, &policy, sizeof(policy)) < 0) {
+		LOG_ERRNO(errno, "setsockopt IP_XFRM_POLICY XFRM_POLICY_OUT in process_raw_ifaces() XFRM_POLICY_OUT");
 		close(fd);
 		return false;
 	}
@@ -2868,13 +2873,12 @@ const struct kernel_ops netkey_kernel_ops = {
 	.get_spi = netlink_get_spi,
 	.exceptsocket = NULL,
 	.docommand = netkey_do_command,
-	.process_ifaces = netlink_process_raw_ifaces,
+	.process_raw_ifaces = netlink_process_raw_ifaces,
 	.shunt_eroute = netlink_shunt_eroute,
 	.sag_eroute = netlink_sag_eroute,
 	.eroute_idle = netlink_eroute_idle,
 	.migrate_sa_check = netlink_migrate_sa_check,
 	.migrate_sa = netlink_migrate_sa,
-	.set_debug = NULL,	/* pfkey_set_debug, */
 	/*
 	 * We should implement netlink_remove_orphaned_holds
 	 * if netlink  specific changes are needed.

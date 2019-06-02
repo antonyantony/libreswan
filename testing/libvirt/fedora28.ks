@@ -1,4 +1,4 @@
-# Minimal Kickstart file - updated for fedora 28
+# Minimal Kickstart file for fedora
 install
 text
 reboot
@@ -12,11 +12,11 @@ firewall --disable
 selinux --enforcing
 timezone --utc America/New_York
 #firstboot --disable
-bootloader --location=mbr --append="console=tty0 console=ttyS0,115200 rd_NO_PLYMOUTH net.ifnames=0 biosdevname=0"
+bootloader --timeout=0 --location=mbr --append="console=tty0 console=ttyS0,115200 rd_NO_PLYMOUTH net.ifnames=0 biosdevname=0"
 zerombr
 clearpart --all --initlabel
 part / --asprimary --grow
-part swap --size 1024
+# part swap --size 1024
 services --disabled=sm-client,sendmail,network,smartd,crond,atd
 
 %packages --ignoremissing
@@ -36,33 +36,17 @@ services --disabled=sm-client,sendmail,network,smartd,crond,atd
 # could go in a separate file so post could do the fix up
 # automatically.
 
-# Note: %post also installs debug-rpms.  Downloading and installing
-# them is what takes all the time and bandwidth.
-
-# Note: To avoid an accidental kernel upgrade (KLIPS doesn't build
-# with some 4.x kernels), install everything kernel dependent here.
-# If you find the kernel still being upgraded look at the log files in
-# /var/tmp created during the %post state.
-
 @core
-
-# Install the kernel stuff from the CD so it is somewhat stable.
-
-kernel-core
-kernel-devel
-kernel-headers
-kernel-modules
-kernel-modules-extra
 
 -sendmail
 -libreswan
-
 # nm causes problems and steals our interfaces desipte NM_CONTROLLED="no"
 -NetworkManager
 
 %end
 
 %post
+
 # Paul needs this due to broken isp
 #ifconfig eth0 mtu 1400
 # Tuomo switched to this alternative work-around for pmtu issues
@@ -80,11 +64,6 @@ ifup ens2 >> /var/tmp/network.log
 
 rpm -qa > /var/tmp/rpm-qa-fedora.log
 
-dnf -y --disablerepo=updates update | tee /var/tmp/dnf-update-fedora.log
-dnf -y --disablerepo=updates install kernel-devel
-sed -i '/exclude=kernel/d' /etc/dnf/dnf.conf
-echo "exclude=kernel*" >> /etc/dnf/dnf.conf
-
 mkdir /testing /source
 
 cat << EOD >> /etc/issue
@@ -92,10 +71,12 @@ cat << EOD >> /etc/issue
 The root password is "swan"
 EOD
 
-# noauto for now, as we seem to need more system parts started before we can mount 9p
+# Once the machine has rebooted testing and swansource will be
+# available and mounted automatically.
+
 cat << EOD >> /etc/fstab
-testing /testing 9p defaults,noauto,trans=virtio,version=9p2000.L,context=system_u:object_r:var_log_t:s0 0 0
-swansource /source 9p defaults,noauto,trans=virtio,version=9p2000.L,context=system_u:object_r:usr_t:s0 0 0
+testing /testing 9p defaults,trans=virtio,version=9p2000.L,context=system_u:object_r:var_log_t:s0 0 0
+swansource /source 9p defaults,trans=virtio,version=9p2000.L,context=system_u:object_r:usr_t:s0 0 0
 tmpfs                   /dev/shm                tmpfs   defaults        0 0
 tmpfs                   /tmp                    tmpfs   defaults        0 0
 devpts                  /dev/pts                devpts  gid=5,mode=620  0 0
@@ -108,11 +89,10 @@ cat << EOD >> /etc/rc.d/rc.local
 SELINUX=\$(getenforce)
 echo "getenforce \$SELINUX" > /tmp/rc.local.txt
 setenforce Permissive
-(mount | grep "testing on /testing") || mount /testing
-(mount | grep "swansource on /source") || mount /source
 /testing/guestbin/swan-transmogrify 2>&1 >> /tmp/rc.local.txt || echo "ERROR swan-transmogrify" >> /tmp/rc.local.txt
 echo "restore SELINUX to \$SELINUX"
 setenforce \$SELINUX
+hostname |grep -q swanbase || rm /etc/rc.d/rc.local
 EOD
 
 chmod 755 /etc/rc.d/rc.local

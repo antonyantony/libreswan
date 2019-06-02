@@ -2,9 +2,9 @@
  *
  * Copyright (C) 1998,1999,2013 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2012 Avesh Agarwal <avagarwa@redhat.com>
- * Copyright (C) 2012-2013 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2012-2019 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 Florian Weimer <fweimer@redhat.com>
- * Copyright (C) 2015 Andrew Cagney <andrew.cagney@gmail.com>
+ * Copyright (C) 2015-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -21,6 +21,7 @@
 #define _SPDB_H_
 
 #include "packet.h"
+#include "proposals.h"
 
 /* database of SA properties */
 
@@ -171,12 +172,12 @@ extern void sa_log(struct db_sa *f);
 struct alg_info_ike;
 struct alg_info_esp;
 
-extern struct db_sa *oakley_alg_makedb(struct alg_info_ike *ai,
+extern struct db_sa *oakley_alg_makedb(const struct ike_proposals proposals,
 				       enum ikev1_auth_method auth_method,
 				       bool single_dh);
 
 extern struct db_sa *kernel_alg_makedb(lset_t policy,
-				       struct alg_info_esp *ei,
+				       const struct child_proposals proposals,
 				       bool logit);
 
 #endif /*  _SPDB_H_ */

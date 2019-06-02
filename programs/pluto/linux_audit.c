@@ -8,7 +8,7 @@
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013,2015 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 Tuomo Soini <tis@foobar.fi>
- * Copyright (C) 2017 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2017-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -161,8 +161,6 @@ void linux_audit_conn(const struct state *st, enum linux_audit_kind op)
 		return;
 	}
 
-	char raddr[ADDRTOT_BUF];
-	char laddr[ADDRTOT_BUF];
 	char audit_str[AUDIT_LOG_SIZE];
 	char cipher_str[AUDIT_LOG_SIZE];
 	char spi_str[AUDIT_LOG_SIZE];
@@ -187,8 +185,8 @@ void linux_audit_conn(const struct state *st, enum linux_audit_kind op)
 			initiator ? "initiator" : "responder",
 			conn_encode,
 			st->st_serialno,
-			st->st_ikev2 ? "2.0" : "1",
-			st->st_ikev2 ? ((c->policy & POLICY_PSK) ? "PRESHARED_KEY" : "RSA_SIG") :
+			(st->st_ike_version == IKEv2) ? "2.0" : "1",
+			(st->st_ike_version == IKEv2) ? ((c->policy & POLICY_PSK) ? "PRESHARED_KEY" : "RSA_SIG") :
 				enum_show_shortb(&oakley_auth_names,
 					st->st_oakley.auth, &esb));
 
@@ -196,7 +194,7 @@ void linux_audit_conn(const struct state *st, enum linux_audit_kind op)
 			 st->st_oakley.ta_prf->prf_ike_audit_name);
 
 		if (st->st_oakley.ta_integ == &ike_alg_integ_none) {
-			if (!st->st_ikev2) {
+			if (st->st_ike_version == IKEv1) {
 				/* IKE takes integ from prf, except of course gcm */
 				/* but IANA doesn't define gcm for IKE, only for ESP */
 				jam_str(integname, sizeof(integname), prfname);
@@ -212,7 +210,7 @@ void linux_audit_conn(const struct state *st, enum linux_audit_kind op)
 			/*
 			 * XXX: dead code path?
 			 */
-			if (!st->st_ikev2) {
+			if (st->st_ike_version == IKEv1) {
 				/* IKE takes integ from prf, except of course gcm */
 				/* but IANA doesn't define gcm for IKE, only for ESP */
 				jam_str(integname, sizeof(integname), prfname);
@@ -292,8 +290,11 @@ void linux_audit_conn(const struct state *st, enum linux_audit_kind op)
 	}
 	free(conn_encode); /* allocated by audit_encode_nv_string() */
 
-	addrtot(&c->spd.this.host_addr, 0, laddr, sizeof(laddr));
-	addrtot(&c->spd.that.host_addr, 0, raddr, sizeof(raddr));
+	ip_address_buf laddr_buf;
+	const char *laddr = ipstr(&c->spd.this.host_addr, &laddr_buf);
+
+	ip_address_buf raddr_buf;
+	const char *raddr = ipstr(&c->spd.that.host_addr, &raddr_buf);
 
 	snprintf(audit_str, sizeof(audit_str), "%s %s %s laddr=%s",
 		head,

@@ -1,8 +1,10 @@
 /* demultiplex incoming IKE messages
+ *
  * Copyright (C) 1998-2002,2013 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2005-2008 Michael Richardson <mcr@xelerance.com>
  * Copyright (C) 2012-2013 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 Wolfgang Nothdurft <wolfgang@linogate.de>
+ * Copyright (C) 2018-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -54,8 +56,10 @@ extern event_callback_routine comm_handle_cb;
 
 struct payload_digest {
 	pb_stream pbs;
+	/* Use IKEv2 term: "... the payload type" */
+	unsigned payload_type;
 	union payload payload;
-	struct payload_digest *next; /* of same kind */
+	struct payload_digest *next; /* of same type */
 };
 
 struct payload_summary {
@@ -85,8 +89,7 @@ struct msg_digest {
 	bool new_iv_set;			/* (v1) */
 	struct state *st;			/* current state object */
 
-	enum message_role message_role;		/* (v2) */
-	msgid_t msgid_received;			/* (v2) - Host order! */
+	realtime_t md_inception;		/* when was this started */
 
 	notification_t v1_note;			/* reason for failure */
 	bool dpd;				/* (v1) Peer supports RFC 3706 DPD */
@@ -94,7 +97,8 @@ struct msg_digest {
 	bool fragvid;				/* (v1) Peer supports FRAGMENTATION */
 	bool nortel;				/* (v1) Peer requires Nortel specific workaround */
 	bool event_already_set;			/* (v1) */
-	bool fake;				/* is this a fake (clone) message */
+	bool fake_clone;			/* is this a fake (clone) message */
+	bool fake_dne;				/* created as part of fake_md() */
 
 	/*
 	 * The packet PBS contains a message PBS and the message PBS
@@ -141,6 +145,9 @@ struct msg_digest {
 	struct isakmp_quirks quirks;
 };
 
+enum ike_version msg_ike_version(const struct msg_digest *md);
+enum message_role v2_msg_role(const struct msg_digest *md);
+
 extern struct msg_digest *alloc_md(const char *mdname);
 struct msg_digest *clone_md(struct msg_digest *md, const char *name);
 extern void release_md(struct msg_digest *md);
@@ -152,5 +159,7 @@ extern void free_md_pool(void);
 extern void process_packet(struct msg_digest **mdp);
 
 extern char *cisco_stringify(pb_stream *pbs, const char *attr_name);
+
+extern void lswlog_msg_digest(struct lswlog *log, const struct msg_digest *md);
 
 #endif /* _DEMUX_H */

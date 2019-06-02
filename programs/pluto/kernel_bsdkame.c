@@ -3,6 +3,8 @@
  * based upon kernel_klips.c.
  *
  * Copyright (C) 2006 Michael Richardson <mcr@xelerance.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -47,7 +49,6 @@
 #include "whack.h"      /* for RC_LOG_SERIOUS */
 #include "packet.h"     /* for pb_stream in nat_traversal.h */
 #include "nat_traversal.h"
-#include "alg_info.h"
 #include "kernel_alg.h"
 #include "kernel_sadb.h"
 
@@ -695,7 +696,7 @@ static bool bsdkame_shunt_eroute(const struct connection *c,
 
 		/* XXX need to fix this for v6 */
 #if 1
-		DBGF(DBG_MASK, "blatting mine/his sin_len");
+		dbg("blatting mine/his sin_len");
 #else
 		mine->addr.u.v4.sin_len  = sizeof(struct sockaddr_in);
 		his->addr.u.v4.sin_len   = sizeof(struct sockaddr_in);
@@ -717,7 +718,7 @@ static bool bsdkame_shunt_eroute(const struct connection *c,
 
 			/* should be already filled in */
 #if 1
-			DBGF(DBG_MASK, "blatting me/him sin_len");
+			dbg("blatting me/him sin_len");
 #else
 			me->u.v4.sin_len  = sizeof(struct sockaddr_in);
 			him->u.v4.sin_len  = sizeof(struct sockaddr_in);
@@ -804,7 +805,7 @@ static bool bsdkame_shunt_eroute(const struct connection *c,
 
 		/* XXX need to fix this for v6 */
 #if 1
-		DBGF(DBG_MASK, "blatting mine/his sin_len");
+		dbg("blatting mine/his sin_len");
 #else
 		mine->addr.u.v4.sin_len  = sizeof(struct sockaddr_in);
 		his->addr.u.v4.sin_len   = sizeof(struct sockaddr_in);
@@ -877,7 +878,7 @@ static bool bsdkame_sag_eroute(const struct state *st,
 		proto = IPPROTO_COMP;
 
 #if 1
-	DBGF(DBG_MASK, "sr->*.port = ...");
+	dbg("sr->*.port = ...");
 #else
 	if (!sr->this.has_port_wildcard)
 		setportof(htons(sr->this.port), &sr->this.client.addr);
@@ -1081,7 +1082,7 @@ const struct kernel_ops bsdkame_kernel_ops = {
 	.exceptsocket = bsdkame_except_socket,
 	.docommand = bsdkame_do_command,
 	.remove_orphaned_holds = bsdkame_remove_orphaned_holds,
-	.process_ifaces = bsdkame_process_raw_ifaces,
+	.process_raw_ifaces = bsdkame_process_raw_ifaces,
 	.overlap_supported = FALSE,
 	.sha2_truncbug_support = FALSE,
 	.v6holes = NULL,

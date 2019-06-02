@@ -21,10 +21,19 @@
 #ifndef CHUNK_H
 #define CHUNK_H
 
+#include <stdbool.h>	/* bool */
 #include <stddef.h>	/* size_t */
 #include <stdint.h>	/* uint8_t */
 
-/* chunk is a simple pointer-and-size abstraction */
+/*
+ * chunk is a simple pointer-and-size abstraction
+ *
+ * It's for dealing with raw bytes, for strings see shunk_t.
+ *
+ * Where possible, implement using non-inline functions.  This way all
+ * code is found in chunk.c.  And debugging doesn't run into grief
+ * with either macros or badly inlined functions.
+ */
 
 typedef struct /*chunk*/ {
 	uint8_t *ptr;
@@ -33,38 +42,53 @@ typedef struct /*chunk*/ {
 
 chunk_t chunk(void *ptr, size_t len);
 
-/* XXX: count can't have side effects. */
-#define alloc_chunk(COUNT, NAME) (chunk_t) {			\
-		.len = (COUNT),					\
-		.ptr = alloc_things(uint8_t, (COUNT), NAME),	\
-	}
+/*
+ * CHUNKO: create a chunk that encompasses an object
+ * Warning: the cast can mask some type errors (eg. loosing const attribute).
+ */
+#define CHUNKO(OBJECT) ((const chunk_t) { .ptr = (void *)&(OBJECT), .len = sizeof(OBJECT) })
 
-#define setchunk(ch, addr, size) { (ch).ptr = (addr); (ch).len = (size); }
-
-/* NOTE: freeanychunk, unlike pfreeany, NULLs .ptr and zeros .len */
-#define freeanychunk(CH) {					\
-		chunk_t *chp_ = &(CH); /*eval once */		\
-		pfreeany(chp_->ptr);				\
-		*chp_ = (chunk_t) { .len = 0, .ptr = NULL, };	\
-	}
-
-#define clonetochunk(ch, addr, size, name) \
-	{ (ch).ptr = clone_bytes((addr), (ch).len = (size), name); }
+chunk_t alloc_chunk(size_t count, const char *name);
+void free_chunk_contents(chunk_t *chunk); /* blats *CHUNK */
 
 chunk_t clone_chunk(chunk_t old, const char *name);
+
+/* clone(first+second) */
 chunk_t clone_chunk_chunk(chunk_t first, chunk_t second, const char *name);
+
 /* always NUL terminated; NULL is NULL */
 char *clone_chunk_as_string(chunk_t chunk, const char *name);
 
-/* note: the caller must free the result */
-char *str_from_chunk(chunk_t c, const char *name);
+chunk_t clone_bytes_as_chunk(void *bytes, size_t sizeof_bytes, const char *name);
 
-#define clonereplacechunk(ch, addr, size, name) \
-	{ pfreeany((ch).ptr); clonetochunk(ch, addr, size, name); }
-
-#define same_chunk(a, b) \
-	((a).len == (b).len && memeq((a).ptr, (b).ptr, (b).len))
+bool chunk_eq(chunk_t a, chunk_t b);
 
 extern const chunk_t empty_chunk;
+#define EMPTY_CHUNK ((const chunk_t) { .ptr = NULL, .len = 0 })
+
+#define PRI_CHUNK "%p@%zu"
+#define pri_chunk(CHUNK) (CHUNK).ptr, (CHUNK).len
+
+
+/*
+ * Old stuff that can go away.
+ */
+
+/* replaced by free_chunk_contents()? */
+#define freeanychunk(CH) {					\
+		chunk_t *chp_ = &(CH); /*eval once */		\
+		pfreeany(chp_->ptr);				\
+		*chp_ = EMPTY_CHUNK;	\
+	}
+
+/* replaced by chunk() */
+#define setchunk(ch, addr, size) { (ch).ptr = (addr); (ch).len = (size); }
+
+/* replaced by clone_chunk() */
+#define clonetochunk(ch, addr, size, name) \
+	{ (ch).ptr = clone_bytes((addr), (ch).len = (size), name); }
+
+/* unconditional */
+void DBG_dump_chunk(const char *prefix, chunk_t chunk);
 
 #endif

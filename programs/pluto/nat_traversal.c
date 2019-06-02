@@ -12,9 +12,10 @@
  * Copyright (C) 2011 Shinichi Furuso <Shinichi.Furuso@jp.sony.com>
  * Copyright (C) 2012 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2012-2014 Paul Wouters <pwouters@redhat.com>
- * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2012-2019 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2013-2019 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2014 Antony Antony <antony@phenome.org>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -67,7 +68,7 @@
 #include "ikev2.h"
 #include "crypt_hash.h"
 #include "ip_address.h"
-#include "cookie.h"
+#include "ike_spi.h"
 #include "crypto.h"
 #include "vendor.h"
 #include "send.h"
@@ -75,11 +76,11 @@
 #include "ikev2_send.h"
 
 /* As per https://tools.ietf.org/html/rfc3948#section-4 */
-#define DEFAULT_KEEP_ALIVE_PERIOD  20
+#define DEFAULT_KEEP_ALIVE_SECS  20
 
 bool nat_traversal_enabled = TRUE; /* can get disabled if kernel lacks support */
 
-static deltatime_t nat_kap = DELTATIME_INIT(DEFAULT_KEEP_ALIVE_PERIOD);	/* keep-alive period */
+static deltatime_t nat_kap = DELTATIME_INIT(DEFAULT_KEEP_ALIVE_SECS);	/* keep-alive period */
 static bool nat_kap_event = FALSE;
 
 #define IKEV2_NATD_HASH_SIZE	SHA1_DIGEST_SIZE
@@ -112,18 +113,19 @@ void init_nat_traversal(deltatime_t keep_alive_period)
 	libreswan_log("NAT-Traversal support %s",
 		nat_traversal_enabled ? " [enabled]" : " [disabled]");
 
+	init_oneshot_timer(EVENT_NAT_T_KEEPALIVE, nat_traversal_ka_event);
 }
 
 static void natd_hash(const struct hash_desc *hasher, unsigned char *hash,
-		const uint8_t *icookie, const uint8_t *rcookie,
-		const ip_address *ip,
-		uint16_t port /* host order */)
+		      const ike_spis_t *spis,
+		      const ip_address *ip, uint16_t port /* host order */)
 {
-	pexpect(!is_zero_cookie(icookie));
+	/* only responder's IKE SPI can be zero */
+	pexpect(!ike_spi_is_zero(&spis->initiator));
 
-	if (is_zero_cookie(rcookie)) {
-		/* seems to be common */
-		DBG(DBG_NATT, DBG_log("natd_hash: rcookie is zero"));
+	if (ike_spi_is_zero(&spis->responder)) {
+		/* IKE_SA_INIT exchange */
+		dbg("natd_hash: rcookie is zero");
 	}
 
 	/*
@@ -133,9 +135,12 @@ static void natd_hash(const struct hash_desc *hasher, unsigned char *hash,
 	 *
 	 * All values in network order
 	 */
-	struct crypt_hash *ctx = crypt_hash_init(hasher, "NATD", DBG_CRYPT);
-	crypt_hash_digest_bytes(ctx, "ICOOKIE", icookie, COOKIE_SIZE);
-	crypt_hash_digest_bytes(ctx, "RCOOKIE", rcookie, COOKIE_SIZE);
+	struct crypt_hash *ctx = crypt_hash_init("NATD", hasher);
+
+	crypt_hash_digest_bytes(ctx, "ICOOKIE/IKE SPIi",
+				&spis->initiator, sizeof(spis->initiator));
+	crypt_hash_digest_bytes(ctx, "RCOOKIE/IKE SPIr",
+				&spis->responder, sizeof(spis->responder));
 
 	const unsigned char *ab;
 	size_t al = addrbytesptr_read(ip, &ab);
@@ -147,62 +152,51 @@ static void natd_hash(const struct hash_desc *hasher, unsigned char *hash,
 					&netorder_port, sizeof(netorder_port));
 	}
 	crypt_hash_final_bytes(&ctx, hash, hasher->hash_digest_size);
-	DBG(DBG_NATT, {
-			DBG_log("natd_hash: hasher=%p(%d)", hasher,
-				(int)hasher->hash_digest_size);
-			DBG_dump("natd_hash: icookie=", icookie, COOKIE_SIZE);
-			DBG_dump("natd_hash: rcookie=", rcookie, COOKIE_SIZE);
-			DBG_dump("natd_hash: ip=", ab, al);
-			DBG_log("natd_hash: port=%d", port);
-			DBG_dump("natd_hash: hash=", hash,
-				hasher->hash_digest_size);
-		});
+	if (DBGP(DBG_BASE)) {
+		DBG_log("natd_hash: hasher=%p(%d)", hasher,
+			(int)hasher->hash_digest_size);
+		DBG_dump("natd_hash: icookie=", &spis->initiator, sizeof(spis->initiator));
+		DBG_dump("natd_hash: rcookie=", &spis->responder, sizeof(spis->responder));
+		DBG_dump("natd_hash: ip=", ab, al);
+		DBG_log("natd_hash: port=%d", port);
+		DBG_dump("natd_hash: hash=", hash,
+			 hasher->hash_digest_size);
+	}
 }
 
 /*
  * Add  NAT-Traversal IKEv2 Notify payload (v2N)
  */
-bool ikev2_out_nat_v2n(uint8_t np, pb_stream *outs, const struct msg_digest *md)
+bool ikev2_out_nat_v2n(pb_stream *outs, struct state *st,
+		       const ike_spi_t *ike_responder_spi)
 {
 	/*
-	 * XXX: This seems to be a very convoluted way of coming up
-	 * with the RCOOKIE.
-	 *
-	 * When building an SA_INIT request, both ST's rcookie and
-	 * MD's rcookie are zero (MD is fake, it really should be
-	 * null).
-	 *
-	 * When building an SA_INIT response, MD is valid and should
-	 * contain the correct rcookie.  ST may also contain that
-	 * cookie, but it really depends on when it is updated.
-	 *
-	 * Either way, it would probably be easier to just pass in the
-	 * RCOOKIE - the callers know which case they are dealing
-	 * with.
+	 * IKE SA INIT exchange can have responder's SPI still zero.
+	 * While .st_ike_spis.responder should also be zero it often
+	 * isn't - code likes to install the responder's SPI before
+	 * everything is ready (only to have to the remove it).
 	 */
-	struct state *st = md->st;
-	const uint8_t *rcookie = is_zero_cookie(st->st_rcookie) ? md->hdr.isa_rcookie : st->st_rcookie;
+	ike_spis_t ike_spis = {
+		.initiator = st->st_ike_spis.initiator,
+		.responder = *ike_responder_spi,
+	};
 	uint16_t lport = st->st_localport;
 
 	/* if encapsulation=yes, force NAT-T detection by using wrong port for hash calc */
 	if (st->st_connection->encaps == yna_yes) {
-		DBG(DBG_NATT, DBG_log("NAT-T: encapsulation=yes, so mangling hash to force NAT-T detection"));
+		dbg("NAT-T: encapsulation=yes, so mangling hash to force NAT-T detection");
 		lport = 0;
 	}
 
-	bool e = ikev2_out_natd(st, np,
-		&st->st_localaddr, lport,
-		&st->st_remoteaddr, st->st_remoteport,
-		rcookie, outs);
-	return e;
+	return ikev2_out_natd(&st->st_localaddr, lport,
+				&st->st_remoteaddr, st->st_remoteport,
+				&ike_spis, outs);
 }
 
-bool ikev2_out_natd(const struct state *st,
-		uint8_t np,
-		const ip_address *localaddr, uint16_t localport,
-		const ip_address *remoteaddr, uint16_t remoteport,
-		const uint8_t *rcookie,
-		pb_stream *outs)
+bool ikev2_out_natd(const ip_address *localaddr, uint16_t localport,
+		    const ip_address *remoteaddr, uint16_t remoteport,
+		    const ike_spis_t *ike_spis,
+		    pb_stream *outs)
 {
 	unsigned char hb[IKEV2_NATD_HASH_SIZE];
 	chunk_t hch = { hb, sizeof(hb) };
@@ -211,25 +205,20 @@ bool ikev2_out_natd(const struct state *st,
 		DBG_log(" NAT-Traversal support %s add v2N payloads.",
 			nat_traversal_enabled ? " [enabled]" : " [disabled]"));
 
-	/*
-	 * First: one with local (source) IP & port
-	 * TODO: This use of SHA1 should be allowed even with USE_SHA1=false
-	 */
-	natd_hash(&ike_alg_hash_sha1, hb,
-		  st->st_icookie, rcookie,
+	/* First: one with local (source) IP & port */
+
+	natd_hash(&ike_alg_hash_sha1, hb, ike_spis,
 		  localaddr, localport);
 
-	if (!ship_v2Nsp(ISAKMP_NEXT_v2N, v2N_NAT_DETECTION_SOURCE_IP,
-			&hch, outs))
+	if (!emit_v2Nchunk(v2N_NAT_DETECTION_SOURCE_IP, &hch, outs))
 		return FALSE;
 
 	/* Second: one with remote (destination) IP & port */
 
-	natd_hash(&ike_alg_hash_sha1, hb,
-		  st->st_icookie, rcookie,
+	natd_hash(&ike_alg_hash_sha1, hb, ike_spis,
 		  remoteaddr, remoteport);
 
-	return ship_v2Nsp(np, v2N_NAT_DETECTION_DESTINATION_IP, &hch, outs);
+	return emit_v2Nchunk(v2N_NAT_DETECTION_DESTINATION_IP, &hch, outs);
 }
 
 /*
@@ -375,7 +364,7 @@ static void natd_lookup_common(struct state *st,
 	if (st->st_connection->nat_keepalive) {
 		DBG(DBG_NATT, {
 			ipstr_buf b;
-			DBG_log("NAT_TRAVERSAL nat_keepalive enabled %s",
+			DBG_log("NAT_TRAVERSAL nat-keepalive enabled %s",
 				ipstr(sender, &b));
 		});
 	}
@@ -410,8 +399,7 @@ static void ikev1_natd_lookup(struct msg_digest *md)
 
 	unsigned char hash_me[MAX_DIGEST_LEN];
 
-	natd_hash(hasher, hash_me,
-		  st->st_icookie, st->st_rcookie,
+	natd_hash(hasher, hash_me, &st->st_ike_spis,
 		  &md->iface->ip_addr, md->iface->port);
 
 	/* Second: one with sender IP & port */
@@ -419,7 +407,7 @@ static void ikev1_natd_lookup(struct msg_digest *md)
 	unsigned char hash_him[MAX_DIGEST_LEN];
 
 	natd_hash(hasher, hash_him,
-		  st->st_icookie, st->st_rcookie,
+		  &st->st_ike_spis,
 		  &md->sender, hportof(&md->sender));
 
 	DBG(DBG_NATT, {
@@ -454,8 +442,17 @@ bool ikev1_nat_traversal_add_natd(uint8_t np, pb_stream *outs,
 			const struct msg_digest *md)
 {
 	const struct state *st = md->st;
-	const uint8_t *rcookie = is_zero_cookie(st->st_rcookie) ?
-			md->hdr.isa_rcookie : st->st_rcookie;
+	/*
+	 * XXX: This seems to be a very convoluted way of coming up
+	 * with the RCOOKIE.  It would probably be easier to just pass
+	 * in the RCOOKIE - the callers should know if it is zero, or
+	 * found in the MD.
+	 */
+	ike_spis_t ike_spis = {
+		.initiator = st->st_ike_spis.initiator,
+		.responder = ike_spi_is_zero(&st->st_ike_spis.responder) ?
+		md->hdr.isa_ike_responder_spi : st->st_ike_spis.responder,
+	};
 
 	passert(st->st_oakley.ta_prf != NULL);
 
@@ -482,8 +479,7 @@ bool ikev1_nat_traversal_add_natd(uint8_t np, pb_stream *outs,
 	/* first: emit payload with hash of sender IP & port */
 
 	natd_hash(st->st_oakley.ta_prf->hasher, hash,
-		  st->st_icookie, rcookie,
-		  first, firstport);
+		  &ike_spis, first, firstport);
 
 	if (!ikev1_out_generic_raw(nat_np, pd, outs, hash,
 				   st->st_oakley.ta_prf->hasher->hash_digest_size,
@@ -493,8 +489,7 @@ bool ikev1_nat_traversal_add_natd(uint8_t np, pb_stream *outs,
 	/* second: emit payload with hash of my IP & port */
 
 	natd_hash(st->st_oakley.ta_prf->hasher, hash,
-		  st->st_icookie, rcookie,
-		  second, secondport);
+		  &ike_spis, second, secondport);
 
 	return ikev1_out_generic_raw(np, pd, outs, hash,
 		st->st_oakley.ta_prf->hasher->hash_digest_size,
@@ -636,7 +631,7 @@ bool nat_traversal_add_natoa(uint8_t np, pb_stream *outs,
 	struct_desc *pd = LDISJOINT(st->hidden_variables.st_nat_traversal, NAT_T_WITH_RFC_VALUES) ?
 		&isakmp_nat_oa_drafts : &isakmp_nat_oa;
 
-	return 
+	return
 		emit_one_natoa(pd->pt, outs, pd, ipinit, "NAT-OAi") &&
 		emit_one_natoa(np, outs, pd, ipresp, "NAT-OAr");
 }
@@ -743,7 +738,7 @@ int nat_traversal_espinudp_socket(int sk, const char *fam)
 #endif
 
 #if defined(KLIPS)
-	if (kern_interface == USE_KLIPS || kern_interface == USE_MASTKLIPS) {
+	if (kern_interface == USE_KLIPS) {
 		struct ifreq ifr;
 		int *fdp = (int *) &ifr.ifr_data;
 		DBG(DBG_NATT, DBG_log("NAT-Traversal: Trying old ioctl style NAT-T"));
@@ -786,7 +781,7 @@ void nat_traversal_new_ka_event(void)
 	if (nat_kap_event)
 		return;	/* Event already schedule */
 
-	event_schedule(EVENT_NAT_T_KEEPALIVE, nat_kap, NULL);
+	schedule_oneshot_timer(EVENT_NAT_T_KEEPALIVE, nat_kap);
 	nat_kap_event = TRUE;
 }
 
@@ -815,71 +810,81 @@ static void nat_traversal_ka_event_state(struct state *st, void *data)
 	unsigned int *nat_kap_st = (unsigned int *)data;
 	const struct connection *c = st->st_connection;
 
-	if (c == NULL)
-		return;
+	if (!LHAS(st->hidden_variables.st_nat_traversal, NATED_HOST)) {
+		DBG(DBG_NATT,
+			DBG_log("not behind NAT: no NAT-T KEEP-ALIVE required for conn %s",
+				c->name));
+	}
 
 	if (!c->nat_keepalive) {
 		DBG(DBG_NATT,
-			DBG_log("Suppressing sending of NAT-T KEEP-ALIVE by per-conn configuration (nat_keepalive=no)"));
+			DBG_log("Suppressing sending of NAT-T KEEP-ALIVE for conn %s (nat-keepalive=no)",
+				c->name));
 		return;
 	}
-	DBG(DBG_NATT,
-		DBG_log("Sending of NAT-T KEEP-ALIVE enabled by per-conn configuration (nat_keepalive=yes)"));
 
-	if (IS_ISAKMP_SA_ESTABLISHED(st->st_state) &&
-	    LHAS(st->hidden_variables.st_nat_traversal, NATED_HOST)) {
+	/*
+	 * As long as we don't check get_sa_info() in IPsec SA's, and for
+	 * IKEv1 IPsec SA's always send a keepalive, we might as well
+	 * _not_ send keepalives for IKEv1 IKE SA's.
+	 */
+	if ((st->st_ike_version == IKEv2) && IS_IKE_SA_ESTABLISHED(st)) {
 		/*
-		 * - ISAKMP established
+		 * - IKE SA established
 		 * - we are behind NAT
 		 * - NAT-KeepAlive needed (we are NATed)
 		 */
-		if (c->newest_isakmp_sa != st->st_serialno) {
-			/*
-			 * if newest is also valid, ignore this one,
-			 * we will only use newest.
-			 */
-			struct state *st_newest = state_with_serialno(c->newest_isakmp_sa);
+		if (c->newest_isakmp_sa != st->st_serialno)
+			return;
 
-			if (st_newest != NULL &&
-			    IS_ISAKMP_SA_ESTABLISHED(st->st_state) &&
-			    LHAS(st_newest->hidden_variables.st_nat_traversal,
-					NATED_HOST))
-				return;
-		}
+		/* consider this connection for the next global loop */
+		(*nat_kap_st)++;
+
 		/*
-		 * TODO: We should check idleness of SA before sending
-		 * keep-alive. If there is traffic, no need for it
+		 * If this IKE SA sent a packet recently, no need for anything
+		 * eg, if short DPD timers are used we can skip this.
 		 */
+		if (!is_monotime_epoch(st->st_last_liveness) &&
+			deltasecs(monotimediff(mononow(), st->st_last_liveness)) < DEFAULT_KEEP_ALIVE_SECS)
+		{
+			DBG(DBG_NATT, DBG_log("NAT-T: keepalive packet not required as recent DPD event used the IKE SA on conn %s",
+				c->name));
+			return;
+		}
+
+		/*
+		 * TODO or not?
+		 * We could also check If there is IPsec SA encapsulation traffic, since
+		 * then we also do not need to send keepalives, but that check is a little
+		 * expensive as we have to find some/all IPsec states and ask the kernel,
+		 * every 20s.
+		 */
+		DBG(DBG_NATT,
+			DBG_log("we are behind NAT: sending of NAT-T KEEP-ALIVE for conn %s (nat-keepalive=yes)",
+				c->name));
+		nat_traversal_send_ka(st);
+		return;
+	}
+
+	/*
+	 * IKE SA and IPsec SA keepalives happen over the same port/NAT mapping.
+	 * If the IKE SA is idle and triggers keepalives, we don't need to check
+	 * IPsec SA's being idle. If we were to check IPsec SA, we could then
+	 * also update the IKE SA st->st_last_liveness, but we think this is
+	 * too expensive (call get_sa_info() to kernel _and_ find IKE SA.
+	 *
+	 * For IKEv2, just use the one IKE SA instead of the one or more IPsec SA's
+	 * (and ignore whether IPsec SA was active or not)
+	 *
+	 * for IKEv1, there can be orphan IPsec SA's. We still are not checking
+	 * the kernel, so we just have to always send the keepalive.
+	 */
+	if (st->st_ike_version == IKEv1 && IS_IPSEC_SA_ESTABLISHED(st) &&
+		c->newest_ipsec_sa == st->st_serialno)
+	{
 		nat_traversal_send_ka(st);
 		(*nat_kap_st)++;
 	}
-
-	if ((st->st_state == STATE_QUICK_R2 ||
-	     st->st_state == STATE_QUICK_I2) &&
-	    LHAS(st->hidden_variables.st_nat_traversal, NATED_HOST)) {
-		/*
-		 * - IPSEC SA established
-		 * - NAT-Traversal detected
-		 * - NAT-KeepAlive needed (we are NATed)
-		 */
-		if (c->newest_ipsec_sa != st->st_serialno) {
-			/*
-			 * if newest is also valid, ignore this one,
-			 * we will only use newest.
-			 */
-			struct state *st_newest = state_with_serialno(c->newest_ipsec_sa);
-
-			if (st_newest != NULL &&
-			    (st_newest->st_state == STATE_QUICK_R2 ||
-			     st_newest->st_state == STATE_QUICK_I2) &&
-			    LHAS(st_newest->hidden_variables.st_nat_traversal,
-				 NATED_HOST))
-				return;
-		}
-		nat_traversal_send_ka(st);
-		(*nat_kap_st)++;
-	}
-
 }
 
 void nat_traversal_ka_event(void)
@@ -888,6 +893,7 @@ void nat_traversal_ka_event(void)
 
 	nat_kap_event = FALSE;  /* ready to be reschedule */
 
+	dbg("FOR_EACH_STATE_... via for_each_state in %s", __func__);
 	for_each_state(nat_traversal_ka_event_state, &nat_kap_st);
 
 	if (nat_kap_st != 0) {
@@ -952,6 +958,7 @@ void nat_traversal_new_mapping(struct state *st,
 	nfo.addr  = *nsrc;
 	nfo.port  = nsrcport;
 
+	dbg("FOR_EACH_STATE_... via for_each_state in %s", __func__);
 	for_each_state(nat_traversal_find_new_mapp_state, &nfo);
 }
 
@@ -1047,9 +1054,13 @@ void show_setup_natt(void)
 		  pluto_nat_port);
 }
 
-void ikev2_natd_lookup(struct msg_digest *md, const u_char *rcookie)
+void ikev2_natd_lookup(struct msg_digest *md, const ike_spi_t *ike_responder_spi)
 {
 	struct state *st = md->st;
+	ike_spis_t ike_spis = {
+		.initiator = st->st_ike_spis.initiator,
+		.responder = *ike_responder_spi,
+	};
 
 	passert(st != NULL);
 	passert(md->iface != NULL);
@@ -1061,14 +1072,14 @@ void ikev2_natd_lookup(struct msg_digest *md, const u_char *rcookie)
 
 	unsigned char hash_me[IKEV2_NATD_HASH_SIZE];
 
-	natd_hash(&ike_alg_hash_sha1, hash_me, st->st_icookie, rcookie,
+	natd_hash(&ike_alg_hash_sha1, hash_me, &ike_spis,
 		  &md->iface->ip_addr, md->iface->port);
 
 	/* Second: one with sender IP & port */
 
 	unsigned char hash_him[IKEV2_NATD_HASH_SIZE];
 
-	natd_hash(&ike_alg_hash_sha1, hash_him, st->st_icookie, rcookie,
+	natd_hash(&ike_alg_hash_sha1, hash_him, &ike_spis,
 		  &md->sender, hportof(&md->sender));
 
 	bool found_me = FALSE;

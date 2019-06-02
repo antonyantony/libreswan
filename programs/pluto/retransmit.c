@@ -109,21 +109,19 @@ void clear_retransmits(struct state *st)
 	rt->delay = deltatime(0);
 	rt->start = monotime_epoch;
 	rt->timeout = deltatime(0);
-	rt->type = EVENT_NULL; /*0*/
 	LSWDBGP(DBG_RETRANSMITS, buf) {
 		lswlog_retransmit_prefix(buf, st);
 		lswlogs(buf, "cleared");
 	}
 }
 
-void start_retransmits(struct state *st, enum event_type type)
+void start_retransmits(struct state *st)
 {
 	struct connection *c = st->st_connection;
 	retransmit_t *rt = &st->st_retransmit;
 	rt->nr_duplicate_replies = 0;
 	rt->nr_retransmits = 0;
 	rt->limit = MAXIMUM_RETRANSMITS_PER_EXCHANGE;
-	rt->type = type;
 	/* correct values */
 	rt->timeout = c->r_timeout;
 	rt->delay = c->r_interval;
@@ -145,7 +143,7 @@ void start_retransmits(struct state *st, enum event_type type)
 	}
 	rt->start = mononow();
 	rt->delays = rt->delay;
-	event_schedule(rt->type, rt->delay, st);
+	event_schedule(EVENT_RETRANSMIT, rt->delay, st);
 	LSWDBGP(DBG_RETRANSMITS, buf) {
 		lswlog_retransmit_prefix(buf, st);
 		lswlogs(buf, "first event in ");
@@ -260,7 +258,7 @@ enum retransmit_status retransmit(struct state *st)
 				break;
 			default:
 				lswlogf(buf, ".  No response (or no acceptable response) to our %s message",
-					st->st_ikev2 ? "IKEv2" : "IKEv1");
+					enum_name(&ike_version_names, st->st_ike_version));
 				break;
 			}
 		}
@@ -270,7 +268,7 @@ enum retransmit_status retransmit(struct state *st)
 	double_delay(rt, nr_retransmits);
 	rt->nr_retransmits++;
  	rt->delays = deltatime_add(rt->delays, rt->delay);
-	event_schedule(rt->type, rt->delay, st);
+	event_schedule(EVENT_RETRANSMIT, rt->delay, st);
 	LSWLOG_RC(RC_RETRANSMISSION, buf) {
 		lswlogf(buf, "%s: retransmission; will wait ",
 			st->st_finite_state->fs_name);
@@ -283,7 +281,7 @@ enum retransmit_status retransmit(struct state *st)
 void suppress_retransmits(struct state *st)
 {
 	retransmit_t *rt = &st->st_retransmit;
-	if (rt->type == EVENT_NULL) {
+	if (rt->limit == 0) {
 		LSWDBGP(DBG_CONTROL, buf) {
 			lswlog_retransmit_prefix(buf, st);
 			lswlogs(buf, "no retransmits to suppress");
@@ -300,10 +298,8 @@ void suppress_retransmits(struct state *st)
 	 * event_schedule() doesn't just wipe the old event
 	 * automatically?
 	 */
-	if (st->st_event != NULL) {
-		delete_pluto_event(&st->st_event);
-	}
-	event_schedule(rt->type, rt->delay, st);
+	delete_pluto_event(&st->st_event);
+	event_schedule(EVENT_RETRANSMIT, rt->delay, st);
 	LSWLOG_RC(RC_RETRANSMISSION, buf) {
 		lswlogf(buf, "%s: suppressing retransmits; will wait ",
 			st->st_finite_state->fs_name);

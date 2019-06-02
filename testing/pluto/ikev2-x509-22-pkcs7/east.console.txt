@@ -19,9 +19,7 @@ east #
 |    ikev2 cert encoding: CERT_X509_SIGNATURE (0x4)
 | **parse IKEv2 Certificate Payload:
 |    ikev2 cert encoding: CERT_PKCS7_WRAPPED_X509 (0x1)
-| **parse IKEv2 Certificate Request Payload:
-|    ikev2 cert encoding: CERT_X509_SIGNATURE (0x4)
-| *****emit IKEv2 Certificate Payload:
+| ****emit IKEv2 Certificate Payload:
 |    ikev2 cert encoding: CERT_PKCS7_WRAPPED_X509 (0x1)
 east #
  ../../pluto/bin/ipsec-look.sh
@@ -62,7 +60,7 @@ Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
 Libreswan test CA for mainca - Libreswan                     CT,, 
 east                                                         u,u,u
-hashsha2                                                     P,,  
+hashsha1                                                     P,,  
 nic                                                          P,,  
 north                                                        P,,  
 road                                                         P,,  

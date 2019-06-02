@@ -10,6 +10,8 @@ Redirecting to: systemctl start ipsec.service
 west #
  ../../pluto/bin/wait-until-pluto-started
 west #
+ ipsec whack --impair suppress-retransmits
+west #
  echo "initdone"
 initdone
 west #
@@ -18,16 +20,16 @@ west #
 west #
  ipsec auto --up westnet-eastnet-propnum
 002 "westnet-eastnet-propnum" #1: initiating v2 parent SA
-133 "westnet-eastnet-propnum" #1: initiate
-133 "westnet-eastnet-propnum" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
-134 "westnet-eastnet-propnum" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=3DES_CBC_192 integ=HMAC_MD5_96 prf=HMAC_MD5 group=MODP2048}
+1v2 "westnet-eastnet-propnum" #1: initiate
+1v2 "westnet-eastnet-propnum" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
+1v2 "westnet-eastnet-propnum" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=3DES_CBC_192 integ=HMAC_MD5_96 prf=HMAC_MD5 group=MODP2048}
 002 "westnet-eastnet-propnum" #2: IKEv2 mode peer ID is ID_FQDN: '@east'
 003 "westnet-eastnet-propnum" #2: Authenticated using RSA
 002 "westnet-eastnet-propnum" #2: negotiated connection [192.0.1.0-192.0.1.255:0-65535 0] -> [192.0.2.0-192.0.2.255:0-65535 0]
 004 "westnet-eastnet-propnum" #2: STATE_V2_IPSEC_I: IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive}
 west #
  ipsec auto --delete westnet-eastnet-propnum
-002 "westnet-eastnet-propnum": deleting non-instance connection
+002 "westnet-eastnet-propnum": terminating SAs using this connection
 002 "westnet-eastnet-propnum" #2: deleting state (STATE_V2_IPSEC_I) and sending notification
 005 "westnet-eastnet-propnum" #2: ESP traffic information: in=0B out=0B
 002 "westnet-eastnet-propnum" #1: deleting state (STATE_PARENT_I3) and sending notification
@@ -59,14 +61,14 @@ west #
 |    spi size: 0 (0x0)
 |    # transforms: 4 (0x4)
 --
-| ******emit IKEv2 Proposal Substructure Payload:
+| *****emit IKEv2 Proposal Substructure Payload:
 |    last proposal: v2_PROPOSAL_NON_LAST (0x2)
 |    prop #: 1 (0x1)
 |    proto ID: IKEv2_SEC_PROTO_ESP (0x3)
 |    spi size: 4 (0x4)
 |    # transforms: 4 (0x4)
 --
-| ******emit IKEv2 Proposal Substructure Payload:
+| *****emit IKEv2 Proposal Substructure Payload:
 |    last proposal: v2_PROPOSAL_LAST (0x0)
 |    prop #: 2 (0x2)
 |    proto ID: IKEv2_SEC_PROTO_ESP (0x3)

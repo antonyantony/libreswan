@@ -2,6 +2,7 @@
  * Helper function for dealing with post-quantum preshared keys
  *
  * Copyright (C) 2017 Vukasin Karadzic <vukasin.karadzic@gmail.com>
+ * Copyright (C) 2019 D. Hugh Redelmeier <hugh@mimosa.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -49,15 +50,11 @@ bool create_ppk_id_payload(chunk_t *ppk_id, struct ppk_id_payload *payl)
  * used by initiator to make chunk_t from ppk_id payload
  * for sending it in PPK_ID Notify Payload over the wire
  */
-chunk_t create_unified_ppk_id(struct ppk_id_payload *payl)
+bool emit_unified_ppk_id(struct ppk_id_payload *payl, pb_stream *pbs)
 {
-	u_char type = PPK_ID_FIXED;	/* PPK_ID_FIXED */
-	const chunk_t *ppk_id = &payl->ppk_id;
-
-	chunk_t unified = alloc_chunk(ppk_id->len + 1, "Unified PPK_ID");
-	unified.ptr[0] = type;
-	memcpy(&unified.ptr[1], ppk_id->ptr, ppk_id->len);
-	return unified;
+	u_char type = PPK_ID_FIXED;
+	return out_raw(&type, sizeof(type), pbs, "PPK_ID_FIXED") &&
+		out_chunk(payl->ppk_id, pbs, "PPK_ID");
 }
 
 /*
@@ -108,110 +105,114 @@ bool extract_ppk_id(pb_stream *pbs, struct ppk_id_payload *payl)
 	return TRUE;
 }
 
-stf_status ikev2_calc_no_ppk_auth(struct connection *c, struct state *st, unsigned char *id_hash, chunk_t *no_ppk_auth)
+#include "ike_alg_hash.h"
+
+stf_status ikev2_calc_no_ppk_auth(struct state *st,
+			unsigned char *id_hash,
+			chunk_t *no_ppk_auth /* output */)
 {
+	struct connection *c = st->st_connection;
 	enum keyword_authby authby = c->spd.this.authby;
+
+	freeanychunk(*no_ppk_auth);	/* in case it was occupied */
+
 	switch (authby) {
 	case AUTH_RSASIG:
 	{
-		enum notify_payload_hash_algorithms hash_algo;
-		uint8_t sha2_rsa_oid_blob[ASN1_SHA2_RSA_PSS_SIZE];
+		const struct asn1_hash_blob *h = NULL;
 
 		if (st->st_hash_negotiated & NEGOTIATE_AUTH_HASH_SHA2_512) {
-			hash_algo = IKEv2_AUTH_HASH_SHA2_512;
-			uint8_t sha2_rsa_512_oid_blob[ASN1_SHA2_RSA_PSS_SIZE] = RSA_PSS_SHA512_BLOB;
-
-			memcpy(sha2_rsa_oid_blob, sha2_rsa_512_oid_blob, ASN1_SHA2_RSA_PSS_SIZE);
+			h = &asn1_rsa_pss_sha2_512;
 		} else if (st->st_hash_negotiated & NEGOTIATE_AUTH_HASH_SHA2_384) {
-			hash_algo = IKEv2_AUTH_HASH_SHA2_384;
-			uint8_t sha2_rsa_384_oid_blob[ASN1_SHA2_RSA_PSS_SIZE] = RSA_PSS_SHA512_BLOB;
-
-			memcpy(sha2_rsa_oid_blob, sha2_rsa_384_oid_blob, ASN1_SHA2_RSA_PSS_SIZE);
+			h = &asn1_rsa_pss_sha2_384;
 		} else if (st->st_hash_negotiated & NEGOTIATE_AUTH_HASH_SHA2_256) {
-			hash_algo = IKEv2_AUTH_HASH_SHA2_256;
-			uint8_t sha2_rsa_256_oid_blob[ASN1_SHA2_RSA_PSS_SIZE] = RSA_PSS_SHA512_BLOB;
-
-			memcpy(sha2_rsa_oid_blob, sha2_rsa_256_oid_blob, ASN1_SHA2_RSA_PSS_SIZE);
-		} else if (c->sighash_policy == POL_SIGHASH_NONE) { /* RSA with SHA1 without Digsig */
-			hash_algo = IKEv2_AUTH_HASH_SHA1;
+			h = &asn1_rsa_pss_sha2_256;
+		} else if (c->sighash_policy & POL_SIGHASH_NONE) {
+			/* RSA with SHA1 without Digsig: no oid blob appended */
+			if (!ikev2_calculate_rsa_hash(st,
+					st->st_original_role, id_hash, NULL,
+					no_ppk_auth, IKEv2_AUTH_HASH_SHA1))
+			{
+				/* ??? what diagnostic? */
+				return STF_FAIL;
+			}
+			return STF_OK;
 		} else {
 			loglog(RC_LOG_SERIOUS, "No compatible hash algo");
 			return STF_FAIL;
 		}
 
-		if (ikev2_calculate_rsa_hash(st, st->st_original_role, id_hash, NULL, TRUE, no_ppk_auth, hash_algo)) {
-			if(st->st_seen_hashnotify && (c->sighash_policy != POL_SIGHASH_NONE)) {
-				/* make blobs separately, and somehow combine them and no_ppk_auth
-				 * to get an actual no_ppk_auth */
-				int len = ASN1_LEN_ALGO_IDENTIFIER + ASN1_SHA2_RSA_PSS_SIZE + no_ppk_auth->len;
-				u_char *blobs = alloc_bytes(len, "bytes for blobs for AUTH_DIGSIG NO_PPK_AUTH");
-				u_char *ret = blobs;
-				const uint8_t len_sha2_rsa_oid_blob[ASN1_LEN_ALGO_IDENTIFIER] = LEN_RSA_PSS_SHA2_BLOB;
+		chunk_t hashval;
 
-				memcpy(blobs, len_sha2_rsa_oid_blob, ASN1_LEN_ALGO_IDENTIFIER);
-				blobs += ASN1_LEN_ALGO_IDENTIFIER;
+		if (!ikev2_calculate_rsa_hash(st, st->st_original_role,
+				id_hash, NULL, &hashval,
+				h->hash_algo)) {
+			/* ??? what diagnostic? */
+			return STF_FAIL;
+		}
 
-				memcpy(blobs, sha2_rsa_oid_blob, ASN1_SHA2_RSA_PSS_SIZE);
-				blobs += ASN1_SHA2_RSA_PSS_SIZE;
-				memcpy(blobs, no_ppk_auth->ptr, no_ppk_auth->len);
-				chunk_t release = *no_ppk_auth;
-				setchunk(*no_ppk_auth, ret, len);
-				freeanychunk(release);
-			}
+		if (st->st_seen_hashnotify) {
+			/*
+			 * combine blobs to create no_ppk_auth:
+			 * - ASN.1 algo blob
+			 * - hashval
+			 */
+			int len = h->blob_sz + hashval.len;
+			u_char *blobs = alloc_bytes(len,
+				"bytes for blobs for AUTH_DIGSIG NO_PPK_AUTH");
+
+			memcpy(&blobs[0], h->blob, h->blob_sz);
+			memcpy(&blobs[h->blob_sz], hashval.ptr, hashval.len);
+			freeanychunk(hashval);
+
+			setchunk(*no_ppk_auth, blobs, len);
 		}
 		return STF_OK;
-		break;
 	}
 	case AUTH_PSK:
 		/* store in no_ppk_auth */
-		if (ikev2_create_psk_auth(AUTH_PSK, st, id_hash, NULL, no_ppk_auth))
-			return STF_OK;
-		break;
+		if (!ikev2_create_psk_auth(AUTH_PSK, st, id_hash, no_ppk_auth)) {
+			/* ??? what diagnostic? */
+			return STF_INTERNAL_ERROR;
+		}
+		return STF_OK;
+
 	default:
-		break;
+		bad_case(authby);
 	}
-	return STF_INTERNAL_ERROR;
 }
 
 /* in X_no_ppk keys are stored keys that go into PRF, and we store result in sk_X */
-void ppk_recalculate(const chunk_t *ppk, const struct prf_desc *prf_desc,
-			PK11SymKey **sk_d, PK11SymKey **sk_pi, PK11SymKey **sk_pr,
-			PK11SymKey *sk_d_no_ppk,
-			PK11SymKey *sk_pi_no_ppk,
-			PK11SymKey *sk_pr_no_ppk)
+
+static void ppk_recalc_one(PK11SymKey **sk /* updated */, PK11SymKey *ppk_key, const struct prf_desc *prf_desc, const char *name)
 {
-	PK11SymKey *new_sk_pi, *new_sk_pr, *new_sk_d;
+	PK11SymKey *t = ikev2_prfplus(prf_desc, ppk_key, *sk, prf_desc->prf_key_size);
+	release_symkey(__func__, name, sk);
+	*sk = t;
+	DBG(DBG_PRIVATE, {
+		chunk_t chunk_sk = chunk_from_symkey("sk_chunk", *sk);
+		DBG_dump_chunk(name, chunk_sk);
+		freeanychunk(chunk_sk);
+	});
+}
+
+void ppk_recalculate(const chunk_t *ppk, const struct prf_desc *prf_desc,
+			PK11SymKey **sk_d,	/* updated */
+			PK11SymKey **sk_pi,	/* updated */
+			PK11SymKey **sk_pr)	/* updated */
+{
 	PK11SymKey *ppk_key = symkey_from_chunk("PPK Keying material", *ppk);
 
-	DBG(DBG_CRYPT, DBG_log("Starting to recalculate SK_d, SK_pi, SK_pr");
-			 DBG_dump_chunk("PPK:", *ppk));
+	DBG(DBG_CRYPT, {
+		DBG_log("Starting to recalculate SK_d, SK_pi, SK_pr");
+		DBG_dump_chunk("PPK:", *ppk);
+	});
 
-	new_sk_d = ikev2_prfplus(prf_desc, ppk_key, sk_d_no_ppk, prf_desc->prf_key_size);
-	*sk_d = new_sk_d;
+	DBGF(DBG_PRIVATE, "PPK recalculating SK_d, SK_pi, SK_pr");
 
-	new_sk_pi = ikev2_prfplus(prf_desc, ppk_key, sk_pi_no_ppk, prf_desc->prf_key_size);
-	*sk_pi = new_sk_pi;
+	ppk_recalc_one(sk_d, ppk_key, prf_desc, "sk_d");
+	ppk_recalc_one(sk_pi, ppk_key, prf_desc, "sk_pi");
+	ppk_recalc_one(sk_pr, ppk_key, prf_desc, "sk_pr");
 
-	new_sk_pr = ikev2_prfplus(prf_desc, ppk_key, sk_pr_no_ppk, prf_desc->prf_key_size);
-	*sk_pr = new_sk_pr;
-
-	if (DBGP(DBG_PRIVATE)) {
-		/* declaring chunks for dumping them beneath */
-		chunk_t chunk_sk_d = chunk_from_symkey("chunk_SK_d", *sk_d);
-		chunk_t chunk_sk_pi = chunk_from_symkey("chunk_SK_pi", *sk_pi);
-		chunk_t chunk_sk_pr = chunk_from_symkey("chunk_SK_pr", *sk_pr);
-
-		DBG(DBG_PRIVATE,
-		    DBG_log("PPK Finished recalculating SK_d, SK_pi, SK_pr");
-		    DBG_log("PPK Recalculated pointers: SK_d-key@%p, SK_pi-key@%p, SK_pr-key@%p",
-			     *sk_d, *sk_pi, *sk_pr);
-		    DBG_dump_chunk("new SK_d", chunk_sk_d);
-		    DBG_dump_chunk("new SK_pi", chunk_sk_pi);
-		    DBG_dump_chunk("new SK_pr", chunk_sk_pr));
-
-		freeanychunk(chunk_sk_d);
-		freeanychunk(chunk_sk_pi);
-		freeanychunk(chunk_sk_pr);
-	}
-
+	release_symkey(__func__, "PPK chunk", &ppk_key);
 }

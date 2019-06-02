@@ -1,6 +1,7 @@
 #! /bin/sh
 # dump assorted information of use in debugging
 # Copyright (C) 1998, 1999  Henry Spencer.
+# Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -154,8 +155,6 @@ if test -r /proc/net/ipsec_eroute
 then
 	sort -sg -k 3 /proc/net/ipsec_eroute || cat /proc/net/ipsec_eroute
 fi
-_________________________ netstat-rn
-netstat -nr|head -n $maxlines
 _________________________ /proc/net/ipsec_spi
 if test -r /proc/net/ipsec_spi
 then
@@ -171,10 +170,6 @@ if test -r /proc/net/ipsec_tncfg
 then
 	cat /proc/net/ipsec_tncfg
 fi
-_________________________ /proc/net/pfkey
-if test -r /proc/net/pfkey
-then
-	cat /proc/net/pfkey
 _________________________ ip-xfrm-state
 	ip xfrm state
 _________________________ ip-xfrm-policy
@@ -216,8 +211,6 @@ then
 fi
 _________________________ ipsec/status
 ipsec whack --status
-_________________________ ifconfig-a
-ifconfig -a
 _________________________ ip-addr-list
 ip addr list
 _________________________ ip-route-list
@@ -226,16 +219,6 @@ _________________________ ip-rule-list
 ip rule list
 _________________________ ipsec_verify
 ipsec verify --nocolour
-_________________________ mii-tool
-if [ -x /sbin/mii-tool ]
-then
-    /sbin/mii-tool -v
-elif [ -x /usr/sbin/mii-tool ]
-then
-    /usr/sbin/mii-tool -v
-else
-    mii-tool -v
-fi
 _________________________ ipsec/directory
 ipsec --directory
 _________________________ hostname/fqdn
@@ -248,7 +231,7 @@ _________________________ ps
 # -i ppid picks up the header
 ps alxwf | egrep -i 'ppid|pluto|ipsec|klips'
 _________________________ ipsec/conf
-ipsec readwriteconf --config @IPSEC_CONF@ | ipsec _keycensor
+ipsec readwriteconf --config @IPSEC_CONF@
 _________________________ ipsec/secrets
 cat @IPSEC_SECRETS_FILE@ | ipsec _secretcensor
 _________________________ ipsec/listall
@@ -305,7 +288,7 @@ if test -r /proc/net/ipsec_version
 then
 	cat /proc/net/ipsec_version
 else
-	if test -r /proc/net/pfkey
+	if test -r /proc/net/xfrm_stat
 	then
 		echo "NETKEY (`uname -r`) support detected "
 	else

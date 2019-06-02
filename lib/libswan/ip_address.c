@@ -2,6 +2,8 @@
  * low-level ip_address ugliness
  *
  * Copyright (C) 2000  Henry Spencer.
+ * Copyright (C) 2018  Andrew Cagney.
+ * Copyright (C) 2019 D. Hugh Redelmeier <hugh@mimosa.com>
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
@@ -120,6 +122,207 @@ size_t sockaddrlenof(const ip_address * src)
 
 const char *ipstr(const ip_address *src, ipstr_buf *b)
 {
-	addrtot(src, 0, b->private_buf, sizeof(b->private_buf));
-	return b->private_buf;
+	return str_address_cooked(src, b);
+}
+
+const char *sensitive_ipstr(const ip_address *src, ipstr_buf *b)
+{
+	return str_address_sensitive(src, b);
+}
+
+chunk_t same_ip_address_as_chunk(const ip_address *address)
+{
+	if (address == NULL) {
+		return EMPTY_CHUNK;
+	}
+	switch (address->u.v4.sin_family) {
+	case AF_INET:
+		return CHUNKO(address->u.v4.sin_addr.s_addr); /* strip const */
+	case AF_INET6:
+		return CHUNKO(address->u.v6.sin6_addr); /* strip const */
+	default:
+		return EMPTY_CHUNK;
+	}
+}
+
+/*
+ * Implement https://tools.ietf.org/html/rfc5952
+ */
+
+static void fmt_raw_ipv4_address(struct lswlog *buf, chunk_t a, char sepc)
+{
+	const char seps[2] = { sepc == 0 ? '.' : sepc, 0, };
+	const char *sep = "";
+	for (size_t i = 0; i < a.len; i++) {
+		lswlogf(buf, "%s%"PRIu8, sep, a.ptr[i]);
+		sep = seps;
+	}
+}
+
+static void fmt_raw_ipv6_address(struct lswlog *buf, chunk_t a, char sepc,
+				 chunk_t skip)
+{
+	const char seps[2] = { sepc == 0 ? ':' : sepc, 0, };
+	const uint8_t *ptr = a.ptr;
+	const char *sep = "";
+	const uint8_t *last = a.ptr + a.len - 2;
+	while (ptr <= last) {
+		if (ptr == skip.ptr) {
+			/* skip zero run */
+			lswlogf(buf, "%s%s", seps, seps);
+			sep = "";
+			ptr += skip.len;
+		} else {
+			/* suppress zeros */
+			unsigned ia = (ptr[0] << 8) + ptr[1];
+			lswlogf(buf, "%s%x", sep, ia);
+			sep = seps;
+			ptr += 2;
+		}
+	}
+}
+
+void fmt_address_raw(struct lswlog *buf, const ip_address *address, char sepc)
+{
+	chunk_t a = same_ip_address_as_chunk(address);
+	if (a.len == 0) {
+		lswlogs(buf, "<invalid-length>");
+		return;
+	}
+	int type = addrtypeof(address);
+	switch (type) {
+	case AF_INET: /* N.N.N.N */
+		fmt_raw_ipv4_address(buf, a, sepc);
+		break;
+	case AF_INET6: /* N:N:...:N */
+		fmt_raw_ipv6_address(buf, a, sepc, EMPTY_CHUNK);
+		break;
+	case 0:
+		lswlogf(buf, "<invalid-address>");
+		break;
+	default:
+		lswlogf(buf, "<invalid-type-%d>", type);
+		break;
+	}
+}
+
+/*
+ * Find longest run of zero pairs that should be suppressed (need at
+ * least two).
+ */
+static chunk_t zeros_to_skip(chunk_t a)
+{
+	chunk_t zero = EMPTY_CHUNK;
+	uint8_t *ptr = a.ptr;
+	uint8_t *last = a.ptr + a.len - 2;
+	while (ptr <= last) {
+		unsigned l = 0;
+		for (l = 0; ptr + l <= last; l += 2) {
+			unsigned ia = (ptr[l+0] << 8) + ptr[l+1];
+			if (ia != 0) {
+				break;
+			}
+		}
+		if (l > 2 && l > zero.len) {
+			zero.ptr = ptr;
+			zero.len = l;
+			ptr += l;
+		} else {
+			ptr += 2;
+		}
+	}
+	return zero;
+}
+
+void fmt_address_cooked(struct lswlog *buf, const ip_address *address)
+{
+	chunk_t a = same_ip_address_as_chunk(address);
+	if (a.len == 0) {
+		lswlogs(buf, "<invalid-length>");
+		return;
+	}
+	int type = addrtypeof(address);
+	switch (type) {
+	case AF_INET: /* N.N.N.N */
+		fmt_raw_ipv4_address(buf, a, 0);
+		break;
+	case AF_INET6: /* N:N:...:N */
+		fmt_raw_ipv6_address(buf, a, 0, zeros_to_skip(a));
+		break;
+	case 0:
+		lswlogf(buf, "<invalid-address>");
+		break;
+	default:
+		lswlogf(buf, "<invalid-type-%d>", type);
+		break;
+	}
+}
+
+void fmt_address_sensitive(struct lswlog *buf, const ip_address *address)
+{
+	if (log_ip) {
+		fmt_address_cooked(buf, address);
+	} else {
+		lswlogs(buf, "<ip-address>");
+	}
+}
+
+void fmt_address_reversed(struct lswlog *buf, const ip_address *address)
+{
+	chunk_t bytes = same_ip_address_as_chunk(address);
+	int type = addrtypeof(address);
+	switch (type) {
+	case AF_INET:
+		for (int i = bytes.len - 1; i >= 0; i--) {
+			uint8_t byte = bytes.ptr[i];
+			fmt(buf, "%d.", byte);
+		}
+		fmt(buf, "IN-ADDR.ARPA.");
+		break;
+	case AF_INET6:
+		for (int i = bytes.len - 1; i >= 0; i--) {
+			uint8_t byte = bytes.ptr[i];
+			fmt(buf, "%x.%x.", byte & 0xf, byte >> 4);
+		}
+		fmt(buf, "IP6.ARPA.");
+		break;
+	case 0:
+		fmt(buf, "<invalid-address>");
+		break;
+	default:
+		fmt(buf, "<invalid-type-%d>", type);
+		break;
+	}
+}
+
+const char *str_address_raw(const ip_address *src, char sep,
+			    ip_address_buf *dst)
+{
+	fmtbuf_t buf = ARRAY_AS_FMTBUF(dst->buf);
+	fmt_address_raw(&buf, src, sep);
+	return dst->buf;
+}
+
+const char *str_address_cooked(const ip_address *src,
+			       ip_address_buf *dst)
+{
+	fmtbuf_t buf = ARRAY_AS_FMTBUF(dst->buf);
+	fmt_address_cooked(&buf, src);
+	return dst->buf;
+}
+
+const char *str_address_sensitive(const ip_address *src,
+			       ip_address_buf *dst)
+{
+	fmtbuf_t buf = ARRAY_AS_FMTBUF(dst->buf);
+	fmt_address_sensitive(&buf, src);
+	return dst->buf;
+}
+
+const char *str_address_reversed(const ip_address *src,
+				 address_reversed_buf *dst)
+{
+	fmtbuf_t buf = ARRAY_AS_FMTBUF(dst->buf);
+	fmt_address_reversed(&buf, src);
+	return dst->buf;
 }
