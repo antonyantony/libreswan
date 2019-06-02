@@ -1,3 +1,15 @@
+libreswan (3.28-1) experimental; urgency=medium
+
+  * new upstream release (to experimental due to freeze for buster)
+  * refresh patches
+  * fix spelling
+  * fix upstream's broken barf shell script
+  * Standards-Version: bump to 4.3.0 (no changes needed)
+  * move to debhelper 12
+  * d/copyright: lib/libswan/{tto,ip}range.c were merged into ip_range.c
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Sun, 02 Jun 2019 18:21:06 -0400
+
 libreswan (3.27-4) unstable; urgency=medium
 
   * order object files for reproducible linking
