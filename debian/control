@@ -12,7 +12,7 @@ Rules-Requires-Root: no
 Build-Depends:
  bison,
  bzip2,
- debhelper (>= 11~),
+ debhelper-compat (= 12),
  flex,
  htmldoc,
  libaudit-dev [linux-any],
