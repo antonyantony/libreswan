@@ -1,3 +1,9 @@
+libreswan (3.27-6) unstable; urgency=medium
+
+  * fix CVE-2019-10155 (closes: #930338)
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Mon, 10 Jun 2019 23:04:05 +0100
+
 libreswan (3.27-5) unstable; urgency=medium
 
   * fix CVE-2019-12312 (Closes: #929916)
