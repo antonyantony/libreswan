@@ -5,3 +5,4 @@
 0005-pluto-set-hdr.isa_length-to-0-in-informational.patch
 0006-sort-all-wildcarded-object-files-for-reproducibility.patch
 0007-libreswan-3.27-CVE-2019-12312.patch
+0008-Resolve-CVE-2019-10155-IKEv1-Informational-exchange-.patch
