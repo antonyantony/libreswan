@@ -18,7 +18,7 @@ index b7e9531..8d331b7 100755
  import sys
  import commands
 diff --git a/programs/verify/verify.in b/programs/verify/verify.in
-index 9321631..ed03c01 100755
+index 81ae1d3..77d07d4 100755
 --- a/programs/verify/verify.in
 +++ b/programs/verify/verify.in
 @@ -1,4 +1,4 @@

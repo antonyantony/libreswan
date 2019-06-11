@@ -126,10 +126,10 @@ index b0b88bb..b080ae0 100644
  least 460 bits (for FIPS) or 440 bits (for BSI).
  </para>
 diff --git a/programs/pluto/ikev1.c b/programs/pluto/ikev1.c
-index 4156578..4bc08b0 100644
+index 869b640..dac8215 100644
 --- a/programs/pluto/ikev1.c
 +++ b/programs/pluto/ikev1.c
-@@ -2493,7 +2493,7 @@ void complete_v1_state_transition(struct msg_digest **mdp, stf_status result)
+@@ -2519,7 +2519,7 @@ void complete_v1_state_transition(struct msg_digest **mdp, stf_status result)
  			 * well.
  			 */
  			suspend_md(md->st, mdp);
