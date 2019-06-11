@@ -1,3 +1,11 @@
+libreswan (3.29-1) experimental; urgency=medium
+
+  * New upstream release
+   - fixes CVE 2019-10155 and CVE-2019-12312
+    (Closes: #930338, #929916)
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Tue, 11 Jun 2019 07:24:44 +0100
+
 libreswan (3.28-1) experimental; urgency=medium
 
   * new upstream release (to experimental due to freeze for buster)
@@ -8,7 +16,7 @@ libreswan (3.28-1) experimental; urgency=medium
   * move to debhelper 12
   * d/copyright: lib/libswan/{tto,ip}range.c were merged into ip_range.c
 
- -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Sun, 02 Jun 2019 18:21:06 -0400
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Tue, 11 Jun 2019 07:23:45 +0100
 
 libreswan (3.27-4) unstable; urgency=medium
 
