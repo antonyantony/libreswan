@@ -30,7 +30,7 @@
 Name: libreswan
 Summary: Internet Key Exchange (IKEv1 and IKEv2) implementation for IPsec
 # version is generated in the release script
-Version: 3.28
+Version: 3.29
 Release: %{?prever:0.}1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Url: https://libreswan.org/
@@ -49,6 +49,7 @@ Obsoletes: openswan < %{version}-%{release}
 Provides: openswan = %{version}-%{release}
 Provides: openswan-doc = %{version}-%{release}
 
+BuildRequires: gcc
 BuildRequires: pkgconfig hostname
 BuildRequires: bison flex
 BuildRequires: systemd-devel
@@ -209,5 +210,5 @@ export NSS_DISABLE_HW_GCM=1
 %{_libdir}/fipscheck/pluto.hmac
 
 %changelog
-* Mon May 20 2019 Team Libreswan <team@libreswan.org> - 3.28-1
+* Mon Jun 10 2019 Team Libreswan <team@libreswan.org> - 3.29-1
 - Automated build from release tar ball
