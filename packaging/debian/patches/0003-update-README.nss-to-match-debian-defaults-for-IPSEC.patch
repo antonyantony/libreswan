@@ -1,5 +1,5 @@
 diff --git a/README.nss b/README.nss
-index aa58d1eff..f28c3b17d 100644
+index d3fc62078..f68540db0 100644
 --- a/README.nss
 +++ b/README.nss
 @@ -64,7 +64,7 @@ using:
@@ -21,13 +21,13 @@ index aa58d1eff..f28c3b17d 100644
  Enter return for the "old password", then enter your new password.
  
 @@ -136,7 +136,7 @@ Below, we will be using the nss tools to generate certificates
- * To create a certificate authority (CA certficate):
+ * To create a certificate authority (CA certificate):
  
  	certutil -S -k rsa -n "ExampleCA" -s "CN=Example CA Inc" -v 12 \
 -		-t "CT,," -x -d sql:/etc/ipsec.d
 +		-t "CT,," -x -d sql:/var/lib/ipsec/nss
  
- It creates a certificate with RSA keys (-k rsa) with the nick name
+ It creates a certificate with RSA keys (-k rsa) with the nickname
  "ExampleCA", and with common name "Example CA Inc". The option
 @@ -151,7 +151,7 @@ certificate can be obtained from anywhere in the world.
  * To create a user certificate signed by the above CA
@@ -36,7 +36,7 @@ index aa58d1eff..f28c3b17d 100644
 -		-v 12 -t "u,u,u" -d sql:/etc/ipsec.d
 +		-v 12 -t "u,u,u" -d sql:/var/lib/ipsec/nss
  
- It creates a user cert with nick name "user1" with attributes
+ It creates a user cert with nickname "user1" with attributes
  "u,u,u" signed by the CA cert "ExampleCA".
 @@ -208,7 +208,7 @@ Now you can import the file into the NSS db:
  	ipsec import certkey.p12
@@ -62,3 +62,4 @@ index aa58d1eff..f28c3b17d 100644
  
  Example connection for ipsec.conf:
  
+

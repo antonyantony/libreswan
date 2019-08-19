@@ -2,6 +2,7 @@
  * header file for Libreswan library functions
  * Copyright (C) 1998, 1999, 2000  Henry Spencer.
  * Copyright (C) 1999, 2000, 2001  Richard Guy Briggs
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
@@ -18,14 +19,23 @@
 #ifndef IP_ADDRESS_H
 #define IP_ADDRESS_H
 
+#include "chunk.h"
+#include "err.h"
+
 /*
  * Hack around this file being sucked into linux kernel module builds.
  */
-#if !defined(linux) && !defined(__KERNEL__)
 #include <netinet/in.h>		/* for struct sockaddr_in */
 #ifdef HAVE_INET6_IN6_H
 #include <netinet6/in6.h>	/* for struct sockaddr_in6 */
 #endif
+
+#ifdef NEED_SIN_LEN
+#define SET_V4(a)	{ (a).u.v4.sin_family = AF_INET; (a).u.v4.sin_len = sizeof(struct sockaddr_in); }
+#define SET_V6(a)	{ (a).u.v6.sin6_family = AF_INET6; (a).u.v6.sin6_len = sizeof(struct sockaddr_in6); }
+#else
+#define SET_V4(a)	{ (a).u.v4.sin_family = AF_INET; }
+#define SET_V6(a)	{ (a).u.v6.sin6_family = AF_INET6; }
 #endif
 
 struct lswlog;
@@ -70,19 +80,41 @@ ip_address hsetportof(int port, const ip_address dst);
 struct sockaddr *sockaddrof(const ip_address *src);
 size_t sockaddrlenof(const ip_address *src);
 
-/* RFC 1886 old IPv6 reverse-lookup format is the bulkiest */
 
-#define ADDRTOT_BUF     (32 * 2 + 3 + 1 + 3 + 1 + 1)
+/*
+ * Converting to a string.
+ */
+
 typedef struct {
-	char private_buf[ADDRTOT_BUF]; /* defined in libreswan.h */
-} ipstr_buf;
+	char buf[(4+1)*8/*0000:...*/ + 1/*\0*/ + 1/*CANARY*/];
+} ip_address_buf;
 
+/*
+ * address as a string:
+ *
+ * raw: IPv6 zeros like :0:..:0: not suppressed; no port; when SEPC !=
+ * '\0' use it as the separator instead of the default (. or :).
+ *
+ * cooked: IPv6 zeros like :0:..:0: suppressed; no port
+ */
+void fmt_address_raw(struct lswlog *buf, const ip_address *src, char sepc);
+void fmt_address_cooked(struct lswlog *buf, const ip_address *src);
+void fmt_address_sensitive(struct lswlog *buf, const ip_address *src);
+void fmt_address_reversed(struct lswlog *buf, const ip_address *src);
+
+const char *str_address_raw(const ip_address *src, char sepc, ip_address_buf *dst);
+const char *str_address_cooked(const ip_address *src, ip_address_buf *dst);
+const char *str_address_sensitive(const ip_address *src, ip_address_buf *dst);
+
+typedef struct {
+	/* string includes NUL, add 1 for canary */
+	char buf[sizeof("4.0.0.0.3.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.2.0.0.0.1.0.0.0.IP6.ARPA.") + 1];
+}  address_reversed_buf;
+const char *str_address_reversed(const ip_address *src, address_reversed_buf *buf);
+
+typedef ip_address_buf ipstr_buf; /* compat */
 const char *ipstr(const ip_address *src, ipstr_buf *b);
 const char *sensitive_ipstr(const ip_address *src, ipstr_buf *b);
-
-/* See: ipstr() / sensitive_ipstr() */
-size_t lswlog_ip(struct lswlog *buf, const ip_address *ip);
-size_t lswlog_sensitive_ip(struct lswlog *buf, const ip_address *ip);
 
 /*
  * isvalidaddr(): true when ADDR contains some sort of IPv4 or IPv6
@@ -98,5 +130,52 @@ size_t lswlog_sensitive_ip(struct lswlog *buf, const ip_address *ip);
  */
 
 #define isvalidaddr(ADDR) (hportof(ADDR) >= 0)
+
+/*
+ * address as a chunk
+ *
+ * XXX: chunk_t doesn't do const so this strips off the constiness of
+ * address :-(
+ */
+chunk_t same_ip_address_as_chunk(const ip_address *address);
+
+/*
+ * Old style.
+ */
+
+/* looks up names in DNS */
+extern err_t ttoaddr(const char *src, size_t srclen, int af, ip_address *dst);
+
+/* does not look up names in DNS */
+extern err_t ttoaddr_num(const char *src, size_t srclen, int af, ip_address *dst);
+
+/* RFC 1886 old IPv6 reverse-lookup format is the bulkiest */
+#define ADDRTOT_BUF     sizeof(address_reversed_buf)
+extern err_t tnatoaddr(const char *src, size_t srclen, int af, ip_address *dst);
+extern size_t addrtot(const ip_address *src, int format, char *buf, size_t buflen);
+
+/* initializations */
+extern err_t loopbackaddr(int af, ip_address *dst);
+extern err_t unspecaddr(int af, ip_address *dst);
+extern err_t anyaddr(int af, ip_address *dst);
+extern err_t initaddr(const unsigned char *src, size_t srclen, int af,
+	       ip_address *dst);
+extern err_t add_port(int af, ip_address *addr, unsigned short port);
+
+/* misc. conversions and related */
+extern int addrtypeof(const ip_address *src);
+extern size_t addrlenof(const ip_address *src);
+extern size_t addrbytesptr_read(const ip_address *src, const unsigned char **dst);
+extern size_t addrbytesptr_write(ip_address *src, unsigned char **dst);
+extern size_t addrbytesof(const ip_address *src, unsigned char *dst, size_t dstlen);
+extern int masktocount(const ip_address *src);
+
+/* tests */
+extern bool sameaddr(const ip_address *a, const ip_address *b);
+extern int addrcmp(const ip_address *a, const ip_address *b);
+extern bool sameaddrtype(const ip_address *a, const ip_address *b);
+extern int isanyaddr(const ip_address *src);
+extern int isunspecaddr(const ip_address *src);
+extern int isloopbackaddr(const ip_address *src);
 
 #endif

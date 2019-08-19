@@ -41,8 +41,8 @@ enum field_type {
 	ft_zig,			/* zero (ignore violations) */
 	ft_nat,			/* natural number (may be 0) */
 	ft_len,			/* length of this struct and any following crud */
-	ft_fcp,			/* message's first contained payload type field */
-	ft_pnp,			/* payload's next payload type field */
+	ft_mnpc,		/* message's Next Payload chain field */
+	ft_pnpc,		/* payload's Next Payload chain field */
 	ft_lss,			/* Last Substructure field */
 	ft_lv,			/* length/value field of attribute */
 	ft_enum,		/* value from an enumeration */
@@ -114,18 +114,21 @@ struct packet_byte_stream {
 	field_desc *lenfld_desc;	/* includes length */
 
 	/*
-	 * For patching Next Payload field in successive Payloads.
+	 * For patching IKEv2's Next Payload field chain.
 	 *
-	 * References the header of the previous payload in this stream.
-	 * Initially it may reference the First-Next-Payload field of parent
-	 * (in case of ft_fcp)
+	 * IKEv2 has a "chain" of next payloads.  The chain starts
+	 * with the message's Next Payload field, and then threads its
+	 * way through every single payload header.  For SK, it's Next
+	 * Payload field is for the first containing payload.
+	 *
+	 * IKEv1, provided payloads nested within an SK payload are
+	 * excluded (see below), is functionally equivalent and so can
+	 * also use this code.
 	 */
-	uint8_t *previous_np;	/* always one octet */
-	field_desc *previous_np_field;
-	struct_desc *previous_np_struct;
+	struct fixup next_payload_chain;
 
 	/*
-	 * For patching Last Substructure field.
+	 * For patching IKEv2's Last Substructure field.
 	 *
 	 * IKEv2 has nested substructures.  An SA Payload contains
 	 * Proposal Substructures, and a Proposal Substructure
@@ -139,13 +142,11 @@ struct packet_byte_stream {
 	 * "chain" - the SA payload is both linked into the payload
 	 * "chain" (.PT) and requires a specific sub-structure (.SST).
 	 *
-	 * IKEv1 is functionally equivalent (IKEv2 changed some names
-	 * and re-wrote the text so that it was clear that this is how
-	 * things really work).
-	 *
-	 * XXX: IKEv1 should use this mechanism.
+	 * Since IKEv1's SA, Proposal, and Transform payloads are
+	 * functionally equivalent it, too, uses this code (IKEv2
+	 * changed the names to avoid confusion).
 	 */
-	struct fixup previous_ss;
+	struct fixup last_substructure;
 };
 
 typedef struct packet_byte_stream pb_stream;
@@ -162,7 +163,6 @@ extern const pb_stream empty_pbs;
  *	pbs_offset is current size of stream.
  *	pbs_room is maximum size allowed.
  *	pbs_left is amount of space remaining
- *      pbs_as_chunk is the current stream's contents as a chunk
  */
 #define pbs_ok(PBS) ((PBS)->start != NULL)
 #define pbs_offset(pbs) ((size_t)((pbs)->cur - (pbs)->start))
@@ -170,10 +170,30 @@ extern const pb_stream empty_pbs;
 #define pbs_left(pbs) ((size_t)((pbs)->roof - (pbs)->cur))
 
 /*
- * Map a pbs onto a chunk, and chunk onto a pbs.
+ * Map/clone the current contents (i.e., everything written so far)
+ * [start..cur) of an output PBS as a chunk.
  */
-extern pb_stream chunk_as_pbs(chunk_t chunk, const char *name);
-#define pbs_as_chunk(PBS) ((chunk_t){ .ptr = (PBS)->start, .len = pbs_offset(PBS), })
+extern chunk_t same_out_pbs_as_chunk(pb_stream *pbs);
+extern chunk_t clone_out_pbs_as_chunk(pb_stream *pbs, const char *name);
+
+/*
+ * Map an input PBS onto CHUNK.
+ */
+extern pb_stream same_chunk_as_in_pbs(chunk_t chunk, const char *name);
+
+/*
+ * Map/Clone the entire contents [start..pbs_room()) of an input PBS
+ * as a chunk.
+ */
+extern chunk_t same_in_pbs_as_chunk(pb_stream *pbs);
+extern chunk_t clone_in_pbs_as_chunk(pb_stream *pbs, const char *name);
+
+/*
+ * Map/Clone the remaining contents [cur..pbs_left()) of an input PBS
+ * as a chunk.
+ */
+extern chunk_t same_in_pbs_left_as_chunk(pb_stream *pbs);
+extern chunk_t clone_in_pbs_left_as_chunk(pb_stream *pbs, const char *name);
 
 /*
  * Initializers; point PBS at a pre-allocated (or static) buffer.
@@ -189,7 +209,6 @@ extern void init_out_pbs(pb_stream *pbs, uint8_t *start, size_t len,
 			 const char *name);
 extern pb_stream open_out_pbs(const char *name, uint8_t *buffer,
 			      size_t sizeof_buffer);
-extern void move_pbs_previous_np(pb_stream *dst, pb_stream *src);
 
 extern bool in_struct(void *struct_ptr, struct_desc *sd,
 		      pb_stream *ins, pb_stream *obj_pbs) MUST_USE_RESULT;
@@ -1043,9 +1062,6 @@ extern struct_desc ikev2_ts1_desc;
 /* rfc4306, section 3.14, encrypted payload, uses generic header */
 extern struct_desc ikev2_sk_desc;
 
-/* NULL struct to wrap encrypted portion of SK and SKF */
-extern struct_desc ikev2_encrypted_portion;
-
 /*
  * Configuration Payload . RFC 5996 section 3.15
  */
@@ -1139,6 +1155,18 @@ struct suggested_group {
 
 extern struct_desc suggested_group_desc;
 
+struct ikev2_redirect_part {
+	u_int8_t gw_identity_type;
+	u_int8_t gw_identity_len;
+};
+extern struct_desc ikev2_redirect_desc;
+
+struct ikev2_notify_ipcomp_data {
+	u_int16_t ikev2_cpi;
+	u_int8_t ikev2_notify_ipcomp_trans;
+};
+extern struct_desc ikev2notify_ipcomp_data_desc;
+
 #ifdef HAVE_LABELED_IPSEC
 extern struct_desc sec_ctx_desc;
 #endif
@@ -1154,8 +1182,5 @@ struct pbs_reply_backup {
 	pb_stream stream;
 	uint8_t *buffer;
 };
-
-struct pbs_reply_backup *save_reply_pbs(void);
-void restore_reply_pbs(struct pbs_reply_backup **);
 
 #endif /* _PACKET_H */

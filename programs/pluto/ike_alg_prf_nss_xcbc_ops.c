@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2016-2017 Andrew Cagney
+ * Copyright (C) 2016-2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -69,14 +70,17 @@ static chunk_t derive_ki(const struct prf_desc *prf,
 static chunk_t xcbc_mac(const struct prf_desc *prf, PK11SymKey *key,
 			chunk_t bytes)
 {
-	DBG(DBG_CRYPT_LOW, DBG_dump_chunk("XCBC: data", bytes));
-
-	chunk_t k = chunk_from_symkey("K", key);
-	DBG(DBG_CRYPT_LOW, DBG_dump_chunk("XCBC: K:", k));
-	freeanychunk(k);
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump_chunk("XCBC: data", bytes);
+		chunk_t k = chunk_from_symkey("K", key);
+		DBG_dump_chunk("XCBC: K:", k);
+		freeanychunk(k);
+	}
 
 	chunk_t k1t = derive_ki(prf, key, 1);
-	DBG(DBG_CRYPT_LOW, DBG_dump_chunk("XCBC: K1", k1t));
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump_chunk("XCBC: K1", k1t);
+	}
 	PK11SymKey *k1 = prf_key_from_bytes("k1", prf, k1t.ptr, k1t.len);
 	freeanychunk(k1t);
 
@@ -111,10 +115,12 @@ static chunk_t xcbc_mac(const struct prf_desc *prf, PK11SymKey *key,
 	m.len = bytes.ptr + bytes.len - m.ptr;
 	if (m.len == prf->prf_key_size) {
 		chunk_t k2 = derive_ki(prf, key, 2);
-		DBGF(DBG_CRYPT_LOW, "XCBC: Computing E[%d] using K2", n);
-		DBG(DBG_CRYPT_LOW, DBG_dump_chunk("XCBC: K2", k2));
-		DBG(DBG_CRYPT_LOW, DBG_dump_chunk("XCBC: E[n-1]", e));
-		DBG(DBG_CRYPT_LOW, DBG_dump_chunk("XCBC: M[n]", m));
+		if (DBGP(DBG_CRYPT)) {
+			DBG_log("XCBC: Computing E[%d] using K2", n);
+			DBG_dump_chunk("XCBC: K2", k2);
+			DBG_dump_chunk("XCBC: E[n-1]", e);
+			DBG_dump_chunk("XCBC: M[n]", m);
+		}
 		/*
 		 *      a)  If the blocksize of M[n] is 128 bits:
 		 *          XOR M[n] with E[n-1] and Key K2, then encrypt the result with
@@ -123,14 +129,18 @@ static chunk_t xcbc_mac(const struct prf_desc *prf, PK11SymKey *key,
 		for (unsigned j = 0; j < prf->prf_key_size; j++) {
 			t.ptr[j] = m.ptr[j] ^ e.ptr[j] ^ k2.ptr[j];
 		}
+		if (DBGP(DBG_CRYPT)) {
+			DBG_dump_chunk("XCBC: M[n]^E[n-1]^K2", t);
+		}
 		freeanychunk(k2);
-		DBG(DBG_CRYPT_LOW, DBG_dump_chunk("XCBC: M[n]^E[n-1]^K2", t));
 	} else {
 		chunk_t k3 = derive_ki(prf, key, 3);
-		DBGF(DBG_CRYPT_LOW, "Computing E[%d] using K3", n);
-		DBG(DBG_CRYPT_LOW, DBG_dump_chunk("XCBC: K3", k3));
-		DBG(DBG_CRYPT_LOW, DBG_dump_chunk("XCBC: E[n-1]", e));
-		DBG(DBG_CRYPT_LOW, DBG_dump_chunk("XCBC: M[n]", m));
+		if (DBGP(DBG_CRYPT)) {
+			DBG_log("Computing E[%d] using K3", n);
+			DBG_dump_chunk("XCBC: K3", k3);
+			DBG_dump_chunk("XCBC: E[n-1]", e);
+			DBG_dump_chunk("XCBC: M[n]", m);
+		}
 		/*
 		 *      b)  If the blocksize of M[n] is less than 128 bits:
 		 *
@@ -149,14 +159,17 @@ static chunk_t xcbc_mac(const struct prf_desc *prf, PK11SymKey *key,
 		for (; j < prf->prf_key_size; j++) {
 			t.ptr[j] = 0x00 ^ e.ptr[j] ^ k3.ptr[j];
 		}
-
-		DBG(DBG_CRYPT_LOW, DBG_dump_chunk("XCBC: M[n]", m));
+		if (DBGP(DBG_CRYPT)) {
+			DBG_dump_chunk("XCBC: M[n]", m);
+			DBG_dump_chunk("XCBC: M[n]:80...^E[n-1]^K3", t);
+		}
 		freeanychunk(k3);
-		DBG(DBG_CRYPT_LOW, DBG_dump_chunk("XCBC: M[n]:80...^E[n-1]^K3", t));
 	}
 
 	encrypt("K1(M[n]^E[n-1]^K2)", e, t, prf, k1);
-	DBG(DBG_CRYPT_LOW, DBG_dump_chunk("XCBC: MAC", e));
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump_chunk("XCBC: MAC", e);
+	}
 
 	release_symkey("xcbc", "k1", &k1);
 	freeanychunk(t);
@@ -175,22 +188,22 @@ static struct prf_context *nss_xcbc_init_symkey(const struct prf_desc *prf_desc,
 	 * Need to turn the key into something of the right size.
 	 */
 	PK11SymKey *key;
-	if (sizeof_symkey(draft_key) < prf_desc->prf_key_size) {
-		DBGF(DBG_CRYPT_LOW, "XCBC: Key %zd<%zd too small, padding with zeros",
-		     sizeof_symkey(draft_key), prf_desc->prf_key_size);
+	size_t dkey_sz = sizeof_symkey(draft_key);
+	if (dkey_sz < prf_desc->prf_key_size) {
+		DBGF(DBG_CRYPT, "XCBC: Key %zd<%zd too small, padding with zeros",
+		     dkey_sz, prf_desc->prf_key_size);
 		/*
 		 * right pad with zeros
 		 */
-		chunk_t zeros = alloc_chunk(prf_desc->prf_key_size - sizeof_symkey(draft_key),
-					    "zeros");
+		chunk_t zeros = alloc_chunk(prf_desc->prf_key_size - dkey_sz, "zeros");
 		PK11SymKey *tmp = concat_symkey_chunk(draft_key, zeros);
 		freeanychunk(zeros);
 		key = prf_key_from_symkey_bytes(name, prf_desc,
 						0, prf_desc->prf_key_size, tmp);
 		release_symkey(name, "tmp", &tmp);
-	} else if (sizeof_symkey(draft_key) > prf_desc->prf_key_size) {
-		DBGF(DBG_CRYPT_LOW, "XCBC: Key %zd>%zd too big, rehashing to size",
-		     sizeof_symkey(draft_key), prf_desc->prf_key_size);
+	} else if (dkey_sz > prf_desc->prf_key_size) {
+		DBGF(DBG_CRYPT, "XCBC: Key %zd>%zd too big, rehashing to size",
+		     dkey_sz, prf_desc->prf_key_size);
 		/*
 		 * put the key through the mac with a zero key
 		 */
@@ -205,8 +218,8 @@ static struct prf_context *nss_xcbc_init_symkey(const struct prf_desc *prf_desc,
 					 key_chunk.ptr, key_chunk.len);
 		freeanychunk(key_chunk);
 	} else {
-		DBGF(DBG_CRYPT_LOW, "XCBC: Key %zd=%zd just right",
-		     sizeof_symkey(draft_key), prf_desc->prf_key_size);
+		DBGF(DBG_CRYPT, "XCBC: Key %zd=%zd just right",
+		     dkey_sz, prf_desc->prf_key_size);
 		key = prf_key_from_symkey_bytes(key_name, prf_desc,
 						0, prf_desc->prf_key_size,
 						draft_key);

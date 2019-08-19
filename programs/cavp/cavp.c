@@ -1,6 +1,7 @@
 /* Parse CAVP test vectors, for libreswan (CAVP)
  *
  * Copyright (C) 2015-2018, Andrew Cagney
+ * Copyright (C) 2019 D. Hugh Redelmeier <hugh@mimosa.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -44,7 +45,7 @@ static void help(void)
 	printf(I"command line:\n");
 	printf("\n");
 	printf(II""OPT, "fips", "force FIPS mode; must be the first option");
-	printf(II""IOPT"by default NSS determines FIPS mode\n"); 
+	printf(II""IOPT"by default NSS determines FIPS mode\n");
 	printf(II""OPT, "json", "output each test result as a json record");
 	printf(II""OPT, "v", "verbose output");
 	printf(II"-h, -help, -?\n"II""IOPT"Print this help message\n");

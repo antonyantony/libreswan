@@ -10,6 +10,8 @@
  * Copyright (C) 2003-2010 Paul Wouters <paul@xelerance.com>
  * Copyright (C) 2009 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
+ * Copyright (C) 2013-2019 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -24,12 +26,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
-#include <dirent.h>
-#include <time.h>
-#include <limits.h>
-#include <sys/types.h>
-#include "sysdep.h"
 #include "constants.h"
 #include "lswlog.h"
 #include "lswalloc.h"
@@ -37,78 +33,75 @@
 #include "asn1.h"
 #include "oid.h"
 #include "x509.h"
-#include "certs.h"
-#include <prerror.h>
-#include <nss.h>
-#include <pk11pub.h>
-#include <keyhi.h>
-#include <secerr.h>
 #include "lswconf.h"
 
 static void hex_str(chunk_t bin, chunk_t *str);	/* forward */
 
 /* coding of X.501 distinguished name */
-typedef struct {
+typedef const struct {
 	const char *name;
-	chunk_t oid;
-	u_char type;
+	const unsigned char *oid_ptr;
+	size_t oid_len;
+	asn1_t type;
 } x501rdn_t;
 
 /* X.501 acronyms for well known object identifiers (OIDs) */
-static u_char oid_ND[] = { 0x02, 0x82, 0x06, 0x01, 0x0A, 0x07, 0x14 };
-static u_char oid_UID[] = { 0x09, 0x92, 0x26, 0x89, 0x93, 0xF2, 0x2C, 0x64,
+static const unsigned char oid_ND[] = { 0x02, 0x82, 0x06, 0x01, 0x0A, 0x07, 0x14 };
+static const unsigned char oid_UID[] = { 0x09, 0x92, 0x26, 0x89, 0x93, 0xF2, 0x2C, 0x64,
 				0x01, 0x01 };
-static u_char oid_DC[] = { 0x09, 0x92, 0x26, 0x89, 0x93, 0xF2, 0x2C, 0x64,
+static const unsigned char oid_DC[] = { 0x09, 0x92, 0x26, 0x89, 0x93, 0xF2, 0x2C, 0x64,
 				0x01, 0x19 };
-static u_char oid_CN[] = { 0x55, 0x04, 0x03 };
-static u_char oid_S[] = { 0x55, 0x04, 0x04 };
-static u_char oid_SN[] = { 0x55, 0x04, 0x05 };
-static u_char oid_C[] = { 0x55, 0x04, 0x06 };
-static u_char oid_L[] = { 0x55, 0x04, 0x07 };
-static u_char oid_ST[] = { 0x55, 0x04, 0x08 };
-static u_char oid_O[] = { 0x55, 0x04, 0x0A };
-static u_char oid_OU[] = { 0x55, 0x04, 0x0B };
-static u_char oid_T[] = { 0x55, 0x04, 0x0C };
-static u_char oid_D[] = { 0x55, 0x04, 0x0D };
-static u_char oid_N[] = { 0x55, 0x04, 0x29 };
-static u_char oid_G[] = { 0x55, 0x04, 0x2A };
-static u_char oid_I[] = { 0x55, 0x04, 0x2B };
-static u_char oid_ID[] = { 0x55, 0x04, 0x2D };
-static u_char oid_E[] = { 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09,
+static const unsigned char oid_CN[] = { 0x55, 0x04, 0x03 };
+static const unsigned char oid_S[] = { 0x55, 0x04, 0x04 };
+static const unsigned char oid_SN[] = { 0x55, 0x04, 0x05 };
+static const unsigned char oid_C[] = { 0x55, 0x04, 0x06 };
+static const unsigned char oid_L[] = { 0x55, 0x04, 0x07 };
+static const unsigned char oid_ST[] = { 0x55, 0x04, 0x08 };
+static const unsigned char oid_O[] = { 0x55, 0x04, 0x0A };
+static const unsigned char oid_OU[] = { 0x55, 0x04, 0x0B };
+static const unsigned char oid_T[] = { 0x55, 0x04, 0x0C };
+static const unsigned char oid_D[] = { 0x55, 0x04, 0x0D };
+static const unsigned char oid_N[] = { 0x55, 0x04, 0x29 };
+static const unsigned char oid_G[] = { 0x55, 0x04, 0x2A };
+static const unsigned char oid_I[] = { 0x55, 0x04, 0x2B };
+static const unsigned char oid_ID[] = { 0x55, 0x04, 0x2D };
+static const unsigned char oid_E[] = { 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09,
 				0x01 };
-static u_char oid_UN[] = { 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09,
+static const unsigned char oid_UN[] = { 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09,
 				0x02 };
-static u_char oid_TCGID[] = { 0x2B, 0x06, 0x01, 0x04, 0x01, 0x89, 0x31, 0x01,
+static const unsigned char oid_TCGID[] = { 0x2B, 0x06, 0x01, 0x04, 0x01, 0x89, 0x31, 0x01,
 				0x01, 0x02, 0x02, 0x4B };
 
 static const x501rdn_t x501rdns[] = {
-	{ "ND", { oid_ND, 7 }, ASN1_PRINTABLESTRING },
-	{ "UID", { oid_UID, 10 }, ASN1_PRINTABLESTRING },
-	{ "DC", { oid_DC, 10 }, ASN1_PRINTABLESTRING },
-	{ "CN", { oid_CN, 3 }, ASN1_PRINTABLESTRING },
-	{ "S", { oid_S, 3 }, ASN1_PRINTABLESTRING },
-	{ "SN", { oid_SN, 3 }, ASN1_PRINTABLESTRING },
-	{ "serialNumber", { oid_SN, 3 }, ASN1_PRINTABLESTRING },
-	{ "C", { oid_C, 3 }, ASN1_PRINTABLESTRING },
-	{ "L", { oid_L, 3 }, ASN1_PRINTABLESTRING },
-	{ "ST", { oid_ST, 3 }, ASN1_PRINTABLESTRING },
-	{ "O", { oid_O, 3 }, ASN1_PRINTABLESTRING },
-	{ "OU", { oid_OU, 3 }, ASN1_PRINTABLESTRING },
-	{ "T", { oid_T, 3 }, ASN1_PRINTABLESTRING },
-	{ "D", { oid_D, 3 }, ASN1_PRINTABLESTRING },
-	{ "N", { oid_N, 3 }, ASN1_PRINTABLESTRING },
-	{ "G", { oid_G, 3 }, ASN1_PRINTABLESTRING },
-	{ "I", { oid_I, 3 }, ASN1_PRINTABLESTRING },
-	{ "ID", { oid_ID, 3 }, ASN1_PRINTABLESTRING },
-	{ "E", { oid_E, 9 }, ASN1_IA5STRING },
-	{ "Email", { oid_E, 9 }, ASN1_IA5STRING },
-	{ "emailAddress", { oid_E, 9 }, ASN1_IA5STRING },
-	{ "UN", { oid_UN, 9 }, ASN1_IA5STRING },
-	{ "unstructuredName", { oid_UN, 9 }, ASN1_IA5STRING },
-	{ "TCGID", { oid_TCGID, 12 }, ASN1_PRINTABLESTRING }
-};
+#	define OC(oid) oid, sizeof(oid)
 
-#define X501_RDN_ROOF elemsof(x501rdns)
+	{ "ND", OC(oid_ND), ASN1_PRINTABLESTRING },
+	{ "UID", OC(oid_UID), ASN1_PRINTABLESTRING },
+	{ "DC", OC(oid_DC), ASN1_PRINTABLESTRING },
+	{ "CN", OC(oid_CN), ASN1_PRINTABLESTRING },
+	{ "S", OC(oid_S), ASN1_PRINTABLESTRING },
+	{ "SN", OC(oid_SN), ASN1_PRINTABLESTRING },
+	{ "serialNumber", OC(oid_SN), ASN1_PRINTABLESTRING },
+	{ "C", OC(oid_C), ASN1_PRINTABLESTRING },
+	{ "L", OC(oid_L), ASN1_PRINTABLESTRING },
+	{ "ST", OC(oid_ST), ASN1_PRINTABLESTRING },
+	{ "O", OC(oid_O), ASN1_PRINTABLESTRING },
+	{ "OU", OC(oid_OU), ASN1_PRINTABLESTRING },
+	{ "T", OC(oid_T), ASN1_PRINTABLESTRING },
+	{ "D", OC(oid_D), ASN1_PRINTABLESTRING },
+	{ "N", OC(oid_N), ASN1_PRINTABLESTRING },
+	{ "G", OC(oid_G), ASN1_PRINTABLESTRING },
+	{ "I", OC(oid_I), ASN1_PRINTABLESTRING },
+	{ "ID", OC(oid_ID), ASN1_PRINTABLESTRING },
+	{ "E", OC(oid_E), ASN1_IA5STRING },
+	{ "Email", OC(oid_E), ASN1_IA5STRING },
+	{ "emailAddress", OC(oid_E), ASN1_IA5STRING },
+	{ "UN", OC(oid_UN), ASN1_IA5STRING },
+	{ "unstructuredName", OC(oid_UN), ASN1_IA5STRING },
+	{ "TCGID", OC(oid_TCGID), ASN1_PRINTABLESTRING }
+
+#	undef OC
+};
 
 static void format_chunk(chunk_t *ch, const char *format, ...) PRINTF_LIKE(2);
 
@@ -148,183 +141,197 @@ static void format_chunk(chunk_t *ch, const char *format, ...)
 }
 
 /*
- * Pointer is set to the first RDN in a DN
+ * Routines to iterate through a DN.
+ * rdn: remainder of the sequence of RDNs
+ * attribute: remainder of the current RDN.
  */
-static err_t init_rdn(chunk_t dn, chunk_t *rdn, chunk_t *attribute, bool *next)
+
+/* Structure of the DN:
+ *
+ * ASN_SEQUENCE {
+ *	for each Relative DN {
+ *		ASN1_SET {
+ *			ASN1_SEQUENCE {
+ *				ASN1_OID {
+ *					oid
+ *				}
+ *				ASN1_*STRING* {
+ *					value
+ *				}
+ *			}
+ *		}
+ *	}
+ * }
+ */
+
+#define RETURN_IF_ERR(f) { err_t ugh = (f); if (ugh != NULL) return ugh; }
+
+static err_t unwrap(asn1_t ty, chunk_t *container, chunk_t *contents)
 {
-	*rdn = empty_chunk;
-	*attribute = empty_chunk;
+	if (container->len == 0)
+		return "missing ASN1 type";
+	if (container->ptr[0] != ty)
+		return "unexpected ASN1 type";
+	size_t sz = asn1_length(container);
+	if (sz == ASN1_INVALID_LENGTH)
+		return "invalid ASN1 length";
+	if (sz > container->len)
+		return "ASN1 length larger than space";
+	contents->ptr = container->ptr;
+	contents->len = sz;
+	container->ptr += sz;
+	container->len -= sz;
+	return NULL;
+}
+
+static err_t init_rdn(chunk_t dn, /* input (copy) */
+		chunk_t *rdn, /* output */
+		chunk_t *attribute, /* output */
+		bool *more) /* output */
+{
+	*attribute = EMPTY_CHUNK;
 
 	/* a DN is a SEQUENCE OF RDNs */
-	if (*dn.ptr != ASN1_SEQUENCE)
-		return "DN is not a SEQUENCE";
+	RETURN_IF_ERR(unwrap(ASN1_SEQUENCE, &dn, rdn));
 
-	rdn->len = asn1_length(&dn);
+	/* the whole DN should be this ASN1_SEQUENCE */
+	if (dn.len != 0)
+		return "DN has crud after ASN1_SEQUENCE";
 
-	if (rdn->len == ASN1_INVALID_LENGTH)
-		return "Invalid RDN length";
-
-	rdn->ptr = dn.ptr;
-
-	/* are there any RDNs ? */
-	*next = rdn->len > 0;
-
+	*more = rdn->len != 0;
 	return NULL;
 }
 
 /*
  * Fetches the next RDN in a DN
  */
-static err_t get_next_rdn(chunk_t *rdn,
-	chunk_t *attribute, /* output */
+static err_t get_next_rdn(chunk_t *rdn,	/* input/output */
+	chunk_t *attribute, /* input/output */
 	chunk_t *oid /* output */,
+	asn1_t *val_ty,	/* output */
 	chunk_t *value,	/* output */
-	asn1_t *type,	/* output */
-	bool *next) /* output */
+	bool *more) /* output */
 {
-	chunk_t body;
-
-	/* initialize return values */
-	*oid = empty_chunk;
-	*value = empty_chunk;
-
 	/* if all attributes have been parsed, get next rdn */
-	if (attribute->len <= 0) {
-		/* an RDN is a SET OF attributeTypeAndValue */
-		if (*rdn->ptr != ASN1_SET)
-			return "RDN is not a SET";
-
-		attribute->len = asn1_length(rdn);
-
-		if (attribute->len < 1 || attribute->len == ASN1_INVALID_LENGTH)
-			return "Invalid attribute length";
-
-		attribute->ptr = rdn->ptr;
-
-		/* advance to start of next RDN */
-		rdn->ptr += attribute->len;
-		rdn->len -= attribute->len;
+	if (attribute->len == 0) {
+		/*
+		 * An RDN is a SET OF attributeTypeAndValue.
+		 * Strip off the ASN1_set wrapper.
+		 */
+		RETURN_IF_ERR(unwrap(ASN1_SET, rdn, attribute));
 	}
 
-	/* an attributeTypeAndValue is a SEQUENCE */
-	if (*attribute->ptr != ASN1_SEQUENCE)
-		return "attributeTypeAndValue is not a SEQUENCE";
+	/* An attributeTypeAndValue is a SEQUENCE */
+	chunk_t body;
+	RETURN_IF_ERR(unwrap(ASN1_SEQUENCE, attribute, &body));
 
-	/* extract the attribute body */
-	body.len = asn1_length(attribute);
+	/* extract oid from body */
 
-	if (body.len < 1 || body.len == ASN1_INVALID_LENGTH)
-		return "Invalid attribute body length";
+	RETURN_IF_ERR(unwrap(ASN1_OID, &body, oid));
 
-	body.ptr = attribute->ptr;
+	/* extract string value and its type from body */
 
-	/* advance to start of next attribute */
-	attribute->ptr += body.len;
-	attribute->len -= body.len;
+	if (body.len == 0)
+		return "no room for string's type";
 
-	/* attribute type is an OID */
-	if (*body.ptr != ASN1_OID)
-		return "attributeType is not an OID";
+	*val_ty = body.ptr[0];
 
-	/* extract OID */
-	oid->len = asn1_length(&body);
+	/* ??? what types of string are legitimate? */
+	switch(*val_ty) {
+	case ASN1_PRINTABLESTRING:
+	case ASN1_T61STRING:
+	case ASN1_IA5STRING:
+	case ASN1_UTF8STRING:	/* ??? will this work? */
+	case ASN1_BMPSTRING:
+		break;
+	default:
+		dbg("unexpected ASN1 string type 0x%x", *val_ty);
+		return "unexpected ASN1 string type";
+	}
 
-	if (oid->len == ASN1_INVALID_LENGTH)
-		return "Invalid attribute OID length";
+	RETURN_IF_ERR(unwrap(*val_ty, &body, value));
 
-	oid->ptr = body.ptr;
-
-	/* advance to the attribute value */
-	body.ptr += oid->len;
-	body.len -= oid->len;
-
-	/* extract string type */
-	if (body.len < 2)
-	    return "Invalid value in RDN";
-	*type = *body.ptr;
-
-	/* extract string value */
-	value->len = asn1_length(&body);
-
-	if (value->len == ASN1_INVALID_LENGTH)
-		return "Invalid attribute string length";
-
-	value->ptr = body.ptr;
+	if (body.len != 0)
+		return "crap after OID and value pair of RDN";
 
 	/* are there any RDNs left? */
-	*next = rdn->len > 0 || attribute->len > 0;
-
+	*more = rdn->len > 0 || attribute->len > 0;
 	return NULL;
 }
 
 /*
- * Parses an ASN.1 distinguished name int its OID/value pairs
+ * Parses an ASN.1 distinguished name into its OID/value pairs
  */
 static err_t dn_parse(chunk_t dn, chunk_t *str)
 {
-	chunk_t rdn, oid, attribute, value;
-	asn1_t type;
-	int oid_code;
-	bool next;
-	bool first = TRUE;
-	err_t ugh;
+	chunk_t rdn;
+	chunk_t attribute;
+	bool more;
 
 	if (dn.ptr == NULL) {
 		format_chunk(str, "(empty)");
 		return NULL;
 	}
-	ugh = init_rdn(dn, &rdn, &attribute, &next);
+	RETURN_IF_ERR(init_rdn(dn, &rdn, &attribute, &more));
 
-	if (ugh != NULL)	/* a parsing error has occurred */
-		return ugh;
-
-	while (next) {
-		ugh = get_next_rdn(&rdn, &attribute, &oid, &value, &type,
-				   &next);
-
-		if (ugh != NULL)	/* a parsing error has occurred */
-			return ugh;
-
-		if (first)	/* first OID/value pair */
-			first = FALSE;
-		else	/* separate OID/value pair by a comma */
+	for (bool first = TRUE; more; first = FALSE) {
+		chunk_t oid;
+		asn1_t type;
+		chunk_t value;
+		RETURN_IF_ERR(get_next_rdn(&rdn, &attribute, &oid, &type, &value,
+				   &more));
+		if (!first)
 			format_chunk(str, ", ");
 
 		/* print OID */
-		oid_code = known_oid(oid);
+		int oid_code = known_oid(oid);
 		if (oid_code == OID_UNKNOWN)	/* OID not found in list */
 			hex_str(oid, str);
 		else
 			format_chunk(str, "%s", oid_names[oid_code].name);
 
-		/* print value */
-		format_chunk(str, "=%.*s", (int)value.len, value.ptr);
+		format_chunk(str, "=");
+		/* print value, doubling any ',' and '/' */
+		unsigned char *p = value.ptr;
+		size_t l = value.len;
+		for (size_t i = 0; i<l; ) {
+			if (p[i] == ',' || p[i] == '/') {
+				/* character p[i] must be doubled */
+				format_chunk(str, "%.*s%c", (int)(i + 1), p, p[i]);
+				l -= i + 1;
+				p += i + 1;
+				i = 0;
+			} else {
+				i++;
+			}
+		}
+		format_chunk(str, "%.*s", (int)l, p);
 	}
 	return NULL;
 }
 
 /*
- * Count the number of wildcard RDNs in a distinguished name
+ * Count the number of wildcard RDNs in a distinguished name; -1 signifies error.
  */
 int dn_count_wildcards(chunk_t dn)
 {
-	chunk_t rdn, attribute, oid, value;
-	asn1_t type;
-	bool next;
+	chunk_t rdn;
+	chunk_t attribute;
+	bool more;
 	int wildcards = 0;
 
-	err_t ugh = init_rdn(dn, &rdn, &attribute, &next);
-
-	if (ugh != NULL)	/* a parsing error has occurred */
+	err_t ugh = init_rdn(dn, &rdn, &attribute, &more);
+	if (ugh != NULL)
 		return -1;
 
-	while (next) {
-		ugh = get_next_rdn(&rdn, &attribute, &oid, &value, &type,
-				   &next);
-
-		if (ugh != NULL)	/* a parsing error has occurred */
+	while (more) {
+		chunk_t oid;
+		asn1_t type;
+		chunk_t value;
+		ugh = get_next_rdn(&rdn, &attribute, &oid, &type, &value,
+				   &more);
+		if (ugh != NULL)
 			return -1;
-
 		if (value.len == 1 && *value.ptr == '*')
 			wildcards++;	/* we have found a wildcard RDN */
 	}
@@ -336,10 +343,8 @@ int dn_count_wildcards(chunk_t dn)
  */
 static void hex_str(chunk_t bin, chunk_t *str)
 {
-	unsigned i;
-
 	format_chunk(str, "0x");
-	for (i = 0; i < bin.len; i++)
+	for (unsigned i = 0; i < bin.len; i++)
 		format_chunk(str, "%02X", *bin.ptr++);
 }
 
@@ -349,12 +354,11 @@ static void hex_str(chunk_t bin, chunk_t *str)
  */
 int dntoa(char *dst, size_t dstlen, chunk_t dn)
 {
-	err_t ugh = NULL;
 	chunk_t str;
 
 	str.ptr = (unsigned char *)dst;
 	str.len = dstlen;
-	ugh = dn_parse(dn, &str);
+	err_t ugh = dn_parse(dn, &str);
 
 	if (ugh != NULL) {	/* error, print DN as hex string */
 		libreswan_log("error in DN parsing: %s", ugh);
@@ -371,254 +375,183 @@ int dntoa(char *dst, size_t dstlen, chunk_t dn)
  */
 int dntoa_or_null(char *dst, size_t dstlen, chunk_t dn, const char *null_dn)
 {
-	if (dn.ptr == NULL)
-		return snprintf(dst, dstlen, "%s", null_dn);
-	else
-		return dntoa(dst, dstlen, dn);
+	return dn.ptr == NULL ?
+		snprintf(dst, dstlen, "%s", null_dn) :
+		dntoa(dst, dstlen, dn);
 }
 
 /*
- * function for use in atodn() that escapes a character in
- * in the leftid/rightid string. Needed for '//' and ',,'
- * escapes for OID fields
+ * Note that there may be as many as six IDs that are temporary at
+ * one time before unsharing the two ends of a connection. So we need
+ * at least six temporary buffers for DER_ASN1_DN IDs.
+ * We rotate them. Be careful!
  */
-static void escape_char(char *str, char esc)
-{
-	char *src, *dst;
-	int once = 0;
+#define MAX_BUF 6
 
-	src = dst = str;
-	while (*src != '\0' && once == 0) {
-		*dst = *src;
-		src++;
-		if (*dst++ == esc && *src == esc) {
-			src++;
-			once = 1;
-		}
-	}
-	while (*src != '\0') {
-		*dst = *src;
-		src++;
-		dst++;
-	}
-	*dst = '\0';
+static unsigned char *temporary_cyclic_buffer(void)
+{
+	/* MAX_BUF internal buffers */
+	static unsigned char buf[MAX_BUF][IDTOA_BUF];
+	static int counter;	/* cyclic counter */
+
+	if (++counter == MAX_BUF)
+		counter = 0;	/* next internal buffer */
+	return buf[counter];	/* assign temporary buffer */
 }
 
 /*
  * Converts an LDAP-style human-readable ASCII-encoded
- * ASN.1 distinguished name into binary DER-encoded format
+ * ASN.1 distinguished name into binary DER-encoded format.
+ *
+ * (*DN) is the result, and points at static data allocated by
+ * temporary_cyclic_buffer.
+ *
+ * XXX: since caller is almost immediately calling clone_chunk() (or
+ * unshare_id_content()) why not do it here.
+ *
+ * Structure of the output:
+ *
+ * ASN_SEQUENCE {
+ *	for each Relative DN {
+ *		ASN1_SET {
+ *			ASN1_SEQUENCE {
+ *				ASN1_OID {
+ *					op->oid
+ *				}
+ *				op->type|ASN1_PRINTABLESTRING {
+ *					name
+ *				}
+ *			}
+ *		}
+ *	}
+ * }
  */
-err_t atodn(char *src, chunk_t *dn)
+err_t atodn(const char *src, chunk_t *dn)
 {
-	/* finite state machine for atodn */
+	dbg("ASCII to DN <= \"%s\"", src);
 
-	typedef enum {
-		SEARCH_OID = 0,
-		READ_OID = 1,
-		SEARCH_NAME = 2,
-		READ_NAME = 3,
-		UNKNOWN_OID = 4
-	} state_t;
+	/* stack of unfilled lengths */
+	unsigned char *(patchpoint[5]);	/* only 4 are actually needed */
+	unsigned char **ppp = patchpoint;
 
-	u_char oid_len_buf[ASN1_MAX_LEN_LEN];
-	u_char name_len_buf[ASN1_MAX_LEN_LEN];
-	u_char rdn_seq_len_buf[ASN1_MAX_LEN_LEN];
-	u_char rdn_set_len_buf[ASN1_MAX_LEN_LEN];
-	u_char dn_seq_len_buf[ASN1_MAX_LEN_LEN];
+	/* space for result */
+	dn->ptr = temporary_cyclic_buffer();	/* nasty! */
 
-	chunk_t asn1_oid_len = { oid_len_buf, 0 };
-	chunk_t asn1_name_len = { name_len_buf, 0 };
-	chunk_t asn1_rdn_seq_len = { rdn_seq_len_buf, 0 };
-	chunk_t asn1_rdn_set_len = { rdn_set_len_buf, 0 };
-	chunk_t asn1_dn_seq_len = { dn_seq_len_buf, 0 };
-	chunk_t oid = empty_chunk;
-	chunk_t name = empty_chunk;
+	unsigned char *dn_ptr = dn->ptr;	/* growth point */
+	unsigned char *dn_redline = dn_ptr + IDTOA_BUF;
 
-	int whitespace = 0;
-	int rdn_seq_len = 0;
-	int rdn_set_len = 0;
-	int dn_seq_len = 0;
-	int pos = 0;
+#	define START_OBJ() { *ppp++ = dn_ptr; }
 
-	err_t ugh = NULL;
-
-	/* leave room for prefix */
-	u_char *dn_ptr = dn->ptr + 1 + ASN1_MAX_LEN_LEN;
+	/* note: on buffer overflow this returns from atodn */
+#	define EXTEND_OBJ(ptr, len) { \
+		if (dn_redline - dn_ptr < (ptrdiff_t)(len)) \
+			return "DN too big"; \
+		memcpy(dn_ptr, (ptr), (len)); \
+		dn_ptr += (len); \
+	}
 
 	/*
-	 * Concatenate the contents of a chunk onto dn.
-	 * The destination pointer is incremented by the length.
-	 * Pray that there is enough space.
+	 * insert type and operand length before the operand already in the buffer
+	 * Note: on buffer overflow this returns from atodn
 	 */
-#	define addchunk(chunk) { \
-			memcpy(dn_ptr, (chunk).ptr, (chunk).len); \
-			dn_ptr += (chunk).len; \
+#	define END_OBJ(ty) { \
+		size_t len = dn_ptr - *--ppp; \
+		unsigned char len_buf[ASN1_MAX_LEN_LEN + 1] = { ty }; \
+		chunk_t obj_len = { len_buf + 1, 0 }; \
+		code_asn1_length(len, &obj_len); \
+		if (dn_redline - dn_ptr < (ptrdiff_t)obj_len.len + 1) \
+			return "DN overflow"; \
+		memmove(*ppp + obj_len.len + 1, *ppp, len); \
+		memcpy(*ppp, len_buf, obj_len.len + 1); \
+		dn_ptr += obj_len.len + 1; \
+	}
+
+	START_OBJ();	/* 0 ASN1_SEQUENCE */
+
+	for (;;) {
+		/* for each Relative DN */
+
+		/* ??? are multiple '/' and ',' OK? */
+		src += strspn(src, " /,");	/* skip any separators */
+		if (*src == '\0')
+			break;	/* finished! */
+
+		/* parse OID */
+
+		START_OBJ();	/* 1 ASN1_SET */
+		START_OBJ();	/* 2 ASN1_SEQUENCE */
+
+		size_t ol = strcspn(src, " =");	/* length of OID name */
+
+		x501rdn_t *op;	/* OID description */
+
+		for (op = x501rdns; ; op++) {
+			if (op == &x501rdns[elemsof(x501rdns)]) {
+				dbg("unknown OID: \"%.*s\"",
+					(int)ol, src);
+				return "unknown OID in ID_DER_ASN1_DN";
+			}
+			if (strlen(op->name) == ol && strncaseeq(op->name, src, ol)) {
+				break;	/* found */
+			}
 		}
-#	define addtychunk(ty, chunk) { \
-		*dn_ptr++ = ty; \
-		addchunk(chunk); \
+
+		src += ol;
+
+		START_OBJ();	/* 3 ASN1_OID */
+		EXTEND_OBJ(op->oid_ptr, op->oid_len);
+		END_OBJ(ASN1_OID);	/* 3 */
+
+		/* parse name */
+
+		/* ??? are multiple '=' OK? */
+		src += strspn(src, " =");	/* skip any separators */
+
+		START_OBJ();	/* 3 op->type or ASN1_T61STRING */
+
+		for (;;) {
+			size_t nl = strcspn(src, ",/");
+
+			EXTEND_OBJ(src, nl);
+			src += nl;
+
+			if (src[0] == '\0' || src[0] != src[1])
+				break;	/* end of name */
+			/*
+			 * doubled: a form of escape.
+			 * Insert a single copy of the char.
+			 */
+			EXTEND_OBJ(src, 1);
+			src += 2;	/* skip both copies */
 		}
 
-	state_t state = SEARCH_OID;
+		/* remove trailing SPaces from name operand */
 
-	do {
-		switch (state) {
-		case SEARCH_OID:
-			if (*src != ' ' && *src != '/' && *src != ',') {
-				oid.ptr = (unsigned char *)src;
-				oid.len = 1;
-				state = READ_OID;
-			}
-			break;
-		case READ_OID:
-			if (*src != ' ' && *src != '=') {
-				oid.len++;
-			} else {
-				for (pos = 0; pos < (int)X501_RDN_ROOF;
-					pos++) {
-					if (strlen(x501rdns[pos].name) ==
-						oid.len &&
-						strncaseeq(x501rdns[pos].name,
-							(char *)oid.ptr,
-							oid.len))
-						break;	/* found a valid OID */
-				}
-				if (pos == X501_RDN_ROOF) {
-					ugh = "unknown OID in ID_DER_ASN1_DN";
-					state = UNKNOWN_OID;
-					break;
-				}
-				code_asn1_length(x501rdns[pos].oid.len,
-						&asn1_oid_len);
+		unsigned char *ns = ppp[-1];	/* name operand start */
 
-				/* reset oid and change state */
-				oid = empty_chunk;
-				state = SEARCH_NAME;
-			}
-			break;
-		case SEARCH_NAME:
-			if (*src != ' ' && *src != '=') {
-				name.ptr = (unsigned char *)src;
-				name.len = 1;
-				whitespace = 0;
-				state = READ_NAME;
-			}
-			break;
-		case READ_NAME:
-			if (*src != ',' && *src != '/' && *src != '\0') {
-				name.len++;
-				if (*src == ' ')
-					whitespace++;
-				else
-					whitespace = 0;
-			} else {
-				if (*src == ',') {
-					if (*++src == ',') {
-						src--;
-						name.len++;
-						escape_char(src, ',');
-						break;
-					} else {
-						src--;
-					}
-				}
-				if (*src == '/') {
-					if (*++src == '/') {
-						src--;
-						name.len++;
-						escape_char(src, '/');
-						break;
-					} else {
-						src--;
-					}
-				}
+		while (dn_ptr > ns && dn_ptr[-1] == ' ')
+			dn_ptr--;
 
-				name.len -= whitespace;
-				code_asn1_length(name.len, &asn1_name_len);
+		asn1_t t = op->type == ASN1_PRINTABLESTRING &&
+			!is_printablestring(chunk(ns, dn_ptr - ns)) ?
+				ASN1_T61STRING : op->type;
 
-				/*
-				 * compute the length of the relative
-				 * distinguished name sequence
-				 */
-				rdn_seq_len = 1 + asn1_oid_len.len +
-					x501rdns[pos].oid.len +
-					1 + asn1_name_len.len + name.len;
-				code_asn1_length(rdn_seq_len,
-						&asn1_rdn_seq_len);
+		END_OBJ(t);	/* 3 name */
 
-				/*
-				 * compute the length of the relative
-				 * distinguished name set
-				 */
-				rdn_set_len = 1 + asn1_rdn_seq_len.len +
-					rdn_seq_len;
-				code_asn1_length(rdn_set_len,
-						&asn1_rdn_set_len);
+		END_OBJ(ASN1_SEQUENCE);	/* 2 */
+		END_OBJ(ASN1_SET);	/* 1 */
+	}
 
-				/* encode the relative distinguished name */
-				if (IDTOA_BUF < dn_ptr - dn->ptr +
-				    1 + asn1_rdn_set_len.len + /* set */
-				    1 + asn1_rdn_seq_len.len + /* sequence */
-				    1 + asn1_oid_len.len + /* oid len */
-				    x501rdns[pos].oid.len + /* oid */
-				    1 + asn1_name_len.len + name.len /* type name */
-				    ) {
-					/* no room! */
-					ugh = "DN is too big";
-					state = UNKNOWN_OID;
-					/*
-					 * I think that it is safe to continue
-					 * (but perhaps pointless)
-					 */
-				} else {
-					addtychunk(ASN1_SET, asn1_rdn_set_len);
-					addtychunk(ASN1_SEQUENCE, asn1_rdn_seq_len);
-					addtychunk(ASN1_OID, asn1_oid_len);
-					addchunk(x501rdns[pos].oid);
-					/*
-					 * encode the ASN.1 character string
-					 * type of the name
-					 */
-					asn1_t nt =
-						x501rdns[pos].type == ASN1_PRINTABLESTRING &&
-						!is_printablestring(name) ?
-							ASN1_T61STRING :
-							x501rdns[pos].type;
-					addtychunk(nt, asn1_name_len);
-					addchunk(name);
+	END_OBJ(ASN1_SEQUENCE);	/* 0 */
+	dn->len = dn_ptr - dn->ptr;
+	if (DBGP(DBG_BASE)) {
+		DBG_dump_chunk("ASCII to DN =>", *dn);
+	}
+	return NULL;
 
-					/*
-					 * accumulate the length of the
-					 * distinguished name sequence
-					 */
-					dn_seq_len += 1 +
-						asn1_rdn_set_len.len +
-						rdn_set_len;
-
-					/* reset name and change state */
-					name = empty_chunk;
-					state = SEARCH_OID;
-				}
-			}
-			break;
-		case UNKNOWN_OID:
-			break;
-		}
-	} while (*src++ != '\0');
-
-	/*
-	 * complete the distinguished name sequence: prefix it with
-	 * ASN1_SEQUENCE and length
-	 */
-	code_asn1_length((size_t)dn_seq_len, &asn1_dn_seq_len);
-	dn->ptr += ASN1_MAX_LEN_LEN + 1 - 1 - asn1_dn_seq_len.len;
-	dn->len = 1 + asn1_dn_seq_len.len + dn_seq_len;
-	dn_ptr = dn->ptr;
-	*dn_ptr++ = ASN1_SEQUENCE;
-	addchunk(asn1_dn_seq_len);
-	return ugh;
-#	undef addtychunk
-#	undef addchunk
+#	undef START_OBJ
+#	undef EXTEND_OBJ
+#	undef END_OBJ
 }
 
 /*
@@ -637,10 +570,9 @@ bool same_dn(chunk_t a, chunk_t b)
  */
 bool match_dn(chunk_t a, chunk_t b, int *wildcards)
 {
-	chunk_t rdn_a, rdn_b, attribute_a, attribute_b;
-	chunk_t oid_a, oid_b, value_a, value_b;
-	asn1_t type_a, type_b;
-	bool next_a, next_b;
+	chunk_t rdn_a, rdn_b;
+	chunk_t attribute_a, attribute_b;
+	bool more_a, more_b;
 
 	if (wildcards != NULL) {
 		/* initialize wildcard counter */
@@ -656,55 +588,106 @@ bool match_dn(chunk_t a, chunk_t b, int *wildcards)
 			return TRUE;
 	}
 
-	/* initialize DN parsing */
-	if (init_rdn(a, &rdn_a, &attribute_a, &next_a) != NULL ||
-		init_rdn(b, &rdn_b, &attribute_b, &next_b) != NULL)
-		return FALSE;
+	/*
+	 * initialize DN parsing.  Stop (silently) on errors.
+	 */
+	{
+		err_t ua = init_rdn(a, &rdn_a, &attribute_a, &more_a);
+		if (ua != NULL) {
+			dbg("match_dn bad a: %s", ua);
+			return FALSE;
+		}
+
+		err_t ub = init_rdn(b, &rdn_b, &attribute_b, &more_b);
+		if (ub != NULL) {
+			dbg("match_dn bad b: %s", ub);
+			return FALSE;
+		}
+	}
 
 	/* fetch next RDN pair */
-	while (next_a && next_b) {
-		/* parse next RDNs and check for errors */
-		if (get_next_rdn(&rdn_a, &attribute_a, &oid_a, &value_a,
-					&type_a, &next_a) != NULL ||
-			get_next_rdn(&rdn_b, &attribute_b, &oid_b, &value_b,
-				&type_b, &next_b) != NULL)
-			return FALSE;
+	for (int n = 1; more_a && more_b; n++) {
+		/*
+		 * Parse next RDNs and check for errors
+		 * but don't report errors.
+		 */
+		chunk_t oid_a, oid_b;
+		asn1_t type_a, type_b;
+		chunk_t value_a, value_b;
+
+		{
+			err_t ua = get_next_rdn(&rdn_a, &attribute_a, &oid_a,
+				 &type_a, &value_a, &more_a);
+			if (ua != NULL) {
+				dbg("match_dn bad a[%d]: %s", n, ua);
+				return FALSE;
+			}
+
+			err_t ub = get_next_rdn(&rdn_b, &attribute_b, &oid_b,
+				 &type_b, &value_b, &more_b);
+			if (ub != NULL) {
+				dbg("match_dn bad b[%d]: %s", n, ub);
+				return FALSE;
+			}
+		}
 
 		/* OIDs must agree */
-		if (oid_a.len != oid_b.len ||
-			!memeq(oid_a.ptr, oid_b.ptr, oid_b.len))
+		if (!chunk_eq(oid_a, oid_b))
 			return FALSE;
 
 		/* does rdn_b contain a wildcard? */
+		/* ??? this does not care whether types match.  Should it? */
 		if (wildcards != NULL && value_b.len == 1 && *value_b.ptr == '*') {
 			(*wildcards)++;
 			continue;
 		}
 
-		/* same lengths for values */
 		if (value_a.len != value_b.len)
-			return FALSE;
+			return FALSE;	/* lengths must match */
 
 		/*
-		 * printableStrings and email RDNs require uppercase
-		 * comparison
+		 * If the two types treat the high bit differently
+		 * or if ASN1_PRINTABLESTRING is involved,
+		 * we must forbid the high bit.
 		 */
-		if (type_a == type_b &&
-		    (type_a == ASN1_PRINTABLESTRING ||
-		     (type_a == ASN1_IA5STRING &&
-		      known_oid(oid_a) == OID_PKCS9_EMAIL))) {
-			if (!strncaseeq((char *)value_a.ptr,
-					(char *)value_b.ptr,
-					value_b.len))
-				return FALSE;
-		} else {
-			if (!strneq((char *)value_a.ptr, (char *)value_b.ptr,
-				    value_b.len))
+		if (type_a != type_b || type_a == ASN1_PRINTABLESTRING) {
+			unsigned char or = 0x00;
+			for (size_t i = 0; i != value_a.len; i++)
+				or |= value_a.ptr[i] | value_b.ptr[i];
+			if (or & 0x80)
 				return FALSE;
 		}
+
+		/*
+		 * even though the types may differ, we assume that
+		 * their bits can be compared.
+		 */
+
+		/* cheap match, as if case matters */
+		if (memeq(value_a.ptr, value_b.ptr, value_a.len))
+			continue;
+
+		/*
+		 * printableStrings and email RDNs require comparison
+		 * ignoring case.
+		 * We do require that the types match.
+		 * Forbid NUL in such strings.
+		 */
+
+		if ((type_a == ASN1_PRINTABLESTRING ||
+		     (type_a == ASN1_IA5STRING &&
+		      known_oid(oid_a) == OID_PKCS9_EMAIL)) &&
+		    strncaseeq((char *)value_a.ptr,
+				(char *)value_b.ptr, value_b.len) &&
+		    memchr(value_a.ptr, '\0', a.len) == NULL)
+		{
+			continue;	/* component match */
+		}
+		return FALSE;	/* not a match */
 	}
+
 	/* both DNs must have same number of RDNs */
-	if (next_a || next_b) {
+	if (more_a || more_b) {
 		if (wildcards != NULL && *wildcards != 0) {
 			/* ??? for some reason we think a failure with wildcards is worth logging */
 			char abuf[ASN1_BUF_LEN];
@@ -716,7 +699,7 @@ bool match_dn(chunk_t a, chunk_t b, int *wildcards)
 			libreswan_log(
 				"while comparing A='%s'<=>'%s'=B with a wildcard count of %d, %s had too few RDNs",
 				abuf, bbuf, *wildcards,
-				(next_a ? "B" : "A"));
+				(more_a ? "B" : "A"));
 		}
 		return FALSE;
 	}

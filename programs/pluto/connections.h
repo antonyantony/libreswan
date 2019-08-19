@@ -10,8 +10,9 @@
  * Copyright (C) 2013 Kim Heino <b@bbbs.net>
  * Copyright (C) 2013 Antony Antony <antony@phenome.org>
  * Copyright (C) 2013 Tuomo Soini <tis@foobar.fi>
- * Copyright (C) 2013-2018 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2013-2019 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -29,6 +30,7 @@
 #define CONNECTIONS_H
 
 #include "fd.h"
+#include "proposals.h"
 
 /* There are two kinds of connections:
  * - ISAKMP connections, between hosts (for IKE communication)
@@ -231,6 +233,20 @@ struct sa_marks {
 	struct sa_mark out;
 };
 
+/* this struct will be used for
+ * storing ephemeral stuff, that doesn't
+ * need i.e. to be stored to connection
+ * .conf files.
+ */
+struct ephemeral_variables {
+	int revive_delay;
+	/* RFC 5685 - IKEv2 Redirect Mechanism */
+	int num_redirects;
+	realtime_t first_redirect_time;
+	ip_address redirect_ip;		/* where to redirect */
+	ip_address old_gw_address;	/* address of old gateway */
+};
+
 struct connection {
 	char *name;
 	char *foodgroup;
@@ -262,7 +278,7 @@ struct connection {
 	deltatime_t dpd_timeout;	/* time after which we are dead */
 	enum dpd_action dpd_action;	/* what to do when we die */
 
-	bool nat_keepalive;		/* Suppress sending NAT-T Keep-Alives */
+	bool nat_keepalive;		/* Send NAT-T Keep-Alives if we are behind NAT */
 	bool initial_contact;		/* Send INITIAL_CONTACT (RFC-2407) payload? */
 	bool cisco_unity;		/* Send Unity VID for cisco compatibility */
 	bool fake_strongswan;		/* Send the unversioned strongswan VID */
@@ -302,7 +318,7 @@ struct connection {
 	enum connection_kind kind;
 	const struct iface_port *interface;	/* filled in iff oriented */
 
-	bool failed_ikev2;	/* tried ikev2, but failed */
+	struct ephemeral_variables temp_vars;
 
 	so_serial_t		/* state object serial number */
 		newest_isakmp_sa,
@@ -318,8 +334,8 @@ struct connection {
 	/* if multiple policies, next one to apply */
 	struct connection *policy_next;
 
-	struct alg_info_esp *alg_info_esp;	/* ??? OK for AH too? */
-	struct alg_info_ike *alg_info_ike;
+	struct ike_proposals ike_proposals;
+	struct child_proposals child_proposals;
 
 	/*
 	 * The ALG_INFO converted to IKEv2 format.
@@ -327,9 +343,23 @@ struct connection {
 	 * Since they are allocated on-demand so there's no need to
 	 * worry about copying them when a connection object gets
 	 * cloned.
+	 *
+	 * For a child SA, two different proposals are used:
+	 *
+	 * - during the IKE_AUTH exchange a proposal stripped of any
+	 *   DH (it uses keying material from the IKE SA's SKSEED).
+	 *
+	 * - during a CREATE_CHILD_SA exchange, a mash up of the
+	 *   proposal and the IKE SA's DH algorithm.  Since the IKE
+	 *   SA's DH can change, it too is saved so a rebuild can be
+	 *   triggered.
+	 *
+	 * XXX: has to be a better way?
 	 */
-	struct ikev2_proposals *ike_proposals;
-	struct ikev2_proposals *esp_or_ah_proposals;
+	struct ikev2_proposals *v2_ike_proposals;
+	struct ikev2_proposals *v2_ike_auth_child_proposals;
+	struct ikev2_proposals *v2_create_child_proposals;
+	const struct oakley_group_desc *v2_create_child_proposals_default_dh;
 
 	/* host_pair linkage */
 	struct host_pair *host_pair;
@@ -346,11 +376,15 @@ struct connection {
 	char *modecfg_domains;
 	char *modecfg_banner;
 
-	uint8_t metric;	/* metric for tunnel routes */
+	uint32_t metric;	/* metric for tunnel routes */
 	uint16_t connmtu;	/* mtu for tunnel routes */
 	uint32_t statsval;	/* track what we have told statsd */
 	uint16_t nflog_group;	/* NFLOG group - 0 means disabled  */
 	msgid_t ike_window;     /* IKE v2 window size 7296#section-2.3 */
+
+	char *redirect_to;        /* RFC 5685 */
+	char *accept_redirect_to;
+
 };
 
 #define oriented(c) ((c).interface != NULL)
@@ -376,6 +410,7 @@ extern void initiate_connection(const char *name,
 				lmod_t more_impairing,
 				char *remote_host);
 extern void restart_connections_by_peer(struct connection *c);
+extern void flush_revival(const struct connection *c);
 
 #ifdef HAVE_LABELED_IPSEC
 struct xfrm_user_sec_ctx_ike; /* forward declaration */
@@ -391,7 +426,7 @@ extern void initiate_ondemand(const ip_address *our_client,
 #endif
 			     err_t why);
 
-extern void terminate_connection(const char *name);
+extern void terminate_connection(const char *name, bool quiet);
 extern void release_connection(struct connection *c, bool relations);
 extern void delete_connection(struct connection *c, bool relations);
 extern void suppress_delete(struct connection *c);
@@ -469,12 +504,23 @@ extern struct connection *build_outgoing_opportunistic_connection(
 		const ip_address *peer_client,
 		const int transport_proto);
 
-/* worst case: "[" serial "] " myclient "=== ..." peer "===" hisclient '\0' */
+/* worst case: "[" serial "] " myclient "=== ..." peer "===" hisclient '\0' <cookie> */
 #define CONN_INST_BUF \
-	(2 + 10 + 1 + SUBNETTOT_BUF + 7 + ADDRTOT_BUF + 3 + SUBNETTOT_BUF + 1)
+	(2 + 10 + 1 + SUBNETTOT_BUF + 7 + ADDRTOT_BUF + 3 + SUBNETTOT_BUF + 1 + 1)
 
+void fmt_connection_instance(struct lswlog *buf, const struct connection *c);
+/* str_connection_instance() */
 extern char *fmt_conn_instance(const struct connection *c,
 			       char buf[CONN_INST_BUF]);
+
+typedef struct {
+	char buf[CONN_INST_BUF + 1/*COOKIE*/];
+} connection_buf;
+
+const char *str_connection(const struct connection *c,
+			   connection_buf *buf);
+
+void fmt_connection(struct lswlog *buf, const struct connection *c);
 
 /* operations on "pending", the structure representing Quick Mode
  * negotiations delayed until a Keying Channel has been negotiated.
@@ -539,12 +585,14 @@ extern void update_host_pairs(struct connection *c);
 
 extern void unshare_connection_end(struct end *e);
 
-extern void liveness_clear_connection(struct connection *c, char *v);
+extern void liveness_clear_connection(struct connection *c, const char *v);
 
-extern void liveness_action(struct connection *c, const bool ikev2);
+extern void liveness_action(struct connection *c, enum ike_version ike_version);
 
 extern bool idr_wildmatch(const struct connection *c, const struct id *b);
 
 extern uint32_t calculate_sa_prio(const struct connection *c);
+
+so_serial_t get_newer_sa_from_connection(struct state *st);
 
 #endif

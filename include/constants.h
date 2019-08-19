@@ -1,4 +1,4 @@
-/* manifest constants
+/*
  *
  * Copyright (C) 1997 Angelos D. Keromytis.
  * Copyright (C) 1998-2002,2013 D. Hugh Redelmeier <hugh@mimosa.com>
@@ -8,6 +8,7 @@
  * Copyright (C) 2009 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013 Tuomo Soini <tis@foobar.fi>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -27,7 +28,6 @@
 #include <stddef.h> /* for size_t */
 
 #include "shunk.h"
-#include "lset.h"
 
 struct lswlog;
 
@@ -44,6 +44,8 @@ struct lswlog;
  * NOTE:For debugging purposes, constants.c has tables to map
  * numbers back to names.
  * Any changes here should be reflected there.
+ *
+ * elemsof() returns the unsgiend size_t.
  */
 
 #define elemsof(array) (sizeof(array) / sizeof(*(array)))	/* number of elements in an array */
@@ -285,26 +287,6 @@ size_t lswlog_enum_enum(struct lswlog *log, enum_enum_names *een,
 size_t lswlog_enum_enum_short(struct lswlog *log, enum_enum_names *een,
 			      unsigned long table, unsigned long val);
 
-/* Printing lset_t values:
- *
- * These routines require a name table which is a NULL-terminated
- * sequence of strings.  That means that each bit in the set must
- * have a name.
- *
- * bitnamesof() formats a display of a set of named bits (in a static area -- NOT RE-ENTRANT)
- * bitnamesofb() formats into a caller-supplied buffer (re-entrant)
- *
- * lswlog_enum_lset_short() formats into a caller-supplied buffer -- only form
- */
-extern bool testset(const char *const table[], lset_t val);
-extern const char *bitnamesof(const char *const table[], lset_t val);	/* NOT RE-ENTRANT */
-extern const char *bitnamesofb(const char *const table[],
-			       lset_t val,
-			       char *buf, size_t blen);
-
-size_t lswlog_enum_lset_short(struct lswlog *, enum_names *sd,
-			      const char *separator, lset_t val);
-
 /*
  * The sparser_name should be transformed into keyword_enum_value
  *
@@ -323,9 +305,6 @@ struct keyword_enum_values {
 	const struct keyword_enum_value *values;
 	size_t valuesize;
 };
-
-extern const char *keyword_name(struct keyword_enum_values *kevs,
-				unsigned int value);
 
 /* sparse_names is much like enum_names, except values are
  * not known to be contiguous or ordered.

@@ -21,7 +21,7 @@ Files:
  lib/libswan/initsaid.c
  lib/libswan/initsubnet.c
  lib/libswan/internal.h
- lib/libswan/iprange.c
+ lib/libswan/ip_range.c
  lib/libswan/keyblobtoid.c
  lib/libswan/pfkey_error.c
  lib/libswan/pfkey_sock.c
@@ -33,7 +33,6 @@ Files:
  lib/libswan/subnettypeof.c
  lib/libswan/ttoaddr.c
  lib/libswan/ttodata.c
- lib/libswan/ttorange.c
  lib/libswan/ttosa.c
  lib/libswan/ttosubnet.c
  lib/libswan/ttoul.c

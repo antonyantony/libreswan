@@ -16,7 +16,7 @@ west #
 west #
  iptables -I INPUT -m policy --dir in --pol ipsec -j ACCEPT
 west #
- # confirm with a ping
+ # confirm clear text does not get through
 west #
  ping -n -c 1 -I 192.0.1.254 192.0.2.254
 PING 192.0.2.254 (192.0.2.254) from 192.0.1.254 : 56(84) bytes of data.
@@ -31,14 +31,18 @@ west #
  ipsec auto --add west-east-delete1
 002 added connection description "west-east-delete1"
 west #
+ ipsec whack --impair suppress-retransmits
+west #
+ ipsec whack --impair revival
+west #
  echo "initdone"
 initdone
 west #
  ipsec auto --up west-east-delete1
 002 "west-east-delete1" #1: initiating v2 parent SA
-133 "west-east-delete1" #1: initiate
-133 "west-east-delete1" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
-134 "west-east-delete1" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
+1v2 "west-east-delete1" #1: initiate
+1v2 "west-east-delete1" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
+1v2 "west-east-delete1" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
 002 "west-east-delete1" #2: IKEv2 mode peer ID is ID_FQDN: '@east'
 003 "west-east-delete1" #2: Authenticated using authby=secret
 002 "west-east-delete1" #2: negotiated connection [192.0.1.0-192.0.1.255:0-65535 0] -> [192.0.2.0-192.0.2.255:0-65535 0]
@@ -77,12 +81,13 @@ west #
 000 nssdir=/etc/ipsec.d, dumpdir=/run/pluto, statsbin=unset
 000 dnssec-rootkey-file=/var/lib/unbound/root.key, dnssec-trusted=<unset>
 000 sbindir=PATH/sbin, libexecdir=PATH/libexec/ipsec
-000 nhelpers=-1, uniqueids=yes, dnssec-enable=yes, perpeerlog=no, logappend=no, logip=yes, shuntlifetime=900s, xfrmlifetime=300s
+000 nhelpers=-1, uniqueids=yes, dnssec-enable=yes, perpeerlog=no, logappend=no, logip=yes, shuntlifetime=900s, xfrmlifetime=30s
 000 ddos-cookies-threshold=50000, ddos-max-halfopen=25000, ddos-mode=auto
 000 ikeport=500, ikebuf=0, msg_errqueue=yes, strictcrlpolicy=no, crlcheckinterval=0, listen=<any>, nflog-all=0
 000 ocsp-enable=no, ocsp-strict=no, ocsp-timeout=2, ocsp-uri=<unset>
 000 ocsp-trust-name=<unset>
 000 ocsp-cache-size=1000, ocsp-cache-min-age=3600, ocsp-cache-max-age=86400, ocsp-method=get
+000 global-redirect=no, global-redirect-to=<unset>
 000 secctx-attr-type=XXXX
 000 debug ...
 000  
@@ -161,7 +166,7 @@ west #
 000 "west-east-delete1":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "west-east-delete1":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
 000 "west-east-delete1":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
-000 "west-east-delete1":   policy: PSK+ENCRYPT+TUNNEL+PFS+UP+IKEV2_ALLOW+IKEV2_PROPOSE+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
+000 "west-east-delete1":   policy: PSK+ENCRYPT+TUNNEL+PFS+UP+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
 000 "west-east-delete1":   conn_prio: 24,24; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "west-east-delete1":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
 000 "west-east-delete1":   our idtype: ID_FQDN; our id=@west; their idtype: ID_FQDN; their id=@east
@@ -176,8 +181,8 @@ west #
 000 IKE SAs: total(1), half-open(0), open(0), authenticated(1), anonymous(0)
 000 IPsec SAs: total(1), authenticated(1), anonymous(0)
 000  
-000 #1: "west-east-delete1":500 STATE_PARENT_I3 (PARENT SA established); EVENT_SA_REPLACE in  XXs; newest ISAKMP; idle;
-000 #2: "west-east-delete1":500 STATE_V2_IPSEC_I (IPsec SA established); EVENT_SA_REPLACE in  XXs; newest IPSEC; eroute owner; isakmp#1; idle;
+000 #1: "west-east-delete1":500 STATE_PARENT_I3 (PARENT SA established); EVENT_SA_REKEY in XXs; newest ISAKMP; idle;
+000 #2: "west-east-delete1":500 STATE_V2_IPSEC_I (IPsec SA established); EVENT_SA_REKEY in XXs; newest IPSEC; eroute owner; isakmp#1; idle;
 000 #2: "west-east-delete1" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 ref=0 refhim=0 Traffic: ESPin=168B ESPout=168B! ESPmax=0B 
 000  
 000 Bare Shunt list:
@@ -219,12 +224,13 @@ west #
 000 nssdir=/etc/ipsec.d, dumpdir=/run/pluto, statsbin=unset
 000 dnssec-rootkey-file=/var/lib/unbound/root.key, dnssec-trusted=<unset>
 000 sbindir=PATH/sbin, libexecdir=PATH/libexec/ipsec
-000 nhelpers=-1, uniqueids=yes, dnssec-enable=yes, perpeerlog=no, logappend=no, logip=yes, shuntlifetime=900s, xfrmlifetime=300s
+000 nhelpers=-1, uniqueids=yes, dnssec-enable=yes, perpeerlog=no, logappend=no, logip=yes, shuntlifetime=900s, xfrmlifetime=30s
 000 ddos-cookies-threshold=50000, ddos-max-halfopen=25000, ddos-mode=auto
 000 ikeport=500, ikebuf=0, msg_errqueue=yes, strictcrlpolicy=no, crlcheckinterval=0, listen=<any>, nflog-all=0
 000 ocsp-enable=no, ocsp-strict=no, ocsp-timeout=2, ocsp-uri=<unset>
 000 ocsp-trust-name=<unset>
 000 ocsp-cache-size=1000, ocsp-cache-min-age=3600, ocsp-cache-max-age=86400, ocsp-method=get
+000 global-redirect=no, global-redirect-to=<unset>
 000 secctx-attr-type=XXXX
 000 debug ...
 000  
@@ -303,7 +309,7 @@ west #
 000 "west-east-delete1":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "west-east-delete1":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
 000 "west-east-delete1":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
-000 "west-east-delete1":   policy: PSK+ENCRYPT+TUNNEL+PFS+UP+IKEV2_ALLOW+IKEV2_PROPOSE+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
+000 "west-east-delete1":   policy: PSK+ENCRYPT+TUNNEL+PFS+UP+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
 000 "west-east-delete1":   conn_prio: 24,24; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "west-east-delete1":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
 000 "west-east-delete1":   our idtype: ID_FQDN; our id=@west; their idtype: ID_FQDN; their id=@east
@@ -317,7 +323,7 @@ west #
 000 IKE SAs: total(1), half-open(0), open(0), authenticated(1), anonymous(0)
 000 IPsec SAs: total(0), authenticated(0), anonymous(0)
 000  
-000 #1: "west-east-delete1":500 STATE_PARENT_I3 (PARENT SA established); EVENT_SA_REPLACE in  XXs; newest ISAKMP; idle;
+000 #1: "west-east-delete1":500 STATE_PARENT_I3 (PARENT SA established); EVENT_SA_REKEY in XXs; newest ISAKMP; idle;
 000  
 000 Bare Shunt list:
 000  
@@ -327,6 +333,7 @@ sleeping a bit.. 2
 west #
  ipsec whack --deletestate 1
 002 "west-east-delete1" #1: deleting state (STATE_PARENT_I3) and sending notification
+002 "west-east-delete1" #1: IMPAIR: skipping revival of connection 'west-east-delete1' that is supposed to remain up
 west #
  sleep 2
 west #
@@ -352,12 +359,13 @@ west #
 000 nssdir=/etc/ipsec.d, dumpdir=/run/pluto, statsbin=unset
 000 dnssec-rootkey-file=/var/lib/unbound/root.key, dnssec-trusted=<unset>
 000 sbindir=PATH/sbin, libexecdir=PATH/libexec/ipsec
-000 nhelpers=-1, uniqueids=yes, dnssec-enable=yes, perpeerlog=no, logappend=no, logip=yes, shuntlifetime=900s, xfrmlifetime=300s
+000 nhelpers=-1, uniqueids=yes, dnssec-enable=yes, perpeerlog=no, logappend=no, logip=yes, shuntlifetime=900s, xfrmlifetime=30s
 000 ddos-cookies-threshold=50000, ddos-max-halfopen=25000, ddos-mode=auto
 000 ikeport=500, ikebuf=0, msg_errqueue=yes, strictcrlpolicy=no, crlcheckinterval=0, listen=<any>, nflog-all=0
 000 ocsp-enable=no, ocsp-strict=no, ocsp-timeout=2, ocsp-uri=<unset>
 000 ocsp-trust-name=<unset>
 000 ocsp-cache-size=1000, ocsp-cache-min-age=3600, ocsp-cache-max-age=86400, ocsp-method=get
+000 global-redirect=no, global-redirect-to=<unset>
 000 secctx-attr-type=XXXX
 000 debug ...
 000  
@@ -436,7 +444,7 @@ west #
 000 "west-east-delete1":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "west-east-delete1":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
 000 "west-east-delete1":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
-000 "west-east-delete1":   policy: PSK+ENCRYPT+TUNNEL+PFS+UP+IKEV2_ALLOW+IKEV2_PROPOSE+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
+000 "west-east-delete1":   policy: PSK+ENCRYPT+TUNNEL+PFS+UP+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
 000 "west-east-delete1":   conn_prio: 24,24; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "west-east-delete1":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
 000 "west-east-delete1":   our idtype: ID_FQDN; our id=@west; their idtype: ID_FQDN; their id=@east

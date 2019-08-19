@@ -4,7 +4,7 @@
 # Copyright (C) 2003-2006   Xelerance Corporation
 # Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
 # Copyright (C) 2015,2017-2018 Andrew Cagney
-# Copyright (C) 2015-2016 Tuomo Soini <tis@foobar.fi>
+# Copyright (C) 2015-2019 Tuomo Soini <tis@foobar.fi>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -239,15 +239,28 @@ NSS_SMIME_LDFLAGS ?= -lsmime3
 NSS_UTIL_LDFLAGS ?= -lnssutil3
 NSPR_LDFLAGS ?= -lnspr4
 
-# Use nss copy for CERT_CompareAVA
+# Use local copy of nss function CERT_CompareAVA
 # See https://bugzilla.mozilla.org/show_bug.cgi?id=1336487
-NSS_REQ_AVA_COPY?=true
+# This work-around is needed with nss versions before 3.30.
+USE_NSS_AVA_COPY?=false
+ifeq ($(USE_NSS_AVA_COPY),true)
+NSSFLAGS+=-DNSS_REQ_AVA_COPY
+endif
+
+# Use nss IPsec profile for X509 validation. This is less restrictive
+# on EKU's. Enable when using NSS >= 3.41 (or RHEL-7.6 / RHEL-8.0)
+# See https://bugzilla.mozilla.org/show_bug.cgi?id=1252891
+USE_NSS_IPSEC_PROFILE?=true
+ifeq ($(USE_NSS_IPSEC_PROFILE),true)
+NSSFLAGS+=-DNSS_IPSEC_PROFILE
+endif
 
 # Use a local copy of xfrm.h. This can be needed on older systems
 # that do not ship linux/xfrm.h, or when the shipped version is too
 # old. Since we ship some not-yet merged ipsec-next offload code, this
 # is currently true for basically all distro's
 USE_XFRM_HEADER_COPY?=true
+XFRM_LIFETIME_DEFAULT?=30
 
 # Some systems have a bogus combination of glibc and kernel-headers which
 # causes a conflict in the IPv6 defines. Try enabling this option as a workaround
@@ -260,7 +273,7 @@ USE_NIC_OFFLOAD?=true
 # When compiling on a system where unbound is missing the required unbound-event.h
 # include file, enable this workaround option that will enable an included copy of
 # this file as shipped with libreswan. The copy is taken from unbound 1.6.0.
-USE_UNBOUND_EVENT_H_COPY?=true
+USE_UNBOUND_EVENT_H_COPY?=false
 
 # Install the portexclude service for policies/portexcludes.conf policies
 # Disabled per default for now because it requires python[23]
@@ -332,7 +345,7 @@ USE_DNSSEC?=true
 # We only enable this by default if used INITSYSTEM is systemd
 ifeq ($(INITSYSTEM),systemd)
 USE_SYSTEMD_WATCHDOG?=true
-SD_RESTART_TYPE?="always"
+SD_RESTART_TYPE?="on-failure"
 SD_PLUTO_OPTIONS?="--leak-detective"
 else
 USE_SYSTEMD_WATCHDOG?=false
@@ -409,7 +422,6 @@ export OBJDIRTOP
 
 ### paths within the source tree
 
-KLIPSINC=${LIBRESWANSRCDIR}/linux/include
 KLIPSSRCDIR=${LIBRESWANSRCDIR}/linux/net/ipsec
 
 LIBSWANDIR=${LIBRESWANSRCDIR}/lib/libswan

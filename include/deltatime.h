@@ -52,13 +52,8 @@ typedef struct { intmax_t ms; } deltatime_t;
 
 #define DELTATIME_INIT(S) { (intmax_t)((S) * 1000) }
 
-static inline deltatime_t deltatime(time_t secs) {
-	return (deltatime_t) DELTATIME_INIT(secs);
-}
-
-static inline deltatime_t deltatime_ms(intmax_t ms) {
-	return (deltatime_t) { ms };
-}
+deltatime_t deltatime(time_t secs);
+deltatime_t deltatime_ms(intmax_t ms);
 
 /* sign(a - b) */
 int deltatime_cmp(deltatime_t a, deltatime_t b);
@@ -85,6 +80,17 @@ bool deltaless_tv_dt(const struct timeval a, const deltatime_t b);
 struct timeval deltatimeval(deltatime_t);
 
 /* output as "smart" seconds */
+
+typedef struct {
+	char buf[100]; /* true length ???? */
+} deltatime_buf;
+const char *str_deltatime(deltatime_t d, deltatime_buf *buf);
+
+/* fmt_deltatime() */
 size_t lswlog_deltatime(struct lswlog *buf, deltatime_t d);
+
+/* But what about -ve? */
+#define PRI_DELTATIME "%jd.%03jd"
+#define pri_deltatime(D) (deltamillisecs(D) / 1000), (deltamillisecs(D) % 1000)
 
 #endif

@@ -27,6 +27,7 @@
 #define _IETF_CONSTANTS_H
 
 #include <sys/types.h>
+#include <stdint.h>		/* XXX: needed but should it? */
 
 /* Group parameters from draft-ietf-ike-01.txt section 6 */
 
@@ -297,9 +298,57 @@
 /* Default is based on minimum IKEv2 requirement */
 #define DEFAULT_NONCE_SIZE 32 /* bytes */
 
-/* COOKIE_SIZE is also IKEv2 IKE SPI size */
-#define COOKIE_SIZE 8
-#define MAX_ISAKMP_SPI_SIZE 16
+/*
+ * Security Parameter Index (SPI):
+ *
+ * The IKE SA's SPI, which is a fixed part of the IKEv1/IKEv2 message
+ * header, is 8 bytes long.
+ *
+ * The CHILD SA's SPI is 4 bytes (IKEv2: 3.3.1.  Proposal
+ * Substructure).
+ *
+ * XXX:
+ *
+ * IKEv1, presumably as a way to ensure maximum confusion, used the
+ * term "cookie" when describing the IKE SA's SPI in the message
+ * header, and the term SPI when describing IKE SPIs (yes, one or two)
+ * within a payload (the term "cookie" is included as a parenthetical
+ * clarification).
+ *
+ * IKEv1, instead consistently uses SPI for both the IKE and CHILD
+ * SAs, that is both when describing the message header and the
+ * contents of payloads.  Unfortunately, IKEv2 then went on to use
+ * term "cookie" when describing its new cookie mechanism (implemented
+ * with notifications).
+ *
+ * This would have all been ok if FreeS/WAN had used the term SPI in
+ * its code.
+ *
+ * It didn't.
+ *
+ * Instead it choose to use the word "cookie".  Hence lingering
+ * presence of things like [ir]cookie, the macro COOKIE_SIZE (below),
+ * and IKEv1 centric types such as ipsec_spi_t in the code.
+ */
+
+#define IKE_SA_SPI_SIZE			8
+#define CHILD_SA_SPI_SIZE		4
+#define MAX_SPI_SIZE			IKE_SA_SPI_SIZE
+
+#define COOKIE_SIZE 			IKE_SA_SPI_SIZE
+
+/*
+ * XXX:
+ *
+ * For IKEv1, the maximum number of SPI bytes in some payloads.  For
+ * instance: rfc2408: 4.6.3.1 RESPONDER-LIFETIME: either sixteen (16)
+ * (two eight-octet ISAKMP cookies) or four (4) (one IPSEC SPI)
+ *
+ * XXX: this desperately needs a better name.  In IKEv2 SPI size
+ * always refers to the size of one SPI and never a pair.
+ */
+#define MAX_ISAKMP_SPI_SIZE 		(2 * IKE_SA_SPI_SIZE)
+
 
 /* IKEv2 DOS COOKIE */
 #define IKEv2_MAX_COOKIE_SIZE 64
@@ -307,9 +356,9 @@
 /* Various IETF defined key lengths */
 
 /* AES-CBC RFC 3602 The _only_ valid values are 128, 192 and 256 bits */
-#define  AES_KEY_MIN_LEN        128
-#define  AES_KEY_DEF_LEN        128
-#define  AES_KEY_MAX_LEN        256
+#define  AES_KEY_MIN_LEN        128 /* bits */
+#define  AES_KEY_DEF_LEN        128 /* bits */
+#define  AES_KEY_MAX_LEN        256 /* bits */
 
 /*
  * https://tools.ietf.org/html/rfc3566#section-4.1
@@ -319,42 +368,42 @@
 
 /* AES-CTR RFC 3686 The _only_ valid values are 128, 192 and 256 bits */
 #define AES_CTR_SALT_BYTES 4
-#define  AES_CTR_KEY_MIN_LEN 128
-#define  AES_CTR_KEY_DEF_LEN 128
-#define  AES_CTR_KEY_MAX_LEN 256
+#define  AES_CTR_KEY_MIN_LEN 128 /* bits */
+#define  AES_CTR_KEY_DEF_LEN 128 /* bits */
+#define  AES_CTR_KEY_MAX_LEN 256 /* bits */
 
 /*
  * RFC 4106 AES GCM
  * https://tools.ietf.org/html/rfc4106#section-8.1
  */
 #define AES_GCM_SALT_BYTES 4
-#define AES_GCM_KEY_MIN_LEN 128
-#define AES_GCM_KEY_DEF_LEN 128
-#define AES_GCM_KEY_MAX_LEN 256
+#define AES_GCM_KEY_MIN_LEN 128 /* bits */
+#define AES_GCM_KEY_DEF_LEN 128 /* bits */
+#define AES_GCM_KEY_MAX_LEN 256 /* bits */
 
 /*
  * RFC 4309 AES CCM
  * https://tools.ietf.org/html/rfc4309#section-7.1
  */
 #define AES_CCM_SALT_BYTES 3
-#define AES_CCM_KEY_MIN_LEN 128
-#define AES_CCM_KEY_DEF_LEN 128
-#define AES_CCM_KEY_MAX_LEN 256
+#define AES_CCM_KEY_MIN_LEN 128 /* bits */
+#define AES_CCM_KEY_DEF_LEN 128 /* bits */
+#define AES_CCM_KEY_MAX_LEN 256 /* bits */
 
 /* The _only_ valid values are 128, 192 and 256 bits */
-#define  AEAD_AES_KEY_MIN_LEN       128
-#define  AEAD_AES_KEY_DEF_LEN       128
-#define  AEAD_AES_KEY_MAX_LEN       256
+#define  AEAD_AES_KEY_MIN_LEN       128 /* bits */
+#define  AEAD_AES_KEY_DEF_LEN       128 /* bits */
+#define  AEAD_AES_KEY_MAX_LEN       256 /* bits */
 
 /* AES-GMAC RFC 4543 The _only_ valid values are 128, 192 and 256 bits */
-#define  AES_GMAC_KEY_MIN_LEN 128
-#define  AES_GMAC_KEY_DEF_LEN 128
-#define  AES_GMAC_KEY_MAX_LEN 256
+#define  AES_GMAC_KEY_MIN_LEN 128 /* bits */
+#define  AES_GMAC_KEY_DEF_LEN 128 /* bits */
+#define  AES_GMAC_KEY_MAX_LEN 256 /* bits */
 
 /* SEED-CBC RFC 4196 The _only_ valid value is 128 */
-#define  SEED_KEY_MIN_LEN 128
-#define  SEED_KEY_DEF_LEN 128
-#define  SEED_KEY_MAX_LEN 128
+#define  SEED_KEY_MIN_LEN 128 /* bits */
+#define  SEED_KEY_DEF_LEN 128 /* bits */
+#define  SEED_KEY_MAX_LEN 128 /* bits */
 
 
 /*
@@ -362,7 +411,7 @@
  * ESP_CAST is the cast5 algorithm, not cast6
  * We avoid cast-128 padding by enforcing a minimum of 128
  */
-#define  CAST_KEY_DEF_LEN        128
+#define  CAST_KEY_DEF_LEN        128 /* bits */
 
 /*
  * RFC 2451 - Blowfish accepts key sizes 40-448, default is 128
@@ -373,28 +422,28 @@
  * TWOFISH-CBC is a 128-bit block cipher with variable-length key up to 256 bits
  * default is 128. 128, 192 and 256 are the only commonly used ones
  */
-#define  TWOFISH_KEY_MIN_LEN 128
-#define  TWOFISH_KEY_DEF_LEN 128
-#define  TWOFISH_KEY_MAX_LEN 256
+#define  TWOFISH_KEY_MIN_LEN 128 /* bits */
+#define  TWOFISH_KEY_DEF_LEN 128 /* bits */
+#define  TWOFISH_KEY_MAX_LEN 256 /* bits */
 
 /*
  * SERPENT default 128, 128, 192 and 256 are the only commonly used ones
  */
-#define  SERPENT_KEY_MIN_LEN 128
-#define  SERPENT_KEY_DEF_LEN 128
-#define  SERPENT_KEY_MAX_LEN 256
+#define  SERPENT_KEY_MIN_LEN 128 /* bits */
+#define  SERPENT_KEY_DEF_LEN 128 /* bits */
+#define  SERPENT_KEY_MAX_LEN 256 /* bits */
 
 /*
  * Camellia CBC and CTR - RFC 5529
  * 128 (default), 192 and 256
  */
-#define  CAMELLIA_KEY_MIN_LEN 128
-#define  CAMELLIA_KEY_DEF_LEN 128
-#define  CAMELLIA_KEY_MAX_LEN 256
+#define  CAMELLIA_KEY_MIN_LEN 128 /* bits */
+#define  CAMELLIA_KEY_DEF_LEN 128 /* bits */
+#define  CAMELLIA_KEY_MAX_LEN 256 /* bits */
 
-#define  CAMELLIA_CTR_KEY_MIN_LEN 128
-#define  CAMELLIA_CTR_KEY_DEF_LEN 128
-#define  CAMELLIA_CTR_KEY_MAX_LEN 256
+#define  CAMELLIA_CTR_KEY_MIN_LEN 128 /* bits */
+#define  CAMELLIA_CTR_KEY_DEF_LEN 128 /* bits */
+#define  CAMELLIA_CTR_KEY_MAX_LEN 256 /* bits */
 
 
  /* ought to be supplied by md5.h */
@@ -433,13 +482,13 @@
  * Needs to be a compile-time constant for array allocation.
  * To avoid combinatorial explosion, we cheat.
  */
-#define MAX_DIGEST_LEN SHA2_512_DIGEST_SIZE
+#define MAX_DIGEST_LEN SHA2_512_DIGEST_SIZE	/* bytes */
 
 /* RFC 2404 "HMAC-SHA-1-96" section 3 */
-#define HMAC_SHA1_KEY_LEN SHA1_DIGEST_SIZE
+#define HMAC_SHA1_KEY_LEN SHA1_DIGEST_SIZE	/* bytes */
 
 /* RFC 2403 "HMAC-MD5-96" section 3 */
-#define HMAC_MD5_KEY_LEN MD5_DIGEST_SIZE
+#define HMAC_MD5_KEY_LEN MD5_DIGEST_SIZE	/* bytes */
 
 #define IKE_UDP_PORT 500
 #define NAT_IKE_UDP_PORT 4500 /* RFC-3947 */
@@ -740,8 +789,8 @@ enum isakmp_xchg_types {
 	ISAKMP_XCHG_NGRP = 33, /* Oakley New Group Mode */
 
 	/* IKEv2 things */
-	ISAKMP_v2_SA_INIT = 34,
-	ISAKMP_v2_AUTH = 35,
+	ISAKMP_v2_IKE_SA_INIT = 34,
+	ISAKMP_v2_IKE_AUTH = 35,
 	ISAKMP_v2_CREATE_CHILD_SA = 36,
 	ISAKMP_v2_INFORMATIONAL = 37,
 	ISAKMP_v2_IKE_SESSION_RESUME = 38, /* RFC 5723 */
@@ -1545,6 +1594,20 @@ enum ppk_id_type {
 	/* 128 - 255    Private Use */
 };
 
+/* IKEv2 Redirect Mechanism - RFC 5685 */
+enum gw_identity_type {
+	/* 0 - reserved */
+	GW_IPV4 = 1,
+	GW_IPV6 = 2,
+	GW_FQDN = 3,
+
+	/* 4 - 240	Unassigned */
+	/* 241 - 255	Private Use */
+};
+
+#define MAX_REDIRECTS 5
+#define REDIRECT_LOOP_DETECT_PERIOD 300
+
 /* Public key algorithm number in IPSECKEY DNS RR. See RFC 4025 2.4 */
 enum pubkey_alg {
 	PUBKEY_ALG_DSA = 1,
@@ -1714,15 +1777,17 @@ enum ipsec_cipher_algo {
 	ESP_ID255 = 255,
 };
 
-/* IPCOMP transform values
- * RFC2407 The Internet IP security Domain of Interpretation for ISAKMP 4.4.5
+/*
+ * IPCOMP transform values are (currently) identical for IKEv1 and IKEv2
+ * IKEv1: RFC2407 The Internet IP security Domain of Interpretation for ISAKMP 4.4.5
+ * IKEv2: https://www.iana.org/assignments/ikev2-parameters/ikev2-parameters.xhtml#ikev2-parameters-17
  */
 
 enum ipsec_comp_algo {
 	IPCOMP_NONE=0,
-	IPCOMP_OUI=1,
+	IPCOMP_OUI=1, /* unspecified */
 	IPCOMP_DEFLATE=2,
-	IPCOMP_LZS=3,
+	IPCOMP_LZS=3, /* RFC 2395 */
 	IPCOMP_LZJH=4, /* RFC 3051 */
 	/* 5-47 Reserved for approved algorithms */
 	/* 48-63 Reserved for private use */
@@ -1748,14 +1813,14 @@ enum notify_payload_hash_algorithms {
 };
 
 /*
- * RFC 7427 Hash Algorithm Identifiers (mentioned in
- * notify_payload_hash_algorithms) that are sent in the Notify
- * payload of the hash algorithm notification are 2 bytes each.
+ * RFC 7427: 4.  Hash Algorithm Notification
+ *
+ * The Notification Data field contains the list of 16-bit hash
+ * algorithm identifiers from the Hash Algorithm Identifiers of IANA's
+ * "Internet Key Exchange Version 2 (IKEv2) Parameters" registry.
+ * There is no padding between the hash algorithm identifiers.
  */
-#define RFC_7427_HASH_ALGORITHM_VALUE 2
-
-/* Currently 3 hashes are supported for negotiation : SHA2_256, SHA2_384 and SHA2_512 */
-#define SUPPORTED_NUM_HASH 3
+#define RFC_7427_HASH_ALGORITHM_IDENTIFIER_SIZE 2
 
 /*
  * RFC 7427 , section 3 describes the Authentication data format for
@@ -1772,27 +1837,27 @@ enum notify_payload_hash_algorithms {
 #define ASN1_LEN_ALGO_IDENTIFIER 1
 
 #define RSA_PSS_SHA256_BLOB \
-	{0x30, 0x41, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, 0x30, 0x34, 0xa0,\
-	 0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00,\
-	 0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08, 0x30,\
-	 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0xa2, 0x03,\
-	 0x02, 0x01, 0x20}
+	0x30, 0x41, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a, 0x30, 0x34, 0xa0,\
+	0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00,\
+	0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08, 0x30,\
+	0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0xa2, 0x03,\
+	0x02, 0x01, 0x20
 
 #define RSA_PSS_SHA384_BLOB \
-	{0x30, 0x41, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0A, 0x30, 0x34, 0xA0,\
-	 0x0F, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00,\
-	 0xA1, 0x1C, 0x30, 0x1A, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x08, 0x30,\
-	 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0xA2, 0x03,\
-	 0x02, 0x01, 0x30}
+	0x30, 0x41, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0A, 0x30, 0x34, 0xA0,\
+	0x0F, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00,\
+	0xA1, 0x1C, 0x30, 0x1A, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x08, 0x30,\
+	0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0xA2, 0x03,\
+	0x02, 0x01, 0x30
 
 #define RSA_PSS_SHA512_BLOB \
-	{0x30, 0x41, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0A, 0x30, 0x34, 0xA0,\
-	 0x0F, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00,\
-	 0xA1, 0x1C, 0x30, 0x1A, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x08, 0x30,\
-	 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0xA2, 0x03,\
-	 0x02, 0x01, 0x40}
+	0x30, 0x41, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0A, 0x30, 0x34, 0xA0,\
+	0x0F, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00,\
+	0xA1, 0x1C, 0x30, 0x1A, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x08, 0x30,\
+	0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0xA2, 0x03,\
+	0x02, 0x01, 0x40
 
-#define LEN_RSA_PSS_SHA2_BLOB {ASN1_SHA2_RSA_PSS_SIZE}
+#define LEN_RSA_PSS_SHA2_BLOB ASN1_SHA2_RSA_PSS_SIZE
 #define RSA_SHA1_SIGNED_OCTETS 16
 
 /* ECDSA */
@@ -1800,20 +1865,20 @@ enum notify_payload_hash_algorithms {
 #define ASN1_SHA2_ECDSA_SIZE 12
 
 #define ECDSA_SHA1_BLOB \
-	{0x30, 0x09, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x01}
+	0x30, 0x09, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x01
 
 #define ECDSA_SHA256_BLOB \
-	{0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02}
+	0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02
 
 #define ECDSA_SHA384_BLOB \
-	{0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03}
+	0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03
 
 #define ECDSA_SHA512_BLOB \
-	{0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x04}
+	0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x04
 
-#define LEN_ECDSA_SHA1_BLOB {ASN1_SHA1_ECDSA_SIZE}
+#define LEN_ECDSA_SHA1_BLOB ASN1_SHA1_ECDSA_SIZE
 
-#define LEN_ECDSA_SHA2_BLOB {ASN1_SHA2_ECDSA_SIZE}
+#define LEN_ECDSA_SHA2_BLOB ASN1_SHA2_ECDSA_SIZE
 
 /* Limits on size of RSA moduli.
  * The upper bound matches that of DNSSEC (see RFC 2537).

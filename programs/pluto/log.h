@@ -4,6 +4,7 @@
  * Copyright (C) 2004 Michael Richardson <mcr@xelerance.com>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -24,6 +25,7 @@
 #include "lswcdefs.h"
 #include "lswlog.h"
 #include "fd.h"
+#include "ip_address.h"
 
 struct state;
 struct connection;
@@ -33,8 +35,7 @@ struct connection;
 
 extern bool
 	log_with_timestamp,     /* prefix timestamp */
-	log_append,
-	log_ip;
+	log_append;
 
 extern bool log_to_syslog;          /* should log go to syslog? */
 extern char *pluto_log_file;
@@ -57,7 +58,9 @@ extern bool whack_prompt_for(fd_t whackfd,
 			     char *ansbuf, size_t ansbuf_len);
 
 /* for pushing state to other subsystems */
-extern void log_state(struct state *st, enum state_kind state);
+#define binlog_refresh_state(st) binlog_state((st), (st)->st_state)
+#define binlog_fake_state(st, new_state) binlog_state((st), (new_state))
+extern void binlog_state(struct state *st, enum state_kind state);
 
 extern void set_debugging(lset_t deb);
 extern void reset_debugging(void);
@@ -116,7 +119,7 @@ void log_prefix(struct lswlog *buf, bool debug,
 
 #define LSWLOG_CONNECTION(CONNECTION, BUF)				\
 	LSWLOG_(true, BUF,						\
-		log_prefix(BUF, true, NULL, CONNECTION),		\
+		log_prefix(BUF, false, NULL, CONNECTION),		\
 		lswlog_to_default_streams(BUF, RC_LOG))
 
 bool log_debugging(struct state *st, struct connection *c, lset_t predicate);

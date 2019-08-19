@@ -5,6 +5,8 @@
  * Copyright (C) 2013 Kim Heino <b@bbbs.net>
  * Copyright (C) 2013 Tuomo Soini <tis@foobar.fi>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -25,6 +27,7 @@
 #include "monotime.h"
 #include "reqid.h"
 #include "connections.h"	/* for policy_prio_t et.al. */
+#include "ip_said.h"		/* for SA_AH et.al. */
 
 struct sa_marks;
 struct spd_route;
@@ -188,9 +191,6 @@ struct kernel_ops {
 	void (*process_queue)(void);
 	void (*process_msg)(int);
 	void (*scan_shunts)(void);
-	void (*set_debug)(int,
-			  libreswan_keying_debug_func_t debug_func,
-			  libreswan_keying_debug_func_t error_func);
 	bool (*raw_eroute)(const ip_address *this_host,
 			   const ip_subnet *this_client,
 			   const ip_address *that_host,
@@ -240,7 +240,7 @@ struct kernel_ops {
 			  const char *verb,
 			  const char *verb_suffix,
 			  struct state *st);
-	void (*process_ifaces)(struct raw_iface *rifaces);
+	void (*process_raw_ifaces)(struct raw_iface *rifaces);
 	bool (*exceptsocket)(int socketfd, int family);
 	err_t (*migrate_sa_check)(void);
 	bool (*migrate_sa)(struct state *st);
@@ -266,11 +266,6 @@ extern struct raw_iface *find_raw_ifaces6(void);
 /* helper for invoking call outs */
 extern int fmt_common_shell_out(char *buf, int blen, const struct connection *c,
 				const struct spd_route *sr, struct state *st);
-
-#ifdef KLIPS_MAST
-/* KLIPS/mast/pfkey things */
-extern bool pfkey_plumb_mast_device(int mast_dev);
-#endif
 
 /* many bits reach in to use this, but maybe shouldn't */
 extern bool do_command(const struct connection *c, const struct spd_route *sr,
@@ -410,6 +405,10 @@ extern bool route_and_eroute(struct connection *c,
 extern bool was_eroute_idle(struct state *st, deltatime_t idle_max);
 extern bool get_sa_info(struct state *st, bool inbound, deltatime_t *ago /* OUTPUT */);
 extern bool migrate_ipsec_sa(struct state *st);
+extern bool del_spi(ipsec_spi_t spi,
+		    int proto,
+		    const ip_address *src,
+		    const ip_address *dest);
 
 
 extern bool eroute_connection(const struct spd_route *sr,
@@ -436,9 +435,6 @@ static inline bool compatible_overlapping_connections(const struct connection *a
 
 #ifdef KLIPS
 extern const struct kernel_ops klips_kernel_ops;
-#endif
-#ifdef KLIPS_MAST
-extern const struct kernel_ops mast_kernel_ops;
 #endif
 
 extern void show_kernel_interface(void);

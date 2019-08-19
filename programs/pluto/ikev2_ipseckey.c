@@ -1,7 +1,10 @@
 /*
  * ipseckey lookup for pluto using libunbound ub_resolve_event call.
  *
- * Copyright (C) 2017 Antony Antony
+ * Copyright (C) 2017-2019 Antony Antony <antony@phenome.org>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2019 D. Hugh Redelmeier <hugh@mimosa.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -18,11 +21,6 @@
 # error this file should only be compiled when DNSSEC is defined
 #endif
 
-#include <stdio.h>
-#include <string.h>
-#include <stddef.h>
-#include <stdlib.h>
-#include <errno.h>
 #include <arpa/inet.h> /* for inet_ntop */
 #include <arpa/nameser.h>
 #include <ldns/ldns.h>	/* from ldns-devel */
@@ -192,7 +190,7 @@ static err_t add_rsa_pubkey_to_pluto(struct p_dns_req *dnsr, ldns_rdf *rdf,
 {
 	struct state *st = state_with_serialno(dnsr->so_serial_t);
 	struct id keyid = st->st_connection->spd.that.id;
-	chunk_t keyval = empty_chunk;
+	chunk_t keyval = EMPTY_CHUNK;
 	err_t ugh = NULL;
 	char thatidbuf[IDTOA_BUF];
 	char ttl_buf[ULTOT_BUF + 32]; /* 32 is aribitary */
@@ -556,7 +554,8 @@ static void idi_ipseckey_fetch_tail(struct state *st, bool err)
 		stf = ikev2_parent_inI2outR2_id_tail(md);
 	}
 
-	complete_v2_state_transition(&md, stf);
+	/* replace (*mdp)->st with st ... */
+	complete_v2_state_transition(md->st, &md, stf);
 	release_any_md(&md);
 	reset_globals();
 }
@@ -689,7 +688,11 @@ static void idi_ipseckey_fetch_continue(struct p_dns_req *dnsr)
 }
 
 static void ipseckey_ub_cb(void* mydata, int rcode,
-		void *wire, int wire_len, int secure, char* why_bogus)
+		void *wire, int wire_len, int secure, char* why_bogus
+#if (UNBOUND_VERSION_MAJOR == 1 && UNBOUND_VERSION_MINOR >= 8) || UNBOUND_VERSION_MAJOR > 1
+		, int was_ratelimited UNUSED
+#endif
+		)
 {
 	struct p_dns_req *dnsr = (struct p_dns_req *)mydata;
 	ldns_lookup_table *rcode_txt;
@@ -707,38 +710,22 @@ static void ipseckey_ub_cb(void* mydata, int rcode,
 	dnsr->cb(dnsr);
 }
 
-static err_t build_dns_name(char *name_buf, /* len SWAN_MAX_DOMAIN_LEN */
-		const struct id *id)
+static err_t build_dns_name(fmtbuf_t *name_buf, const struct id *id)
 {
-	/* note: all end in "." to suppress relative searches */
-
-	if (id->name.len >= SWAN_MAX_DOMAIN_LEN)
-		return "ID is too long >= SWAN_MAX_DOMAIN_LEN";
-
 	switch (id->kind) {
 	case ID_IPV4_ADDR:
 	case ID_IPV6_ADDR:
-		addrtot(&id->ip_addr, 'r', name_buf, SWAN_MAX_DOMAIN_LEN);
+		fmt_address_reversed(name_buf, &id->ip_addr);
 		break;
 
 	case ID_FQDN:
 		{
-			/* expected len of name_buf */
-			size_t buf_len = SWAN_MAX_DOMAIN_LEN;
-			size_t il;
-
 			/* idtoa() will have an extra @ as prefix */
-
-			il = snprintf(name_buf, buf_len, "%.*s", (int)id->name.len, id->name.ptr);
-
 			/* strip trailing "." characters, then add one */
-			while (il > 0 && name_buf[il - 1] == '.')
-				il--;
-
-			if (il > SWAN_MAX_DOMAIN_LEN)
-				return "FQDN is too long for domain name";
-
-			add_str(name_buf, buf_len, (name_buf + il), ".");
+			unsigned len = id->name.len;
+			while (len > 0 && id->name.ptr[len - 1] == '.')
+				len--;
+			fmt(name_buf, "%.*s.", len, id->name.ptr);
 		}
 		break;
 
@@ -746,6 +733,9 @@ static err_t build_dns_name(char *name_buf, /* len SWAN_MAX_DOMAIN_LEN */
 		return "can only query DNS for IPSECKEY for ID that is a FQDN, IPV4_ADDR, or IPV6_ADDR";
 	}
 
+	if (!fmtbuf_ok(name_buf)) {
+		return "FQDN is too long for domain name";
+	}
 	return NULL;
 }
 
@@ -760,11 +750,11 @@ static struct p_dns_req *qry_st_init(struct state *st,
 	char dbg_buf[512] ;  /* Arbitrary length. It is local */
 	struct p_dns_req *p;
 	char log_buf[SWAN_MAX_DOMAIN_LEN * 2]; /* this is local */
+
+
 	char qname[SWAN_MAX_DOMAIN_LEN];
-	err_t err;
-
-
-	err = build_dns_name(qname, &id);
+	fmtbuf_t qbuf = ARRAY_AS_FMTBUF(qname);
+	err_t err = build_dns_name(&qbuf, &id);
 	if (err !=  NULL) {
 		/* is there qtype to name lookup function  */
 		loglog(RC_LOG_SERIOUS, "could not build dns query name %s %d",
@@ -885,14 +875,13 @@ stf_status idi_ipseckey_fetch(struct msg_digest *md)
 {
 	stf_status ret_idi;
 	stf_status ret_a = STF_OK;
-	stf_status ret = STF_FAIL;
 	struct state *st = md->st;
 	struct p_dns_req *dnsr_a = NULL;
 	struct p_dns_req *dnsr_idi = ipseckey_qry_st_init(st,
 			idi_ipseckey_fetch_continue);
 
 	if (dnsr_idi == NULL) {
-		return ret;
+		return STF_FAIL;
 	}
 
 	ret_idi = dns_qry_start(dnsr_idi);
@@ -908,7 +897,7 @@ stf_status idi_ipseckey_fetch(struct msg_digest *md)
 
 			if (dnsr_a == NULL) {
 				free_ipseckey_dns(dnsr_idi);
-				return ret;
+				return STF_FAIL;
 			}
 
 			ret_a = dns_qry_start(dnsr_a);
@@ -921,8 +910,8 @@ stf_status idi_ipseckey_fetch(struct msg_digest *md)
 		/* all success */
 		st->ipseckey_dnsr = dnsr_idi;
 		st->ipseckey_fwd_dnsr = dnsr_a;
-		ret = STF_SUSPEND;
+		return STF_SUSPEND;
 	}
 
-	return ret;
+	return STF_FAIL;
 }

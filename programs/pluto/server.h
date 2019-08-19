@@ -2,6 +2,7 @@
  * Copyright (C) 1998-2001,2013  D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013 Florian Weimer <fweimer@redhat.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -22,6 +23,7 @@
 #include <event2/event_struct.h>
 #include "timer.h"
 #include "err.h"
+#include "ip_address.h"
 
 struct state;
 struct msg_digest;
@@ -93,16 +95,13 @@ extern void show_fips_status(void);
 extern void call_server(void);
 extern void init_event_base(void);
 typedef void event_callback_routine(evutil_socket_t, const short, void *);
-extern void timer_private_pluto_event_new(struct event **evp,
-					  evutil_socket_t ft,
-					  short events,
-					  event_callback_fn cb,
-					  void *arg,
-					  deltatime_t delay);
+void fire_timer_photon_torpedo(struct event **evp, event_callback_fn cb, void *arg,
+			       const deltatime_t delay);
 extern struct pluto_event *pluto_event_add(evutil_socket_t fd, short events,
 					   event_callback_fn cb, void *arg,
 					   const deltatime_t *delay,
 					   const char *name);
+void pluto_event_reschedule(struct pluto_event *event, deltatime_t delay);
 extern void delete_pluto_event(struct pluto_event **evp);
 extern void link_pluto_event_list(struct pluto_event *e);
 extern void free_pluto_event_list(void);

@@ -13,6 +13,7 @@
  * Copyright (C) 2016, Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2017 Vukasin Karadzic <vukasin.karadzic@gmail.com>
  * Copyright (C) 2018 Sahana Prasad <sahana.prasad07@gmail.com>
+ * Copyright (C) 2019 D. Hugh Redelmeier <hugh@mimosa.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -26,14 +27,7 @@
  *
  */
 
-#include <stddef.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <ctype.h>
 #include <unistd.h>
-#include <errno.h>
-#include <time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -49,7 +43,6 @@
 #include "certs.h"
 #include "connections.h"        /* needs id.h */
 #include "state.h"
-#include "lex.h"
 #include "keys.h"
 #include "log.h"
 #include "whack.h"      /* for RC_LOG_SERIOUS */
@@ -64,8 +57,8 @@
 #include <prerror.h>
 #include <prinit.h>
 #include <prmem.h>
-#include <key.h>
-#include <keyt.h>
+#include <keyhi.h>
+#include <keythi.h>
 #include <nss.h>
 #include <pk11pub.h>
 #include <seccomon.h>
@@ -303,8 +296,7 @@ int sign_hash_RSA(const struct RSA_private_key *k,
 
 int sign_hash_ECDSA(const struct ECDSA_private_key *k,
 		    const u_char *hash_val, size_t hash_len,
-		    u_char *sig_val, size_t sig_len,
-		    enum notify_payload_hash_algorithms hash_algo UNUSED)
+		    u_char *sig_val, size_t sig_len)
 {
 	SECKEYPrivateKey *privateKey = NULL;
 	PK11SlotInfo *slot = NULL;
@@ -332,7 +324,7 @@ int sign_hash_ECDSA(const struct ECDSA_private_key *k,
 
 	CERTCertificate *cert = get_cert_by_ckaid_t_from_nss(k->pub.ckaid);
 
-	LSWDBGP(DBG_MASK, buf) {
+	LSWDBGP(DBG_BASE, buf) {
 		lswlogf(buf, "got cert form ckaid");
 		lswlog_nss_error(buf);
 	}
@@ -656,6 +648,58 @@ static bool take_a_crack_ECDSA(struct tac_state_ECDSA *s,
 	}
 }
 
+static bool try_all_RSA_keys(const char *pubkey_description,
+			     struct pubkey_list **pubkey_db,
+			     const struct connection *c, realtime_t now,
+			     struct tac_state_RSA *s)
+{
+	struct pubkey_list **pp = pubkey_db;
+
+	for (struct pubkey_list *p = *pubkey_db; p != NULL; p = *pp) {
+		struct pubkey *key = p->key;
+
+		if (DBGP(DBG_BASE)) {
+			char printkid[IDTOA_BUF];
+			idtoa(&key->id, printkid, IDTOA_BUF);
+			char thatid[IDTOA_BUF];
+			idtoa(&c->spd.that.id, thatid, IDTOA_BUF);
+			DBG_log("checking RSA keyid '%s' for match with '%s'",
+				printkid, thatid);
+		}
+
+		int pl;	/* value ignored */
+
+		if (key->alg == PUBKEY_ALG_RSA &&
+		    same_id(&c->spd.that.id, &key->id) &&
+		    trusted_ca_nss(key->issuer, c->spd.that.ca, &pl)) {
+			if (DBGP(DBG_BASE)) {
+				char buf[IDTOA_BUF];
+				dntoa_or_null(buf, IDTOA_BUF,
+					      key->issuer, "%any");
+				DBG_log("key issuer CA is '%s'", buf);
+			}
+
+			/* check if found public key has expired */
+			if (!is_realtime_epoch(key->until_time) &&
+			    realbefore(key->until_time, now)) {
+				loglog(RC_LOG_SERIOUS,
+				       "cached RSA public key has expired and has been deleted");
+				*pp = free_public_keyentry(p);
+				continue; /* continue with next public key */
+			}
+
+			statetime_t try_time = statetime_start(s->st);
+			bool ok =take_a_crack_RSA(s, key, pubkey_description);
+			statetime_stop(&try_time, "%s() trying a pubkey", __func__);
+			if (ok) {
+				return true;
+			}
+		}
+		pp = &p->next;
+	}
+	return false;
+}
+
 stf_status RSA_check_signature_gen(struct state *st,
 				   const u_char hash_val[MAX_DIGEST_LEN],
 				   size_t hash_len,
@@ -684,59 +728,22 @@ stf_status RSA_check_signature_gen(struct state *st,
 	s.tn = s.tried;
 
 	/* try all appropriate Public keys */
-	{
-		realtime_t nw = realnow();
+	realtime_t now = realnow();
 
-		DBG(DBG_CONTROL, {
-			char buf[IDTOA_BUF];
-			dntoa_or_null(buf, IDTOA_BUF, c->spd.that.ca, "%any");
-			DBG_log("required RSA CA is '%s'", buf);
-		});
+	if (DBGP(DBG_BASE)) {
+		char buf[IDTOA_BUF];
+		dntoa_or_null(buf, IDTOA_BUF, c->spd.that.ca, "%any");
+		DBG_log("required RSA CA is '%s'", buf);
+	}
 
-		struct pubkey_list **pp = &pluto_pubkeys;
-
-		for (struct pubkey_list *p = pluto_pubkeys; p != NULL; p = *pp) {
-			struct pubkey *key = p->key;
-			char printkid[IDTOA_BUF];
-
-			idtoa(&key->id, printkid, IDTOA_BUF);
-			DBG(DBG_CONTROL, {
-				char thatid[IDTOA_BUF];
-				idtoa(&c->spd.that.id, thatid, IDTOA_BUF);
-				DBG_log("checking keyid '%s' for match with '%s'",
-					printkid, thatid);
-			});
-
-			int pl;	/* value ignored */
-
-			if (key->alg == PUBKEY_ALG_RSA &&
-			    same_id(&c->spd.that.id, &key->id) &&
-			    trusted_ca_nss(key->issuer, c->spd.that.ca, &pl))
-			{
-				DBG(DBG_CONTROL, {
-					char buf[IDTOA_BUF];
-					dntoa_or_null(buf, IDTOA_BUF,
-						key->issuer, "%any");
-					DBG_log("key issuer CA is '%s'", buf);
-				});
-
-				/* check if found public key has expired */
-				if (!is_realtime_epoch(key->until_time) &&
-				    realbefore(key->until_time, nw))
-				{
-					loglog(RC_LOG_SERIOUS,
-					       "cached RSA public key has expired and has been deleted");
-					*pp = free_public_keyentry(p);
-					continue; /* continue with next public key */
-				}
-
-				if (take_a_crack_RSA(&s, key, "preloaded key")) {
-					loglog(RC_LOG_SERIOUS, "Authenticated using RSA");
-					return STF_OK;
-				}
-			}
-			pp = &p->next;
-		}
+	if (try_all_RSA_keys("remote certificates",
+			     &st->st_remote_certs.pubkey_db,
+			     c, now, &s) ||
+	    try_all_RSA_keys("preloaded key",
+			     &pluto_pubkeys,
+			     c, now, &s)) {
+		loglog(RC_LOG_SERIOUS, "Authenticated using RSA");
+		return STF_OK;
 	}
 
 	/* if no key was found (evidenced by best_ugh == NULL)
@@ -787,6 +794,58 @@ stf_status RSA_check_signature_gen(struct state *st,
 	}
 }
 
+static bool try_all_ECDSA_keys(const char *pubkey_description,
+			     struct pubkey_list **pubkey_db,
+			     const struct connection *c, realtime_t now,
+			     struct tac_state_ECDSA *s)
+{
+	struct pubkey_list **pp = pubkey_db;
+
+	for (struct pubkey_list *p = *pubkey_db; p != NULL; p = *pp) {
+		struct pubkey *key = p->key;
+
+		if (DBGP(DBG_BASE)) {
+			char printkid[IDTOA_BUF];
+			idtoa(&key->id, printkid, IDTOA_BUF);
+			char thatid[IDTOA_BUF];
+			idtoa(&c->spd.that.id, thatid, IDTOA_BUF);
+			DBG_log("checking ECDSA keyid '%s' for match with '%s'",
+				printkid, thatid);
+		}
+
+		int pl;	/* value ignored */
+
+		if (key->alg == PUBKEY_ALG_ECDSA &&
+		    same_id(&c->spd.that.id, &key->id) &&
+		    trusted_ca_nss(key->issuer, c->spd.that.ca, &pl)) {
+			if (DBGP(DBG_BASE)) {
+				char buf[IDTOA_BUF];
+				dntoa_or_null(buf, IDTOA_BUF,
+					      key->issuer, "%any");
+				DBG_log("key issuer CA is '%s'", buf);
+			}
+
+			/* check if found public key has expired */
+			if (!is_realtime_epoch(key->until_time) &&
+			    realbefore(key->until_time, now)) {
+				loglog(RC_LOG_SERIOUS,
+				       "cached ECDSA public key has expired and has been deleted");
+				*pp = free_public_keyentry(p);
+				continue; /* continue with next public key */
+			}
+
+			statetime_t try_time = statetime_start(s->st);
+			bool ok = take_a_crack_ECDSA(s, key, pubkey_description);
+			statetime_stop(&try_time, "%s() trying a pubkey", __func__);
+			if (ok) {
+				return true;
+			}
+		}
+		pp = &p->next;
+	}
+	return false;
+}
+
 stf_status ECDSA_check_signature_gen(struct state *st,
 				   const u_char hash_val[MAX_DIGEST_LEN],
 				   size_t hash_len,
@@ -814,60 +873,23 @@ stf_status ECDSA_check_signature_gen(struct state *st,
 	s.tried_cnt = 0;
 	s.tn = s.tried;
 
-	/* try all appropriate Public keys */   /* ASKK */
-	{
-		realtime_t nw = realnow();
+	/* try all appropriate Public keys */
+	realtime_t now = realnow();
 
-		DBG(DBG_CONTROL, {
-			char buf[IDTOA_BUF];
-			dntoa_or_null(buf, IDTOA_BUF, c->spd.that.ca, "%any");
-			DBG_log("required ECDSA CA is '%s'", buf);
-		});
+	if (DBGP(DBG_BASE)) {
+		char buf[IDTOA_BUF];
+		dntoa_or_null(buf, IDTOA_BUF, c->spd.that.ca, "%any");
+		DBG_log("required ECDSA CA is '%s'", buf);
+	}
 
-		struct pubkey_list **pp = &pluto_pubkeys;
-
-		for (struct pubkey_list *p = pluto_pubkeys; p != NULL; p = *pp) {
-			struct pubkey *key = p->key;
-			char printkid[IDTOA_BUF];
-
-			idtoa(&key->id, printkid, IDTOA_BUF);
-			DBG(DBG_CONTROL, {
-				char thatid[IDTOA_BUF];
-				idtoa(&c->spd.that.id, thatid, IDTOA_BUF);
-				DBG_log("checking keyid '%s' for match with '%s'",
-					printkid, thatid);
-			});
-
-			int pl;	/* value ignored */
-
-			if (key->alg == PUBKEY_ALG_ECDSA &&
-		//	    same_id(&c->spd.that.id, &key->id) &&
-			    trusted_ca_nss(key->issuer, c->spd.that.ca, &pl))
-			{
-				DBG(DBG_CONTROL, {
-					char buf[IDTOA_BUF];
-					dntoa_or_null(buf, IDTOA_BUF,
-						key->issuer, "%any");
-					DBG_log("key issuer CA is '%s'", buf);
-				});
-
-				/* check if found public key has expired */
-				if (!is_realtime_epoch(key->until_time) &&
-				    realbefore(key->until_time, nw))
-				{
-					loglog(RC_LOG_SERIOUS,
-					       "cached ECDSA public key has expired and has been deleted");
-					*pp = free_public_keyentry(p);
-					continue; /* continue with next public key */
-				}
-
-				if (take_a_crack_ECDSA(&s, key, "preloaded key")) {
-					loglog(RC_LOG_SERIOUS, "Authenticated using ECDSA");
-					return STF_OK;
-				}
-			}
-			pp = &p->next;
-		}
+	if (try_all_ECDSA_keys("remote certificates",
+			       &st->st_remote_certs.pubkey_db,
+			       c, now, &s) ||
+	    try_all_ECDSA_keys("preloaded key",
+			       &pluto_pubkeys,
+			       c, now, &s)) {
+		loglog(RC_LOG_SERIOUS, "Authenticated using ECDSA");
+		return STF_OK;
 	}
 
 	/* if no key was found (evidenced by best_ugh == NULL)
@@ -959,9 +981,7 @@ static struct secret *lsw_get_secret(const struct connection *c,
 		}
 
 		if (my_public_key == NULL) {
-			loglog(RC_LOG_SERIOUS, "Private key not found (missing or token locked?");
-			/* XXX: ??? */
-			free_public_key(my_public_key);
+			loglog(RC_LOG_SERIOUS, "private key not found (certificate missing from NSS DB or token locked?)");
 			return NULL;
 		}
 
@@ -1039,8 +1059,7 @@ static struct secret *lsw_get_secret(const struct connection *c,
 /*
  * find the struct secret associated with an XAUTH username.
  */
-struct secret *lsw_get_xauthsecret(const struct connection *c UNUSED,
-				   char *xauthname)
+struct secret *lsw_get_xauthsecret(char *xauthname)
 {
 	struct secret *best = NULL;
 
@@ -1231,7 +1250,7 @@ err_t add_public_key(const struct id *id, /* ASKK */
 	pk->dns_auth_level = dns_auth_level;
 	pk->alg = alg;
 	pk->until_time = realtime_epoch;
-	pk->issuer = empty_chunk;
+	pk->issuer = EMPTY_CHUNK;
 
 	install_public_key(pk, head);
 	return NULL;
@@ -1278,7 +1297,7 @@ err_t add_ipseckey(const struct id *id,
 	pk->id = *id;
 	pk->dns_auth_level = dns_auth_level;
 	pk->alg = alg;
-	pk->issuer = empty_chunk; /* ipseckey has no issuer */
+	pk->issuer = EMPTY_CHUNK; /* ipseckey has no issuer */
 
 	install_public_key(pk, head);
 	return NULL;
@@ -1352,8 +1371,7 @@ void list_public_keys(bool utc, bool check_pub_keys)
 			break;
 		}
 		default:
-			DBGF(DBG_CONTROL, "ignoring key with unsupported alg %d",
-			     key->alg);
+			dbg("ignoring key with unsupported alg %d", key->alg);
 		}
 		p = p->next;
 	}
@@ -1377,7 +1395,7 @@ err_t load_nss_cert_secret(CERTCertificate *cert)
 static bool rsa_pubkey_ckaid_matches(struct pubkey *pubkey, char *buf, size_t buflen)
 {
 	if (pubkey->u.rsa.n.ptr == NULL) {
-		DBGF(DBG_CONTROL, "RSA pubkey with NULL modulus");
+		dbg("RSA pubkey with NULL modulus");
 		return FALSE;
 	}
 	SECItem modulus = {
@@ -1387,7 +1405,7 @@ static bool rsa_pubkey_ckaid_matches(struct pubkey *pubkey, char *buf, size_t bu
 	};
 	SECItem *pubkey_ckaid = PK11_MakeIDFromPubKey(&modulus);
 	if (pubkey_ckaid == NULL) {
-		DBGF(DBG_CONTROL, "RSA pubkey incomputable CKAID");
+		dbg("RSA pubkey incomputable CKAID");
 		return FALSE;
 	}
 	LSWDBGP(DBG_CONTROL, buf) {
@@ -1402,17 +1420,18 @@ static bool rsa_pubkey_ckaid_matches(struct pubkey *pubkey, char *buf, size_t bu
 
 struct pubkey *get_pubkey_with_matching_ckaid(const char *ckaid)
 {
-	size_t buflen = strlen(ckaid); /* good enough */
-	char *buf = alloc_bytes(buflen, "ckaid");
-	const char *ugh = ttodata(ckaid, 0, 16, buf, buflen, &buflen);
+	/* convert hex string ckaid to binary bin */
+	size_t binlen = (strlen(ckaid) + 1) / 2;
+	char *bin = alloc_bytes(binlen, "ckaid");
+	const char *ugh = ttodata(ckaid, 0, 16, bin, binlen, &binlen);
 	if (ugh != NULL) {
-		pfree(buf);
+		pfree(bin);
 		/* should have been rejected by whack? */
 		libreswan_log("invalid hex CKAID '%s': %s", ckaid, ugh);
 		return NULL;
 	}
 	DBG(DBG_CONTROL,
-	    DBG_dump("looking for pubkey with CKAID that matches", buf, buflen));
+	    DBG_dump("looking for pubkey with CKAID that matches", bin, binlen));
 
 	struct pubkey_list *p;
 	for (p = pluto_pubkeys; p != NULL; p = p->next) {
@@ -1420,9 +1439,9 @@ struct pubkey *get_pubkey_with_matching_ckaid(const char *ckaid)
 		struct pubkey *key = p->key;
 		switch (key->alg) {
 		case PUBKEY_ALG_RSA: {
-			if (rsa_pubkey_ckaid_matches(key, buf, buflen)) {
-				DBGF(DBG_CONTROL, "ckaid matching pubkey");
-				pfree(buf);
+			if (rsa_pubkey_ckaid_matches(key, bin, binlen)) {
+				dbg("ckaid matching pubkey");
+				pfree(bin);
 				return key;
 			}
 		}
@@ -1430,6 +1449,6 @@ struct pubkey *get_pubkey_with_matching_ckaid(const char *ckaid)
 			break;
 		}
 	}
-	pfree(buf);
+	pfree(bin);
 	return NULL;
 }

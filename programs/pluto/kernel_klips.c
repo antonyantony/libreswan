@@ -3,6 +3,8 @@
  * Copyright (C) 1998-2002  D. Hugh Redelmeier.
  * Copyright (C) 2003 Herbert Xu.
  * Copyright (C) 2017 Richard Guy Briggs <rgb@tricolour.ca>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -48,7 +50,6 @@
 #include "nat_traversal.h"
 #include "server.h"
 
-#include "alg_info.h"
 #include "kernel_alg.h"
 #include "ip_address.h"
 
@@ -343,9 +344,8 @@ const struct kernel_ops klips_kernel_ops = {
 	.init = init_pfkey,
 	.exceptsocket = NULL,
 	.docommand = klips_do_command,
-	.set_debug = pfkey_set_debug,
 	.remove_orphaned_holds = pfkey_remove_orphaned_holds,
-	.process_ifaces = klips_process_raw_ifaces,
+	.process_raw_ifaces = klips_process_raw_ifaces,
 	.kern_name = "klips",
 	.overlap_supported = FALSE,
 	.sha2_truncbug_support = TRUE,

@@ -7,6 +7,7 @@
  * Copyright (C) 2012-2018 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2011 Anthony Tong <atong@TrustedCS.com>
  * Copyright (C) 2017-2018 Antony Antony <antony@phenome.org>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -150,7 +151,7 @@ void release_pending_whacks(struct state *st, err_t story)
 	 */
 	struct stat stst;
 	if (!fd_p(st->st_whack_sock)) {
-		DBGF(DBG_CONTROL, "%s: state #%lu has no whack fd",
+		dbg("%s: state #%lu has no whack fd",
 		     __func__, st->st_serialno);
 		zero(&stst);
 	} else if (fstat(st->st_whack_sock.fd, &stst) != 0) {
@@ -164,7 +165,7 @@ void release_pending_whacks(struct state *st, err_t story)
 		st->st_whack_sock = null_fd;
 		zero(&stst);
 	} else {
-		DBGF(DBG_CONTROL, "%s: state #%lu "PRI_FD" .st_dev=%lu .st_ino=%lu",
+		dbg("%s: state #%lu "PRI_FD" .st_dev=%lu .st_ino=%lu",
 		     __func__, st->st_serialno, PRI_fd(st->st_whack_sock),
 		     (unsigned long)stst.st_dev, (unsigned long)stst.st_ino);
 		release_whack(st);
@@ -206,11 +207,10 @@ void release_pending_whacks(struct state *st, err_t story)
 	if (pp == NULL)
 		return;
 	for (struct pending *p = *pp; p != NULL; p = p->next) {
-		DBGF(DBG_CONTROL,
-		     "%s: IKE SA #%lu "PRI_FD" has pending CHILD SA with socket "PRI_FD,
-		     __func__, p->isakmp_sa->st_serialno,
-		     PRI_fd(p->isakmp_sa->st_whack_sock),
-		     PRI_fd(p->whack_sock));
+		dbg("%s: IKE SA #%lu "PRI_FD" has pending CHILD SA with socket "PRI_FD,
+		    __func__, p->isakmp_sa->st_serialno,
+		    PRI_fd(p->isakmp_sa->st_whack_sock),
+		    PRI_fd(p->whack_sock));
 		if (p->isakmp_sa == st && fd_p(p->whack_sock)) {
 			if (!same_fd(&stst, p->whack_sock)) {
 				passert(!fd_p(whack_log_fd));
@@ -296,10 +296,21 @@ void unpend(struct state *st, struct connection *cc)
 	{
 		if (p->isakmp_sa == st) {
 			p->pend_time = mononow();
-			if (st->st_ikev2 && cc != p->connection) {
-				ikev2_initiate_child_sa(p);
-
-			} else if (!st->st_ikev2) {
+			switch (st->st_ike_version) {
+			case IKEv2:
+				if (cc != p->connection) {
+					ikev2_initiate_child_sa(p);
+				} else {
+					/*
+					 * IKEv2 AUTH negotiation
+					 * include child.  nothing to
+					 * upend, like in IKEv1,
+					 * delete it
+					 */
+					what = "delete from";
+				}
+				break;
+			case IKEv1:
 				quick_outI1(p->whack_sock, st, p->connection,
 					    p->policy,
 					    p->try, p->replacing
@@ -307,19 +318,16 @@ void unpend(struct state *st, struct connection *cc)
 					    , p->uctx
 #endif
 					    );
-			} else {
-				/*
-				 * IKEv2 AUTH negotiation include child.
-				 * nothing to upend, like in IKEv1, delete it
-				 */
-				 what = "delete from";
+				break;
+			default:
+				bad_case(st->st_ike_version);
 			}
 			DBG(DBG_CONTROL, {
 				ipstr_buf b;
 				char cib[CONN_INST_BUF];
 				DBG_log("%s pending %s with %s \"%s\"%s",
 					what,
-					st->st_ikev2 ? "Child SA" : "Quick Mode",
+					(st->st_ike_version == IKEv2) ? "Child SA" : "Quick Mode",
 					ipstr(&p->connection->spd.that.host_addr, &b),
 					p->connection->name,
 					fmt_conn_instance(p->connection, cib));
@@ -463,7 +471,7 @@ void show_pending_phase2(const struct connection *c, const struct state *st)
 
 			LSWLOG_WHACK(RC_COMMENT, buf) {
 				lswlogf(buf, "#%lu: pending ", p->isakmp_sa->st_serialno);
-				lswlogs(buf, st->st_ikev2 ? "CHILD SA" : "Phase 2");
+				lswlogs(buf, (st->st_ike_version == IKEv2) ? "CHILD SA" : "Phase 2");
 				lswlogf(buf, " for \"%s\"%s", p->connection->name,
 					cip);
 				if (p->replacing != SOS_NOBODY) {

@@ -17,12 +17,14 @@
     INITSYSTEM=sysvinit \\\
     USE_DNSSEC=%{USE_DNSSEC} \\\
     USE_FIPSCHECK=true \\\
+    USE_KLIPS=false \\\
     USE_LABELED_IPSEC=true \\\
     USE_LDAP=true \\\
     USE_LIBCAP_NG=true \\\
     USE_LIBCURL=true \\\
     USE_LINUX_AUDIT=true \\\
     USE_NM=true \\\
+    USE_NSS_IPSEC_PROFILE=false \\\
     USE_SECCOMP=false \\\
     USE_XAUTHPAM=true \\\
 %{nil}
@@ -30,8 +32,8 @@
 #global prever rc1
 
 Name: libreswan
-Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
-Version: 3.27
+Summary: Internet Key Exchange (IKEv1 and IKEv2) implementation for IPsec
+Version: 3.29
 Release: %{?prever:0.}1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Url: https://libreswan.org/
@@ -134,6 +136,7 @@ make \
     install
 FS=$(pwd)
 rm -rf %{buildroot}/usr/share/doc/libreswan
+rm -rf %{buildroot}%{_libexecdir}/ipsec/*check
 
 install -d -m 0755 %{buildroot}%{_rundir}/pluto
 # used when setting --perpeerlog without --perpeerlogbase
@@ -213,5 +216,5 @@ fi
 %{_sysconfdir}/prelink.conf.d/libreswan-fips.conf
 
 %changelog
-* Sun Oct 07 2018 Team Libreswan <team@libreswan.org> - 3.27-1
+* Mon Jun 10 2019 Team Libreswan <team@libreswan.org> - 3.29-1
 - Automated build from release tar ball

@@ -8,10 +8,11 @@
  * Copyright (C) 2008-2009 David McCullough <david_mccullough@securecomputing.com>
  * Copyright (C) 2009 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2010 Tuomo Soini <tis@foobar.fi>
- * Copyright (C) 2012-2017 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2012-2019 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 Wolfgang Nothdurft <wolfgang@linogate.de>
- * Copyright (C) 2016, 2018 Andrew Cagney
- * Copyright (C) 2017 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2016-2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2017-2019 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2019 Antony Antony <antony@phenome.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -37,6 +38,7 @@
 #include "server.h"
 #include "demux.h"
 #include "pluto_stats.h"
+#include "ip_endpoint.h"
 
 /* send_ike_msg logic is broken into layers.
  * The rest of the system thinks it is simple.
@@ -99,7 +101,9 @@ bool send_chunks(const char *where, bool just_a_keepalive,
 	 */
 	if (isanyaddr(&remote_endpoint)) {
 		/* not asserting, who knows what nonsense a user can generate */
-		libreswan_log("Will not send packet to bogus address 0.0.0.0");
+		ip_endpoint_buf b;
+		libreswan_log("Will not send packet to bogus address %s",
+			      str_sensitive_endpoint(&remote_endpoint, &b));
 		return FALSE;
 	}
 
@@ -133,18 +137,17 @@ bool send_chunks(const char *where, bool just_a_keepalive,
 		ptr = a.ptr;
 	}
 
-	DBG(DBG_CONTROL | DBG_RAW, {
-		ipstr_buf b;
-		DBG_log("sending %zu bytes for %s through %s:%d to %s:%u (using #%lu)",
+	if (DBGP(DBG_BASE)) {
+		ip_endpoint_buf b;
+		DBG_log("sending %zu bytes for %s through %s:%d to %s (using #%lu)",
 			len,
 			where,
 			interface->ip_dev->id_rname,
 			interface->port,
-			sensitive_ipstr(&remote_endpoint, &b),
-			hportof(&remote_endpoint),
+			str_endpoint(&remote_endpoint, &b),
 			serialno);
-	});
-	DBG(DBG_RAW, DBG_dump(NULL, ptr, len));
+			DBG_dump(NULL, ptr, len);
+	}
 
 	check_outgoing_msg_errqueue(interface, "sending a packet");
 
@@ -156,11 +159,10 @@ bool send_chunks(const char *where, bool just_a_keepalive,
 
 	if (wlen != (ssize_t)len) {
 		if (!just_a_keepalive) {
-			ipstr_buf b;
-			LOG_ERRNO(errno, "sendto on %s to %s:%u failed in %s",
+			ip_endpoint_buf b;
+			LOG_ERRNO(errno, "sendto on %s to %s failed in %s",
 				  interface->ip_dev->id_rname,
-				  sensitive_ipstr(&remote_endpoint, &b),
-				  hportof(&remote_endpoint),
+				  str_sensitive_endpoint(&remote_endpoint, &b),
 				  where);
 		}
 		return FALSE;
@@ -172,15 +174,14 @@ bool send_chunks(const char *where, bool just_a_keepalive,
 	if (IMPAIR(JACOB_TWO_TWO)) {
 		/* sleep for half a second, and second another packet */
 		usleep(500000);
-		ipstr_buf b;
+		ip_endpoint_buf b;
 
-		DBG_log("JACOB 2-2: resending %zu bytes for %s through %s:%d to %s:%u:",
+		DBG_log("JACOB 2-2: resending %zu bytes for %s through %s:%d to %s:",
 			len,
 			where,
 			interface->ip_dev->id_rname,
 			interface->port,
-			ipstr(&remote_endpoint, &b),
-			hportof(&remote_endpoint));
+			str_endpoint(&remote_endpoint, &b));
 
 		wlen = sendto(interface->fd,
 			      ptr,
@@ -190,10 +191,9 @@ bool send_chunks(const char *where, bool just_a_keepalive,
 		if (wlen != (ssize_t)len) {
 			if (!just_a_keepalive) {
 				LOG_ERRNO(errno,
-					  "sendto on %s to %s:%u failed in %s",
+					  "sendto on %s to %s failed in %s",
 					  interface->ip_dev->id_rname,
-					  ipstr(&remote_endpoint, &b),
-					  hportof(&remote_endpoint),
+					  str_endpoint(&remote_endpoint, &b),
 					  where);
 			}
 			return FALSE;
@@ -208,7 +208,7 @@ bool send_chunk(const char *where, so_serial_t serialno, /* can be SOS_NOBODY */
 {
 	return send_chunks(where, FALSE, serialno,
 			   interface, remote_endpoint,
-			   packet, empty_chunk);
+			   packet, EMPTY_CHUNK);
 }
 
 bool send_chunks_using_state(struct state *st, const char *where,
@@ -222,13 +222,13 @@ bool send_chunks_using_state(struct state *st, const char *where,
 
 bool send_chunk_using_state(struct state *st, const char *where, chunk_t packet)
 {
-	return send_chunks_using_state(st, where, packet, empty_chunk);
+	return send_chunks_using_state(st, where, packet, EMPTY_CHUNK);
 }
 
 bool send_ike_msg_without_recording(struct state *st, pb_stream *pbs,
 				    const char *where)
 {
-	return send_chunk_using_state(st, where, pbs_as_chunk(pbs));
+	return send_chunk_using_state(st, where, same_out_pbs_as_chunk(pbs));
 }
 
 void record_outbound_ike_msg(struct state *st, pb_stream *pbs, const char *what)
@@ -236,7 +236,8 @@ void record_outbound_ike_msg(struct state *st, pb_stream *pbs, const char *what)
 	passert(pbs_offset(pbs) != 0);
 	release_fragments(st);
 	freeanychunk(st->st_tpacket);
-	st->st_tpacket = clone_chunk(pbs_as_chunk(pbs), what);
+	st->st_tpacket = clone_out_pbs_as_chunk(pbs, what);
+	st->st_last_liveness = mononow();
 }
 
 /*
@@ -251,6 +252,6 @@ bool send_keepalive(struct state *st, const char *where)
 	return send_chunks(where, TRUE,
 			   st->st_serialno, st->st_interface,
 			   hsetportof(st->st_remoteport, st->st_remoteaddr),
-			   chunk(&ka_payload, sizeof(ka_payload)),
-			   empty_chunk);
+			   CHUNKO(ka_payload),
+			   EMPTY_CHUNK);
 }

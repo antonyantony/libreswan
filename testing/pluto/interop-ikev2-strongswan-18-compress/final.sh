@@ -1,3 +1,4 @@
+# should see ipcomp entries
 ip xfrm state
 ip xfrm pol
 : ==== cut ====

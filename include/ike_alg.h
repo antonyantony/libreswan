@@ -1,3 +1,18 @@
+/*
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 D. Hugh Redelmeier <hugh@mimosa.com>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * for more details.
+ */
+
 #ifndef _IKE_ALG_H
 #define _IKE_ALG_H
 
@@ -252,7 +267,7 @@ struct ike_alg {
 	 * Easier to just require that this contain everything then
 	 * poke around in multiple places.
 	 */
-	const char *names[5];
+	const char *names[6];
 	/*
 	 * See above.
 	 *
@@ -505,10 +520,8 @@ struct hash_desc {
  */
 struct asn1_hash_blob {
 	enum notify_payload_hash_algorithms hash_algo;
-	const uint8_t size;
-	const uint8_t *size_blob;
-	const uint8_t asn1_blob_len;
-	const uint8_t *asn1_blob;
+	const uint8_t *blob;
+	size_t blob_sz;
 };
 
 /*

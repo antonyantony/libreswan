@@ -7,9 +7,9 @@
  * Copyright (C) 2008-2012 Paul Wouters
  * Copyright (C) 2008-2010 David McCullough.
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2013,2015 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2013-2019 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 Tuomo Soini <tis@foobar.fi>
- * Copyright (C) 2017 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2017-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -79,6 +79,7 @@ void show_status(void)
 {
 	show_kernel_interface();
 	show_ifaces_status();
+	whack_log(RC_COMMENT, " ");     /* spacer */
 	show_system_security();
 	show_setup_plutomain();
 	show_debug_status();
@@ -88,8 +89,8 @@ void show_status(void)
 	ike_alg_show_status();
 	db_ops_show_status();
 	show_connections_status();
-	show_states_status();
-#ifdef KLIPS
+	show_states_status(FALSE);
+#if defined(NETKEY_SUPPORT) || defined(KLIPS)
 	show_shunt_status();
 #endif
 }
@@ -202,7 +203,7 @@ static void connection_state(struct state *st, void *data)
 	}
 }
 
-void log_state(struct state *st, enum state_kind new_state)
+void binlog_state(struct state *st, enum state_kind new_state)
 {
 	if (pluto_stats_binary == NULL)
 		return;
@@ -237,6 +238,7 @@ void log_state(struct state *st, enum state_kind new_state)
 		const struct finite_state *save_state = st->st_finite_state;
 
 		st->st_finite_state = finite_states[new_state];
+		dbg("FOR_EACH_STATE_... via for_each_state in %s", __func__);
 		for_each_state(connection_state, &lc);
 		st->st_finite_state = save_state;
 	}

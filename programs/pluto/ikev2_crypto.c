@@ -5,8 +5,9 @@
  * Copyright (C) 2012 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2013-2014 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
- * Copyright (C) 2017 Andrew Cagney
+ * Copyright (C) 2017-2019 Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2017 Antony Antony <antony@phenome.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -20,12 +21,7 @@
  *
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stddef.h>
-#include <string.h>
 #include <unistd.h>
-#include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -36,10 +32,8 @@
 #include "sysdep.h"
 #include "constants.h"
 #include "lswlog.h"
-#include "libswan.h"
 
 #include "defs.h"
-#include "cookie.h"
 #include "id.h"
 #include "x509.h"
 #include "certs.h"
@@ -52,7 +46,6 @@
 #include "ikev2.h"
 #include "ikev2_prf.h"
 #include "ike_alg.h"
-#include "alg_info.h"
 #include "kernel_alg.h"
 #include "crypt_symkey.h"
 #include "ikev2_prf.h"
@@ -143,13 +136,6 @@ void ikev2_derive_child_keys(struct child_sa *child)
 	release_symkey(__func__, "rkey", &rkey);
 
 	release_symkey(__func__, "keymat", &keymat);
-
-	if (child->sa.st_sa_role == 0) {
-		PEXPECT_LOG("unset child sa in state #%lu",
-			    child->sa.st_serialno);
-		child->sa.st_sa_role = (ike_sa(&child->sa)->sa.st_original_role == ORIGINAL_INITIATOR)
-			? SA_INITIATOR : SA_RESPONDER;
-	}
 
 	/*
 	 * The initiator stores outgoing initiator-to-responder keymat

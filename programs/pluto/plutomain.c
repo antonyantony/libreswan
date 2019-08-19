@@ -9,13 +9,13 @@
  * Copyright (C) 2008-2009 David McCullough <david_mccullough@securecomputing.com>
  * Copyright (C) 2009 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2009-2016 Tuomo Soini <tis@foobar.fi>
- * Copyright (C) 2012-2013 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2012-2019 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2012-2016 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2012 Kim B. Heino <b@bbbs.net>
  * Copyright (C) 2012 Philippe Vouters <Philippe.Vouters@laposte.net>
  * Copyright (C) 2012 Wes Hardaker <opensource@hardakers.net>
  * Copyright (C) 2013 David McCullough <ucdevel@gmail.com>
- * Copyright (C) 2016, 2018 Andrew Cagney
+ * Copyright (C) 2016-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -61,6 +61,9 @@
 #include "state_db.h"	/* for init_state_db() */
 #include "nat_traversal.h"
 #include "ike_alg.h"
+#include "af_info.h"		/* for init_af_info() */
+#include "ikev2_redirect.h"
+#include "root_certs.h"		/* for init_root_certs() */
 
 #ifndef IPSECDIR
 #define IPSECDIR "/etc/ipsec.d"
@@ -126,6 +129,7 @@ static void free_pluto_main(void)
 	pfreeany(ocsp_uri);
 	pfreeany(ocsp_trust_name);
 	pfreeany(peerlog_basedir);
+	pfreeany(global_redirect_to);
 	pfreeany(curl_iface);
 	pfreeany(pluto_log_file);
 	pfreeany(pluto_dnssec_rootfile);
@@ -157,10 +161,9 @@ static const char compile_time_interop_options[] = ""
 #ifdef KLIPS
 	" KLIPS"
 #endif
-#ifdef KLIPS_MAST
-	" MAST"
+#ifdef USE_NIC_OFFLOAD
+	" esp-hw-offload"
 #endif
-
 #if USE_FORK
 	" FORK"
 #endif
@@ -180,6 +183,12 @@ static const char compile_time_interop_options[] = ""
 	" BROKEN_POPEN"
 #endif
 	" NSS"
+#ifdef NSS_REQ_AVA_COPY
+	" (AVA copy)"
+#endif
+#ifdef NSS_IPSEC_PROFILE
+	" (IPsec profile)"
+#endif
 #ifdef USE_DNSSEC
 	" DNSSEC"
 #endif
@@ -206,9 +215,6 @@ static const char compile_time_interop_options[] = ""
 #endif
 #ifdef HAVE_NM
 	" NETWORKMANAGER"
-#endif
-#ifdef KLIPS_MAST
-	" KLIPS_MAST"
 #endif
 #ifdef LIBCURL
 	" CURL(non-NSS)"
@@ -541,6 +547,8 @@ static const struct option long_opts[] = {
 	{ "secretsfile\0<secrets-file>", required_argument, NULL, 's' },
 	{ "perpeerlogbase\0<path>", required_argument, NULL, 'P' },
 	{ "perpeerlog\0", no_argument, NULL, 'l' },
+	{ "global-redirect\0", required_argument, NULL, 'Q'},
+	{ "global-redirect-to\0", required_argument, NULL, 'y'},
 	{ "coredir\0>dumpdir", required_argument, NULL, 'C' },	/* redundant spelling */
 	{ "dumpdir\0<dirname>", required_argument, NULL, 'C' },
 	{ "statsbin\0<filename>", required_argument, NULL, 'S' },
@@ -901,10 +909,6 @@ int main(int argc, char **argv)
 		}
 			continue;
 
-		case 'M':	/* --use-mast */
-			kern_interface = USE_MASTKLIPS;
-			continue;
-
 		case 'F':	/* --use-bsdkame */
 			kern_interface = USE_BSDKAME;
 			continue;
@@ -1010,6 +1014,7 @@ int main(int argc, char **argv)
 		case 'B':	/* --ocsp-method get|post */
 			if (streq(optarg, "post")) {
 				ocsp_method = OCSP_METHOD_POST;
+				ocsp_post = TRUE;
 			} else {
 				if (streq(optarg, "get")) {
 					ocsp_method = OCSP_METHOD_GET;
@@ -1130,6 +1135,39 @@ int main(int argc, char **argv)
 			log_to_perpeer = TRUE;
 			continue;
 
+		case 'y':	/* --global-redirect-to */
+		{
+			ip_address rip;
+			ugh = ttoaddr(optarg, 0, AF_UNSPEC, &rip);
+
+			if (ugh != NULL) {
+				break;
+			} else {
+				pfreeany(global_redirect_to);
+				global_redirect_to =
+					clone_str(optarg, "global_redirect_to");
+				libreswan_log(
+					"all IKE_SA_INIT requests will from now on be redirected to: %s\n",
+					 global_redirect_to);
+			}
+		}
+			continue;
+
+		case 'Q':	/* --global-redirect */
+		{
+			if (streq(optarg, "yes")) {
+				global_redirect = GLOBAL_REDIRECT_YES;
+			} else if (streq(optarg, "no")) {
+				global_redirect = GLOBAL_REDIRECT_NO;
+			} else if (streq(optarg, "auto")) {
+				global_redirect = GLOBAL_REDIRECT_AUTO;
+			} else {
+				libreswan_log(
+					"invalid option argument for global-redirect (allowed arguments: yes, no, auto)");
+			}
+		}
+			continue;
+
 		case '2':	/* --keep-alive <delay_secs> */
 			ugh = ttoulb(optarg, 0, 10, secs_per_day, &u);
 			if (ugh != NULL)
@@ -1191,6 +1229,7 @@ int main(int argc, char **argv)
 			ocsp_strict = cfg->setup.options[KBF_OCSP_STRICT];
 			ocsp_timeout = cfg->setup.options[KBF_OCSP_TIMEOUT];
 			ocsp_method = cfg->setup.options[KBF_OCSP_METHOD];
+			ocsp_post = (ocsp_method == OCSP_METHOD_POST);
 			ocsp_cache_size = cfg->setup.options[KBF_OCSP_CACHE_SIZE];
 			ocsp_cache_min_age = cfg->setup.options[KBF_OCSP_CACHE_MIN];
 			ocsp_cache_max_age = cfg->setup.options[KBF_OCSP_CACHE_MAX];
@@ -1199,6 +1238,19 @@ int main(int argc, char **argv)
 				       cfg->setup.strings[KSF_OCSP_URI]);
 			set_cfg_string(&ocsp_trust_name,
 				       cfg->setup.strings[KSF_OCSP_TRUSTNAME]);
+
+			char *tmp_global_redirect = cfg->setup.strings[KSF_GLOBAL_REDIRECT];
+			if (tmp_global_redirect == NULL || streq(tmp_global_redirect, "no")) {
+				/* NULL means it is not specified so default is no */
+				global_redirect = GLOBAL_REDIRECT_NO;
+			} else if (streq(tmp_global_redirect, "yes")) {
+				global_redirect = GLOBAL_REDIRECT_YES;
+			} else if (streq(tmp_global_redirect, "auto")) {
+				global_redirect = GLOBAL_REDIRECT_AUTO;
+			} else {
+				global_redirect = GLOBAL_REDIRECT_NO;
+				libreswan_log("unknown argument for global-redirect option");
+			}
 
 			crl_check_interval = deltatime(
 				cfg->setup.options[KBF_CRL_CHECKINTERVAL]);
@@ -1303,6 +1355,9 @@ int main(int argc, char **argv)
 			set_cfg_string(&virtual_private,
 				cfg->setup.strings[KSF_VIRTUALPRIVATE]);
 
+			set_cfg_string(&global_redirect_to,
+				cfg->setup.strings[KSF_GLOBAL_REDIRECT_TO]);
+
 			nhelpers = cfg->setup.options[KBF_NHELPERS];
 #ifdef HAVE_LABELED_IPSEC
 			secctx_attr_type = cfg->setup.options[KBF_SECCTX];
@@ -1321,8 +1376,6 @@ int main(int argc, char **argv)
 				kern_interface = USE_NETKEY;
 			} else if (streq(protostack, "klips")) {
 				kern_interface = USE_KLIPS;
-			} else if (streq(protostack, "mast")) {
-				kern_interface = USE_MASTKLIPS;
 			} else if (streq(protostack, "netkey") ||
 				streq(protostack, "native")) {
 				kern_interface = USE_NETKEY;
@@ -1341,7 +1394,7 @@ int main(int argc, char **argv)
 		case OPT_DEBUG:
 		{
 			lmod_t mod = empty_lmod;
-			if (lmod_arg(&mod, &debug_lmod_info, optarg)) {
+			if (lmod_arg(&mod, &debug_lmod_info, optarg, true/*enable*/)) {
 				base_debugging = lmod(base_debugging, mod);
 			} else {
 				libreswan_log("unrecognized --debug '%s' option ignored",
@@ -1353,7 +1406,7 @@ int main(int argc, char **argv)
 		case OPT_IMPAIR:
 		{
 			lmod_t mod = empty_lmod;
-			if (lmod_arg(&mod, &impair_lmod_info, optarg)) {
+			if (lmod_arg(&mod, &impair_lmod_info, optarg, true/*enable*/)) {
 				base_debugging = lmod(base_debugging, mod);
 			} else {
 				libreswan_log("unrecognized --impair '%s' option ignored",
@@ -1505,6 +1558,7 @@ int main(int argc, char **argv)
 		passert(log_to_stderr || dup2(0, 2) == 2);
 	}
 
+	init_af_info();
 	init_constants();
 	init_pluto_constants();
 
@@ -1666,35 +1720,6 @@ int main(int argc, char **argv)
 	libreswan_log(leak_detective ?
 		"leak-detective enabled" : "leak-detective disabled");
 
-	/* Check for SAREF support */
-#ifdef KLIPS_MAST
-#include <ipsec_saref.h>
-	{
-		int e, sk, saref;
-		saref = 1;
-		errno = 0;
-
-		sk = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-		e = setsockopt(sk, IPPROTO_IP, IP_IPSEC_REFINFO, &saref,
-			sizeof(saref));
-		if (e == -1 )
-			libreswan_log("SAref support [disabled]: %s",
-				strerror(errno));
-		else
-			libreswan_log("SAref support [enabled]");
-		errno = 0;
-		e = setsockopt(sk, IPPROTO_IP, IP_IPSEC_BINDREF, &saref,
-			sizeof(saref));
-		if (e == -1 )
-			libreswan_log("SAbind support [disabled]: %s",
-				strerror(errno));
-		else
-			libreswan_log("SAbind support [enabled]");
-
-		close(sk);
-	}
-#endif
-
 	libreswan_log("NSS crypto [enabled]");
 
 #ifdef XAUTH_HAVE_PAM
@@ -1718,12 +1743,13 @@ int main(int argc, char **argv)
 /* Initialize all of the various features */
 
 	init_state_db();
+	init_event_base();
 
 	init_nat_traversal(keep_alive);
 
 	init_virtual_ip(virtual_private);
-	/* obsoleted by nss code init_rnd_pool(); */
-	init_event_base();
+	/* obsoleted by nss code: init_rnd_pool(); */
+	init_root_certs();
 	init_secret();
 	init_states();
 	init_connections();
@@ -1793,6 +1819,7 @@ void exit_pluto(int status)
  #ifdef USE_SYSTEMD_WATCHDOG
 	pluto_sd(PLUTO_SD_STOPPING, status);
  #endif
+	free_root_certs();
 	free_preshared_secrets();
 	free_remembered_public_keys();
 	delete_every_connection();
@@ -1909,10 +1936,15 @@ void show_setup_plutomain(void)
 		ocsp_method == OCSP_METHOD_GET ? "get" : "post"
 		);
 
+	whack_log(RC_COMMENT,
+		"global-redirect=%s, global-redirect-to=%s",
+		enum_name(&allow_global_redirect_names, global_redirect),
+		global_redirect_to != NULL ? global_redirect_to : "<unset>"
+		);
+
 #ifdef HAVE_LABELED_IPSEC
 	whack_log(RC_COMMENT, "secctx-attr-type=%d", secctx_attr_type);
 #else
 	whack_log(RC_COMMENT, "secctx-attr-type=<unsupported>");
 #endif
 }
-

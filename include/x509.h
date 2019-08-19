@@ -9,6 +9,7 @@
  * Copyright (C) 2012-2013 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2015 Matt Rogers <mrogers@libreswan.org>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -31,6 +32,8 @@
 #include "chunk.h"
 #include "err.h"
 #include "constants.h"
+
+struct pubkey_list;
 
 typedef enum {
 	LSW_CERT_NONE = 0,
@@ -83,7 +86,7 @@ extern int dn_count_wildcards(chunk_t dn);
 extern int dntoa(char *dst, size_t dstlen, chunk_t dn);
 extern int dntoa_or_null(char *dst, size_t dstlen, chunk_t dn,
 			 const char *null_dn);
-extern err_t atodn(char *src, chunk_t *dn);
+extern err_t atodn(const char *src, chunk_t *dn);
 extern void free_generalNames(generalName_t *gn, bool free_name);
 extern void load_crls(void);
 extern void list_authcerts(void);
@@ -97,7 +100,8 @@ extern SECItem same_chunk_as_dercert_secitem(chunk_t chunk);
 extern chunk_t get_dercert_from_nss_cert(CERTCertificate *cert);
 extern generalName_t *gndp_from_nss_cert(CERTCertificate *cert);
 extern void select_nss_cert_id(CERTCertificate *cert, struct id *end_id);
-extern void add_pubkey_from_nss_cert(const struct id *keyid,
+extern bool add_pubkey_from_nss_cert(struct pubkey_list **pubkey_db,
+				     const struct id *keyid,
 				     CERTCertificate *cert);
 extern bool trusted_ca_nss(chunk_t a, chunk_t b, int *pathlen);
 extern CERTCertList *get_all_certificates(void);

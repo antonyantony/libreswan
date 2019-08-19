@@ -7,6 +7,7 @@
 %global with_dnssec 0
 # Libreswan config options
 %global libreswan_config \\\
+    USE_KLIPS=false \\\
     FINALLIBEXECDIR=%{_libexecdir}/ipsec \\\
     FINALMANDIR=%{_mandir} \\\
     INC_RCDEFAULT=%{_initrddir} \\\
@@ -19,14 +20,15 @@
     USE_LIBCAP_NG=true \\\
     USE_LIBCURL=true \\\
     USE_NM=true \\\
+    USE_NSS_IPSEC_PROFILE=true \\\
     USE_SECCOMP=true \\\
     USE_XAUTHPAM=true \\\
 %{nil}
 #global prever rc1
 
 Name: libreswan
-Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
-Version: 3.27
+Summary: Internet Key Exchange (IKEv1 and IKEv2) implementation for IPsec
+Version: 3.29
 Release: %{?prever:0.}1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Url: https://libreswan.org/
@@ -129,6 +131,7 @@ make \
     install
 FS=$(pwd)
 rm -rf %{buildroot}/usr/share/doc/libreswan
+rm -rf %{buildroot}%{_libexecdir}/ipsec/*check
 
 install -d -m 0755 %{buildroot}%{_rundir}/pluto
 # used when setting --perpeerlog without --perpeerlogbase
@@ -138,10 +141,6 @@ install -d %{buildroot}%{_sbindir}
 install -d %{buildroot}%{_sysconfdir}/sysctl.d
 install -m 0644 packaging/rhel/libreswan-sysctl.conf \
     %{buildroot}%{_sysconfdir}/sysctl.d/50-libreswan.conf
-
-install -d %{buildroot}%{_tmpfilesdir}
-install -m 0644 packaging/rhel/libreswan-tmpfiles.conf  \
-    %{buildroot}%{_tmpfilesdir}/libreswan.conf
 
 mkdir -p %{buildroot}%{_libdir}/fipscheck
 install -d %{buildroot}%{_sysconfdir}/prelink.conf.d/
@@ -209,5 +208,5 @@ prelink -u %{_libexecdir}/ipsec/* 2>/dev/null || :
 %{_sysconfdir}/prelink.conf.d/libreswan-fips.conf
 
 %changelog
-* Sun Oct 07 2018 Team Libreswan <team@libreswan.org> - 3.27-1
+* Mon Jun 10 2019 Team Libreswan <team@libreswan.org> - 3.29-1
 - Automated build from release tar ball

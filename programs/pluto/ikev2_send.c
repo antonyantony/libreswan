@@ -6,14 +6,13 @@
  * Copyright (C) 2008-2009 David McCullough <david_mccullough@securecomputing.com>
  * Copyright (C) 2010,2012 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2010 Tuomo Soini <tis@foobar.fi
- * Copyright (C) 2012-2017 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2012-2019 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2012-2017 Antony Antony <antony@phenome.org>
- * Copyright (C) 2013-2016 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2013-2019 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2013 David McCullough <ucdevel@gmail.com>
  * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
- * Copyright (C) 2015-2017 Andrew Cagney
+ * Copyright (C) 2015-2019 Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2017 Sahana Prasad <sahana.prasad07@gmail.com>
- * Copyright (C) 2017 Vukasin Karadzic <vukasin.karadzic@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -30,6 +29,7 @@
 
 #include "send.h"
 #include "ikev2_send.h"
+#include "ikev2_message.h"
 #include "server.h"
 #include "state.h"
 #include "connections.h"
@@ -39,13 +39,6 @@
 #include "demux.h"	/* for struct msg_digest */
 #include "rnd.h"
 
-bool record_and_send_v2_ike_msg(struct state *st, pb_stream *pbs,
-				const char *what)
-{
-	record_outbound_ike_msg(st, pbs, what);
-	return send_recorded_v2_ike_msg(st, what);
-}
-
 bool send_recorded_v2_ike_msg(struct state *st, const char *where)
 {
 	if (st->st_interface == NULL) {
@@ -53,24 +46,20 @@ bool send_recorded_v2_ike_msg(struct state *st, const char *where)
 		return false;
 	} else if (st->st_v2_tfrags != NULL) {
 		/* if a V2 packet needs fragmenting it would have already happened */
-		passert(st->st_ikev2);
+		passert(st->st_ike_version == IKEv2);
 		passert(st->st_tpacket.ptr == NULL);
 		unsigned nr_frags = 0;
-		DBGF(DBG_CONTROL|DBG_RETRANSMITS,
-		     "sending fragments ...");
+		dbg("sending fragments ...");
 		for (struct v2_ike_tfrag *frag = st->st_v2_tfrags;
 		     frag != NULL; frag = frag->next) {
 			if (!send_chunk_using_state(st, where, frag->cipher)) {
-				DBGF(DBG_CONTROL|DBG_RETRANSMITS,
-				     "send of fragment %u failed",
-				     nr_frags);
+				dbg("send of fragment %u failed", nr_frags);
 				return false;
 			}
 			nr_frags++;
 
 		}
-		DBGF(DBG_CONTROL|DBG_RETRANSMITS,
-		     "sent %u fragments", nr_frags);
+		dbg("sent %u fragments", nr_frags);
 		return true;
 	} else {
 		return send_chunk_using_state(st, where, st->st_tpacket);
@@ -81,7 +70,7 @@ bool send_recorded_v2_ike_msg(struct state *st, const char *where)
  * Send a payload.
  */
 
-bool ship_v2UNKNOWN(pb_stream *outs, const char *victim)
+bool emit_v2UNKNOWN(const char *victim, pb_stream *outs)
 {
 	libreswan_log("IMPAIR: adding an unknown payload of type %d to %s",
 		      ikev2_unknown_payload_desc.pt, victim);
@@ -103,11 +92,10 @@ bool ship_v2UNKNOWN(pb_stream *outs, const char *victim)
  * XXX: Perhaps someday STRING will be replaced by enum
  * known_vendorid.
  */
-bool ship_v2V(pb_stream *outs, enum next_payload_types_ikev2 np,
-	      const char *string)
+bool emit_v2V(const char *string, pb_stream *outs)
 {
 	struct ikev2_generic gen = {
-		.isag_np = np,
+		.isag_np = 0,
 	};
 	pb_stream pbs = open_output_struct_pbs(outs, &gen,
 					       &ikev2_vendor_id_desc);
@@ -119,44 +107,6 @@ bool ship_v2V(pb_stream *outs, enum next_payload_types_ikev2 np,
 	}
 	close_output_pbs(&pbs);
 	return true;
-}
-
-/*
- * Determine the IKE version we will use for the IKE packet
- * Normally, this is "2.0", but in the future we might need to
- * change that. Version used is the minimum 2.x version both
- * sides support. So if we support 2.1, and they support 2.0,
- * we should sent 2.0 (not implemented until we hit 2.1 ourselves)
- * We also have some impair functions that modify the major/minor
- * version on purpose - for testing
- *
- * rcv_version: the received IKE version, 0 if we don't know
- *
- * top 4 bits are major version, lower 4 bits are minor version
- */
-uint8_t build_ikev2_version(void)
-{
-	/* TODO: if bumping, we should also set the Version flag in the ISAKMP header */
-	return ((IKEv2_MAJOR_VERSION + (IMPAIR(MAJOR_VERSION_BUMP) ? 1 : 0))
-			<< ISA_MAJ_SHIFT) |
-	       (IKEv2_MINOR_VERSION + (IMPAIR(MINOR_VERSION_BUMP) ? 1 : 0));
-}
-
-uint8_t build_ikev2_critical(bool impair)
-{
-	uint8_t octet = 0;
-	if (impair) {
-		/* flip the expected bit */
-		libreswan_log("IMPAIR: setting (should be off) critical payload bit");
-		octet = ISAKMP_PAYLOAD_CRITICAL;
-	} else {
-		octet = ISAKMP_PAYLOAD_NONCRITICAL;
-	}
-	if (IMPAIR(SEND_BOGUS_PAYLOAD_FLAG)) {
-		libreswan_log("IMPAIR: adding bogus bit to critical octet");
-		octet |= ISAKMP_PAYLOAD_LIBRESWAN_BOGUS;
-	}
-	return octet;
 }
 
 /*
@@ -178,32 +128,33 @@ uint8_t build_ikev2_critical(bool impair)
  *    IPsec protocol ID or zero if no SPI is applicable.  For a
  *    notification concerning the IKE SA, the SPI Size MUST be zero and
  *    the field must be empty.
+ *
+ *    Since all IKEv2 implementations MUST implement the NOTIFY type
+ *    payload, these payloads NEVER have the Critical Flag set.
  */
-bool ship_v2N(enum next_payload_types_ikev2 np,
-	      uint8_t critical,
-	      enum ikev2_sec_proto_id protoid,
-	      const chunk_t *spi,
-	      v2_notification_t type,
-	      const chunk_t *n_data,
-	      pb_stream *rbody)
+
+
+/* emit a v2 Notification payload, with optional SA and optional sub-payload */
+bool emit_v2Nsa_pl(v2_notification_t ntype,
+		enum ikev2_sec_proto_id protoid,
+		const ipsec_spi_t *spi, /* optional */
+		pb_stream *outs,
+		pb_stream *payload_pbs /* optional */)
 {
 	/* See RFC 5996 section 3.10 "Notify Payload" */
 	passert(protoid == PROTO_v2_RESERVED || protoid == PROTO_v2_AH || protoid == PROTO_v2_ESP);
-	passert((protoid == PROTO_v2_RESERVED) == (spi->len == 0));
 
-	switch (type) {
+	switch (ntype) {
 	case v2N_INVALID_SELECTORS:
 	case v2N_REKEY_SA:
 	case v2N_CHILD_SA_NOT_FOUND:
-		/* must have SPI. XXX: ??? this is checking protoid! */
-		if (protoid == PROTO_v2_RESERVED) {
-			DBGF(DBG_MASK, "XXX: type and protoid mismatch");
+		if (protoid == PROTO_v2_RESERVED || spi == NULL) {
+			dbg("XXX: type requires SA; missing");
 		}
 		break;
 	default:
-		/* must not have SPI. XXX: ??? this is checking protoid! */
-		if (protoid != PROTO_v2_RESERVED) {
-			DBGF(DBG_MASK, "XXX: type and protoid mismatch");
+		if (protoid != PROTO_v2_RESERVED || spi != NULL) {
+			dbg("XXX: type forbids SA but SA present");
 		}
 		break;
 	}
@@ -211,187 +162,82 @@ bool ship_v2N(enum next_payload_types_ikev2 np,
 	DBG(DBG_CONTROLMORE, DBG_log("Adding a v2N Payload"));
 
 	struct ikev2_notify n = {
-		.isan_np = np,
-		.isan_critical = critical,
+		.isan_critical = build_ikev2_critical(false),
 		.isan_protoid = protoid,
-		.isan_spisize = spi->len,
-		.isan_type = type,
+		.isan_spisize = spi != NULL ? sizeof(*spi) : 0,
+		.isan_type = ntype,
 	};
+
+	pb_stream pls;
+
+	if (!out_struct(&n, &ikev2_notify_desc, outs, &pls) ||
+	    (spi != NULL && !out_raw(spi, sizeof(*spi), &pls, "SPI"))) {
+		return false;
+	}
+
+	if (payload_pbs == NULL)
+		close_output_pbs(&pls);
+	else
+		*payload_pbs = pls;
+	return true;
+}
+
+/* emit a v2 Notification payload, with optional sub-payload */
+bool emit_v2Npl(v2_notification_t ntype,
+		pb_stream *outs,
+		pb_stream *payload_pbs /* optional */)
+{
+	return emit_v2Nsa_pl(ntype, PROTO_v2_RESERVED, NULL, outs, payload_pbs);
+}
+
+/* emit a v2 Notification payload, with optional chunk as sub-payload */
+bool emit_v2Nchunk(v2_notification_t ntype,
+		const chunk_t *ndata, /* optional */
+		pb_stream *outs)
+{
+	pb_stream pl;
+
+	if (!emit_v2Npl(ntype, outs, &pl) ||
+	    (ndata != NULL && !out_chunk(*ndata, &pl, "Notify data")))
+		return false;
+
+	close_output_pbs(&pl);
+	return true;
+}
+
+/* output a v2 simple Notification payload */
+bool emit_v2N(v2_notification_t ntype,
+	       pb_stream *outs)
+{
+	return emit_v2Npl(ntype, outs, NULL);
+}
+
+bool emit_v2N_signature_hash_algorithms(lset_t sighash_policy,
+					pb_stream *outs)
+{
 	pb_stream n_pbs;
 
-	if (!out_struct(&n, &ikev2_notify_desc, rbody, &n_pbs)) {
-		libreswan_log(
-			"error initializing notify payload for notify message");
-		return FALSE;
+	if (!emit_v2Npl(v2N_SIGNATURE_HASH_ALGORITHMS, outs, &n_pbs)) {
+		libreswan_log("error initializing notify payload for notify message");
+		return false;
 	}
 
-	if (spi->len > 0) {
-		if (!out_chunk(*spi, &n_pbs, "SPI")) {
-			libreswan_log("error writing SPI to notify payload");
-			return FALSE;
-		}
+#define H(POLICY, ID)							\
+	if (sighash_policy & POLICY) {					\
+		uint16_t hash_id = htons(ID);				\
+		passert(sizeof(hash_id) == RFC_7427_HASH_ALGORITHM_IDENTIFIER_SIZE); \
+		if (!out_raw(&hash_id, sizeof(hash_id), &n_pbs,		\
+			     "hash algorithm identifier "#ID)) {	\
+			return false;					\
+		}							\
 	}
-	if (n_data != NULL) {
-		if (!out_chunk(*n_data, &n_pbs, "Notify data")) {
-			libreswan_log(
-				"error writing notify payload for notify message");
-			return FALSE;
-		}
-	}
+	H(POL_SIGHASH_SHA2_256, IKEv2_AUTH_HASH_SHA2_256);
+	H(POL_SIGHASH_SHA2_384, IKEv2_AUTH_HASH_SHA2_384);
+	H(POL_SIGHASH_SHA2_512, IKEv2_AUTH_HASH_SHA2_512);
+#undef H
 
 	close_output_pbs(&n_pbs);
-	return TRUE;
-}
-
-/*
- * ship_v2Nsp: partially parameterized shipv2N
- *
- * - critical: ISAKMP_PAYLOAD_NONCRITICAL
- * - protoid: IKEv2_SEC_PROTO_NONE
- * - spi: none
- * pass through: all params
- *
- * This case is common since
- *
- * - almost all notifications are non-critical
- * - only a specified few include protocol or SPI
- */
-
-bool ship_v2Nsp(enum next_payload_types_ikev2 np,
-		v2_notification_t type,
-		const chunk_t *n_data,
-		pb_stream *rbody)
-{
-	return ship_v2N(np, build_ikev2_critical(false),
-			PROTO_v2_RESERVED, &empty_chunk, type, n_data, rbody);
-}
-
-/* ship_v2Ns: like ship_v2Nsp except n_data is &empty_chunk */
-
-bool ship_v2Ns(enum next_payload_types_ikev2 np,
-	      v2_notification_t type,
-	      pb_stream *rbody)
-{
-	return ship_v2Nsp(np, type, &empty_chunk, rbody);
-}
-
-/*
- * Open an IKEv2 message.
- *
- * At least one of the IKE SA and/or MD must be specified.
- *
- * The opened PBS is put into next-payload back-patch mode so
- * containing payloads should not specify their payload-type.  It will
- * instead be taken from the payload struct descriptor.
- */
-pb_stream open_v2_message(pb_stream *reply,
-			  struct ike_sa *ike, struct msg_digest *md,
-			  enum isakmp_xchg_types exchange_type)
-{
-	/* at least one, possibly both */
-	passert(ike != NULL || md != NULL);
-
-	struct isakmp_hdr hdr = {
-		.isa_flags = IMPAIR(SEND_BOGUS_ISAKMP_FLAG) ? ISAKMP_FLAGS_RESERVED_BIT6 : LEMPTY,
-		.isa_version = build_ikev2_version(),
-		.isa_xchg = exchange_type,
-		.isa_length = 0, /* filled in when PBS is closed */
-		.isa_np = ISAKMP_NEXT_v2NONE, /* filled in when next payload is added */
-	};
-
-	/*
-	 * I(Initiator) flag
-	 *
-	 * If there was no IKE SA then this must be the original
-	 * responder (the only time that pluto constructs a packet
-	 * with no state is when replying to an SA_INIT or AUTH
-	 * request with an unencrypted response), else just use the
-	 * IKE SA's role.
-	 */
-	if (ike != NULL) {
-		switch (ike->sa.st_sa_role) {
-		case SA_INITIATOR:
-			hdr.isa_flags |= ISAKMP_FLAGS_v2_IKE_I;
-			break;
-		case SA_RESPONDER:
-			break;
-		default:
-			bad_case(ike->sa.st_sa_role);
-		}
-	}
-
-	/*
-	 * R(Responder) flag
-	 *
-	 * If there's no MD, then this must be a new request -
-	 * R(Responder) flag clear.
-	 *
-	 * If there is an MD, and it contains a message request, then
-	 * this end must be sending a response - R(Responder) flag
-	 * set.
-	 *
-	 * If there is an MD, and it contains a message response, then
-	 * the caller is trying to respond to a response (or someone's
-	 * been faking MDs), which is pretty messed up.
-	 */
-	if (md != NULL) {
-		switch (md->message_role) {
-		case MESSAGE_REQUEST:
-			hdr.isa_flags |= ISAKMP_FLAGS_v2_MSG_R;
-			break;
-		case MESSAGE_RESPONSE:
-			PEXPECT_LOG("trying to respond to a message response%s", "");
-			return empty_pbs;
-		default:
-			bad_case(MESSAGE_RESPONSE);
-		}
-	}
-
-	/*
-	 * SPI (aka cookies).
-	 */
-	if (ike != NULL) {
-		/*
-		 * Note that when the original initiator sends the
-		 * SA_INIT request, the still zero RCOOKIE will be
-		 * copied.
-		 */
-		memcpy(hdr.isa_icookie, ike->sa.st_icookie, COOKIE_SIZE);
-		memcpy(hdr.isa_rcookie, ike->sa.st_rcookie, COOKIE_SIZE);
-	} else {
-		/*
-		 * Not that when responding to an SA_INIT with an
-		 * error notification (hence no state), the copied
-		 * RCOOKIE will (should be?).
-		 */
-		passert(md != NULL);
-		memcpy(hdr.isa_icookie, md->hdr.isa_icookie, COOKIE_SIZE);
-		memcpy(hdr.isa_rcookie, md->hdr.isa_rcookie, COOKIE_SIZE);
-	}
-
-	/*
-	 * Message ID
-	 *
-	 * If there's a message digest (MD) (presumably containing a
-	 * message request) then this must be a response - use the
-	 * message digest's message ID.  A better choice should be
-	 * .st_msgid_lastrecv (or .st_msgid_lastrecv+1), but it isn't
-	 * clear if/when that value is updated.
-	 *
-	 * If it isn't a response then use the IKE SA's
-	 * .st_msgid_nextuse.  The caller still needs to both
-	 * increment .st_msgid_nextuse (can't do this until the packet
-	 * is finished) and update .st_msgid (only caller knows if
-	 * this is for the IKE SA or a CHILD SA).
-	 */
-	if (md != NULL) {
-		hdr.isa_msgid = htonl(md->msgid_received);
-	} else {
-		passert(ike != NULL);
-		hdr.isa_msgid = htonl(ike->sa.st_msgid_nextuse);
-	}
-
-	return open_output_struct_pbs(reply, &hdr, &isakmp_hdr_desc);
+	return true;
 }
 
 /*
@@ -402,11 +248,35 @@ pb_stream open_v2_message(pb_stream *reply,
  *
  */
 
-void send_v2_notification_from_state(struct state *pst, struct msg_digest *md,
-				     v2_notification_t ntype,
-				     chunk_t *ndata)
+/*
+ * This short/sharp notification is always tied to the IKE SA.
+ *
+ * For a CREATE_CHILD_SA, things have presumably screwed up so badly
+ * that the larval child state is deleted.
+ *
+ * XXX: suspect calls to this function should be replaced by something
+ * like record_v2N_spi_response_from_state() - so that the response is
+ * always saved in the state and re-transmits can be handled
+ * correctly.
+ */
+
+void send_v2N_spi_response_from_state(struct ike_sa *ike,
+				      struct msg_digest *md,
+				      enum ikev2_sec_proto_id protoid,
+				      ipsec_spi_t *spi,
+				      v2_notification_t ntype,
+				      const chunk_t *ndata /* optional */)
 {
-	passert(md != NULL); /* always a reply */
+	/*
+	 * The caller must have computed DH and SKEYSEED; but may not
+	 * have authenticated (i.e., don't assume that the IKE SA has
+	 * "established").
+	 */
+	if (!pexpect(ike->sa.hidden_variables.st_skeyid_calculated)) {
+		return;
+	}
+
+	passert(v2_msg_role(md) == MESSAGE_REQUEST); /* always responding */
 	const char *const notify_name = enum_short_name(&ikev2_notify_names, ntype);
 
 	enum isakmp_xchg_types exchange_type = md->hdr.isa_xchg;
@@ -414,16 +284,16 @@ void send_v2_notification_from_state(struct state *pst, struct msg_digest *md,
 
 	ipstr_buf b;
 	libreswan_log("responding to %s message (ID %u) from %s:%u with encrypted notification %s",
-		      exchange_name, md->msgid_received,
-		      sensitive_ipstr(&pst->st_remoteaddr, &b),
-		      pst->st_remoteport,
+		      exchange_name, md->hdr.isa_msgid,
+		      sensitive_ipstr(&ike->sa.st_remoteaddr, &b),
+		      ike->sa.st_remoteport,
 		      notify_name);
 
 	/*
 	 * For encrypted messages, the EXCHANGE TYPE can't be SA_INIT.
 	 */
 	switch (exchange_type) {
-	case ISAKMP_v2_SA_INIT:
+	case ISAKMP_v2_IKE_SA_INIT:
 		PEXPECT_LOG("exchange type %s invalid for encrypted notification",
 			    exchange_name);
 		return;
@@ -435,46 +305,63 @@ void send_v2_notification_from_state(struct state *pst, struct msg_digest *md,
 	pb_stream reply = open_out_pbs("encrypted notification",
 				       buf, sizeof(buf));
 
-	pb_stream rbody = open_v2_message(&reply, ike_sa(pst), md,
+	pb_stream rbody = open_v2_message(&reply, ike,
+					  md /* response */,
 					  exchange_type);
 	if (!pbs_ok(&rbody)) {
 		libreswan_log("error initializing hdr for encrypted notification");
 		return;
 	}
 
-	struct v2sk_payload sk = open_v2sk_payload(&rbody, ike_sa(pst));
+	v2SK_payload_t sk = open_v2SK_payload(&rbody, ike);
 	if (!pbs_ok(&sk.pbs)) {
 		return;
 	}
 
 	/* actual data */
 
+	/*
+	 * 3.10.  Notify Payload: Of the notifications defined in this
+	 * document, the SPI is included only with INVALID_SELECTORS,
+	 * REKEY_SA, and CHILD_SA_NOT_FOUND.
+	*/
 	switch (ntype) {
-	case v2N_INVALID_SELECTORS:	/* ??? we never actually generate this */
-	case v2N_REKEY_SA:	/* never follows this path */
-	case v2N_CHILD_SA_NOT_FOUND:
-		DBGF(DBG_MASK, "notification %s needs SPI!", notify_name);
-		/* ??? how can we figure out the protocol and SPI? */
-		if (!ship_v2N(ISAKMP_NEXT_v2NONE,
-			      build_ikev2_critical(false),
-			      PROTO_v2_RESERVED, &empty_chunk,
-			      ntype, ndata, &sk.pbs)) {
-			return;
-		}
-		break;
+	case v2N_INVALID_SELECTORS:
+		/*
+		 * MAY be sent in an IKE INFORMATIONAL exchange when a
+		 * node receives an ESP or AH packet whose selectors
+		 * do not match those of the SA on which it was
+		 * delivered (and that caused the packet to be
+		 * dropped).  The Notification Data contains the start
+		 * of the offending packet (as in ICMP messages) and
+		 * the SPI field of the notification is set to match
+		 * the SPI of the Child SA.
+		*/
+		PEXPECT_LOG("trying to send unimplemented %s notification",
+			    notify_name);
+		return;
+	case v2N_REKEY_SA:
+		PEXPECT_LOG("%s notification cannot be part of a response",
+			    notify_name);
+		return;
 	default:
-		if (!ship_v2Nsp(ISAKMP_NEXT_v2NONE, ntype, ndata, &sk.pbs))
-			return;
 		break;
 	}
 
-	if (!close_v2sk_payload(&sk)) {
+	pb_stream n_pbs;
+	if (!emit_v2Nsa_pl(ntype, protoid, spi, &sk.pbs, &n_pbs) ||
+	    (ndata != NULL && !out_chunk(*ndata, &n_pbs, "Notify data"))) {
+		return;
+	}
+	close_output_pbs(&n_pbs);
+
+	if (!close_v2SK_payload(&sk)) {
 		return;
 	}
 	close_output_pbs(&rbody);
 	close_output_pbs(&reply);
 
-	stf_status ret = encrypt_v2sk_payload(&sk);
+	stf_status ret = encrypt_v2SK_payload(&sk);
 	if (ret != STF_OK) {
 		libreswan_log("error encrypting notify message");
 		return;
@@ -485,57 +372,87 @@ void send_v2_notification_from_state(struct state *pst, struct msg_digest *md,
 	 * state.  This notification is fire-and-forget (not a proper
 	 * exchange, one with retrying).  So we need not preserve the
 	 * packet we are sending.
+	 *
+	 * XXX: this sounds wrong!  Integrity has been established so
+	 * the outgoing packet should be retained and message counters
+	 * updated.  If ST is going to be 'deleted', then, wouldn't it
+	 * be better to have it linger a little so it can handle
+	 * duplicates cleanly.
 	 */
-	send_chunk_using_state(pst, "v2 notify", pbs_as_chunk(&reply));
+	send_chunk_using_state(&ike->sa, "v2 notify", same_out_pbs_as_chunk(&reply));
 	pstat(ikev2_sent_notifies_e, ntype);
 }
 
-void send_v2_notification_from_md(struct msg_digest *md,
+void send_v2N_response_from_state(struct ike_sa *ike,
+				  struct msg_digest *md,
 				  v2_notification_t ntype,
-				  chunk_t *ndata)
+				  const chunk_t *ndata /* optional */)
 {
-	const char *const notify_name = enum_short_name(&ikev2_notify_names, ntype);
+	send_v2N_spi_response_from_state(ike, md, PROTO_v2_RESERVED, NULL/*SPI*/,
+					 ntype, ndata);
+}
 
+/*
+ * This is called with a pretty messed up MD so trust nothing.  For
+ * instance when the version number is wrong.
+ */
+void send_v2N_response_from_md(struct msg_digest *md,
+			       v2_notification_t ntype,
+			       const chunk_t *ndata)
+{
 	passert(md != NULL); /* always a response */
+
+	const char *const notify_name = enum_short_name(&ikev2_notify_names, ntype);
+	passert(notify_name != NULL); /* must be known */
+
 	enum isakmp_xchg_types exchange_type = md->hdr.isa_xchg;
-	const char *const exchange_name = enum_short_name(&ikev2_exchange_names, exchange_type);
+	const char *exchange_name = enum_short_name(&ikev2_exchange_names, exchange_type);
+	if (exchange_name == NULL) {
+		/* when responding to crud, name may not be known */
+		exchange_name = "UNKNOWN";
+		dbg("message request contains unknown exchange type %d",
+		    exchange_type);
+	}
 
 	ipstr_buf b;
-	libreswan_log("responding to %s message (ID %u) from %s:%u with unencrypted notification %s",
-		      exchange_name, md->msgid_received,
+	libreswan_log("responding to %s (%d) message (Message ID %u) from %s:%u with unencrypted notification %s",
+		      exchange_name, exchange_type,
+		      md->hdr.isa_msgid,
 		      sensitive_ipstr(&md->sender, &b),
 		      hportof(&md->sender),
 		      notify_name);
 
 	/*
-	 * For unencrypted messages, the EXCHANGE TYPE can only be
-	 * INIT or AUTH (if DH fails, AUTH gets an unencrypted
-	 * response).
+	 * Normally an unencrypted response is only valid for
+	 * IKE_SA_INIT or IKE_AUTH (when DH fails).  However "1.5.
+	 * Informational Messages outside of an IKE SA" says to
+	 * respond to other crud using the initiator's exchange type
+	 * and Message ID and an unencrypted response.
 	 */
 	switch (exchange_type) {
-	case ISAKMP_v2_SA_INIT:
-	case ISAKMP_v2_AUTH:
+	case ISAKMP_v2_IKE_SA_INIT:
+	case ISAKMP_v2_IKE_AUTH:
 		break;
 	default:
-		PEXPECT_LOG("exchange type %s invalid for unencrypted notification",
-			    exchange_name);
-		return;
+		dbg("normally exchange type %s is encrypted", exchange_name);
 	}
 
 	uint8_t buf[MIN_OUTPUT_UDP_SIZE];
 	pb_stream reply = open_out_pbs("unencrypted notification",
 				       buf, sizeof(buf));
-	pb_stream rbody = open_v2_message(&reply, NULL, md, exchange_type);
+	pb_stream rbody = open_v2_message(&reply, NULL/*no state*/,
+					  md /* response */,
+					  exchange_type);
 	if (!pbs_ok(&rbody)) {
 		PEXPECT_LOG("error building header for unencrypted %s %s notification with message ID %u",
-			    exchange_name, notify_name, md->msgid_received);
+			    exchange_name, notify_name, md->hdr.isa_msgid);
 		return;
 	}
 
 	/* build and add v2N payload to the packet */
-	if (!ship_v2Nsp(ISAKMP_NEXT_v2NONE, ntype, ndata, &rbody)) {
+	if (!emit_v2Nchunk(ntype, ndata, &rbody)) {
 		PEXPECT_LOG("error building unencrypted %s %s notification with message ID %u",
-			    exchange_name, notify_name, md->msgid_received);
+			    exchange_name, notify_name, md->hdr.isa_msgid);
 		return;
 	}
 
@@ -543,30 +460,13 @@ void send_v2_notification_from_md(struct msg_digest *md,
 	close_output_pbs(&reply);
 
 	/*
-	 * The notification is piggybacked on the existing parent state.
-	 * This notification is fire-and-forget (not a proper exchange,
-	 * one with retrying).  So we need not preserve the packet we
-	 * are sending.
+	 * This notification is fire-and-forget (not a proper
+	 * exchange, one with retrying) so it is not saved.
 	 */
 	send_chunk("v2 notify", SOS_NOBODY, md->iface, md->sender,
-		   pbs_as_chunk(&reply));
+		   same_out_pbs_as_chunk(&reply));
 
 	pstat(ikev2_sent_notifies_e, ntype);
-}
-
-void send_v2_notification_invalid_ke(struct msg_digest *md,
-				     const struct oakley_group_desc *group)
-{
-	DBG(DBG_CONTROL, {
-		DBG_log("sending INVALID_KE back with %s(%d)",
-			group->common.name, group->group);
-	});
-	/* convert group to a raw buffer */
-	const uint16_t gr = htons(group->group);
-	chunk_t nd;
-	setchunk(nd, (void*)&gr, sizeof(gr));
-
-	send_v2_notification_from_md(md, v2N_INVALID_KE_PAYLOAD, &nd);
 }
 
 /*
@@ -579,7 +479,7 @@ void send_v2_notification_invalid_ke(struct msg_digest *md,
  * Deleting an IKE SA is a bigger deal than deleting an IPsec SA.
  */
 
-void send_v2_delete(struct state *const st)
+void record_v2_delete(struct state *const st)
 {
 	struct ike_sa *ike = ike_sa(st);
 	if (ike == NULL) {
@@ -591,13 +491,14 @@ void send_v2_delete(struct state *const st)
 	uint8_t buf[MIN_OUTPUT_UDP_SIZE];
 	pb_stream packet = open_out_pbs("informational exchange delete request",
 					buf, sizeof(buf));
-	pb_stream rbody = open_v2_message(&packet, ike, NULL,
+	pb_stream rbody = open_v2_message(&packet, ike,
+					  NULL /* request */,
 					  ISAKMP_v2_INFORMATIONAL);
 	if (!pbs_ok(&packet)) {
 		return;
 	}
 
-	struct v2sk_payload sk = open_v2sk_payload(&rbody, ike);
+	v2SK_payload_t sk = open_v2SK_payload(&rbody, ike);
 	if (!pbs_ok(&sk.pbs)) {
 		return;
 	}
@@ -640,39 +541,32 @@ void send_v2_delete(struct state *const st)
 		close_output_pbs(&del_pbs);
 	}
 
-	if (!close_v2sk_payload(&sk)) {
+	if (!close_v2SK_payload(&sk)) {
 		return;
 	}
 	close_output_pbs(&rbody);
 	close_output_pbs(&packet);
 
-	stf_status ret = encrypt_v2sk_payload(&sk);
+	stf_status ret = encrypt_v2SK_payload(&sk);
 	if (ret != STF_OK) {
 		libreswan_log("error encrypting notify message");
 		return;
 	}
 
-	record_and_send_v2_ike_msg(st, &packet,
-				   "packet for ikev2 delete informational");
-
-	/* increase message ID for next delete message */
-	/* ikev2_update_msgid_counters need an md */
-	ike->sa.st_msgid_nextuse++;
-	st->st_msgid = htonl(ike->sa.st_msgid_nextuse);
+	record_outbound_ike_msg(st, &packet, "packet for ikev2 delete informational");
 }
 
 /*
  * Construct and send an informational request.
  *
- * XXX: This and send_v2_delete() should be merged.  However, there
- * are annoying differences.  For instance, send_v2_delete() updates
+ * XXX: This and record_v2_delete() should be merged.  However, there
+ * are annoying differences.  For instance, record_v2_delete() updates
  * st->st_msgid but the below doesn't.
  */
-stf_status send_v2_informational_request(const char *name,
-					 struct state *st,
-					 struct ike_sa *ike,
-					 stf_status (*payloads)(struct state *st,
-								pb_stream *pbs))
+stf_status record_v2_informational_request(const char *name,
+					   struct ike_sa *ike,
+					   struct state *sender,
+					   payload_master_t *payloads)
 {
 	/*
 	 * Buffer in which to marshal our informational message.  We
@@ -685,131 +579,59 @@ stf_status send_v2_informational_request(const char *name,
 		return STF_INTERNAL_ERROR;
 	}
 
-	pb_stream message = open_v2_message(&packet, ike, NULL,
+	pb_stream message = open_v2_message(&packet, ike,
+					    NULL /* request */,
 					    ISAKMP_v2_INFORMATIONAL);
 	if (!pbs_ok(&message)) {
 		return STF_INTERNAL_ERROR;
 	}
 
-	struct v2sk_payload sk = open_v2sk_payload(&message, ike);
-	if (!pbs_ok(&sk.pbs)) {
-		return STF_INTERNAL_ERROR;
-	}
-
-	if (payloads != NULL) {
-		stf_status e = payloads(st, &sk.pbs);
-		if (e != STF_OK) {
-			return  e;
-		}
-	}
-
-	if (!close_v2sk_payload(&sk)) {
+	v2SK_payload_t sk = open_v2SK_payload(&message, ike);
+	if (!pbs_ok(&sk.pbs) ||
+	    (payloads != NULL && !payloads(sender, &sk.pbs)) ||
+	    !close_v2SK_payload(&sk)) {
 		return STF_INTERNAL_ERROR;
 	}
 	close_output_pbs(&message);
 	close_output_pbs(&packet);
 
-	stf_status ret = encrypt_v2sk_payload(&sk);
+	stf_status ret = encrypt_v2SK_payload(&sk);
 	if (ret != STF_OK) {
 		return ret;
 	}
 
-	/* cannot use ikev2_update_msgid_counters - no md here */
-	/* But we know we are the initiator for thie exchange */
-	ike->sa.st_msgid_nextuse += 1;
+	/*
+	 * cannot use ikev2_update_msgid_counters - no md here
+	 *
+	 * XXX: Record the outbound message in the CHILD SA.  There's
+	 * code in record_outbound_ike_msg() that updates
+	 * .st_last_liveness and if that's IKE then the IKE SA never
+	 * times out - any message updates the IKE timer making the
+	 * logic conclude that all is well!  Surely this is wrong!  Or
+	 * perhaps this some sort of variable abuse where for CHILD SA
+	 * it is last outgoing, and for IKE it is last incomming?
+	 *
+	 * XXX: If this is the IKE SA responder sending out a request
+	 * (so Message ID is 0) things get really screwed up.  The
+	 * first response (Message ID is 0) will be dropped because
+	 * the message routing code will find the CHILD SA (it has a
+	 * default msgid==0) and then discover that there's no
+	 * handler.  The second and further responses will make it
+	 * through, but only because there's fall back logic to route
+	 * the message to the IKE SA when there's no child.
+	 * Hopefully, by the time you read this, these bugs will have
+	 * been fixed.
+	 */
+	msgid_t new_msgid = ike->sa.st_msgid_nextuse;
+	msgid_t new_nextuse = ike->sa.st_msgid_nextuse + 1;
+	dbg("Message ID: IKE #%lu sender #%lu in %s record 'n' send notify request so forcing IKE nextuse="PRI_MSGID"->"PRI_MSGID" and IKE msgid="PRI_MSGID"->"PRI_MSGID,
+	    ike->sa.st_serialno, sender->st_serialno, __func__,
+	    ike->sa.st_msgid_nextuse, new_nextuse,
+	    ike->sa.st_msgid, new_msgid);
+	ike->sa.st_msgid_nextuse = new_nextuse;
+	ike->sa.st_msgid = new_msgid;
 
 	ike->sa.st_pend_liveness = TRUE; /* we should only do this when dpd/liveness is active? */
-	record_and_send_v2_ike_msg(st, &packet, name);
-
+	record_outbound_ike_msg(sender, &packet, name);
 	return STF_OK;
-}
-
-struct v2sk_payload open_v2sk_payload(pb_stream *container,
-				      struct ike_sa *ike)
-{
-	static const struct v2sk_payload empty_sk;
-	struct v2sk_payload sk = {
-		.ike = ike,
-	};
-
-	/* insert an Encryption payload header */
-
-	struct ikev2_generic e = {
-		.isag_length = 0, /* filled in later */
-		.isag_critical = build_ikev2_critical(false),
-	};
-	if (!out_struct(&e, &ikev2_sk_desc, container, &sk.pbs)) {
-		libreswan_log("error initializing SK header for encrypted %s message",
-			      container->name);
-		return empty_sk;
-	}
-
-	/* insert IV */
-
-	sk.iv = sk.pbs.cur;
-	passert(sk.pbs.cur <= sk.iv);
-	if (!emit_wire_iv(&ike->sa, &sk.pbs)) {
-		libreswan_log("error initializing IV for encrypted %s message",
-			      container->name);
-		return empty_sk;
-	}
-
-	/* save the start of cleartext proper */
-
-	sk.cleartext = sk.pbs.cur;
-	passert(sk.iv <= sk.cleartext);
-	passert(sk.pbs.container->name == container->name);
-
-	return sk;
-}
-
-bool close_v2sk_payload(struct v2sk_payload *sk)
-{
-	/* padding + pad-length */
-
-	size_t padding;
-	if (sk->ike->sa.st_oakley.ta_encrypt->pad_to_blocksize) {
-		const size_t blocksize = sk->ike->sa.st_oakley.ta_encrypt->enc_blocksize;
-		padding = pad_up(sk->pbs.cur - sk->cleartext, blocksize);
-		if (padding == 0) {
-			padding = blocksize;
-		}
-	} else {
-		padding = 1;
-	}
-	DBG(DBG_EMITTING,
-	    DBG_log("adding %zd bytes of padding (including 1 byte padding-length)",
-		    padding));
-	char b[MAX_CBC_BLOCK_SIZE];
-	passert(sizeof(b) >= padding);
-	for (unsigned i = 0; i < padding; i++) {
-		b[i] = i;
-	}
-	if (!out_raw(b, padding, &sk->pbs, "padding and length")) {
-		libreswan_log("error initializing padding for encrypted %s payload",
-			      sk->pbs.container->name);
-		return false;
-	}
-
-	/* integrity checksum data */
-
-	sk->integrity = ikev2_authloc(&sk->ike->sa, &sk->pbs);
-	passert(sk->cleartext <= sk->integrity);
-	if (sk->integrity == NULL) {
-		libreswan_log("error initializing integrity checksum for encrypted %s payload",
-			      sk->pbs.container->name);
-		return false;
-	}
-
-	/* close the SK payload */
-
-	close_output_pbs(&sk->pbs);
-	return true;
-}
-
-stf_status encrypt_v2sk_payload(struct v2sk_payload *sk)
-{
-	return ikev2_encrypt_msg(sk->ike, sk->pbs.container->start,
-				 sk->iv, sk->cleartext,
-				 sk->integrity);
 }

@@ -9,12 +9,12 @@
  * Copyright (C) 2008 Ilia Sotnikov
  * Copyright (C) 2009 Seong-hun Lim
  * Copyright (C) 2008-2009 David McCullough <david_mccullough@securecomputing.com>
- * Copyright (C) 2010-2013 Tuomo Soini <tis@foobar.fi>
+ * Copyright (C) 2010-2019 Tuomo Soini <tis@foobar.fi>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013 Antony Antony <antony@phenome.org>
  * Copyright (C) 2013 Wolfgang Nothdurft <wolfgang@linogate.de>
- * Copyright (C) 2013-2018 Paul Wouters <pwouters@redhat.com>
- * Copyright (C) 2017 Andrew Cagney
+ * Copyright (C) 2013-2019 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2017-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -55,7 +55,7 @@
 #include "demux.h" /* needs packet.h */
 #include "kernel.h" /* needs connections.h */
 #include "log.h"
-#include "cookie.h"
+#include "ike_spi.h"
 #include "server.h"
 #include "spdb.h"
 #include "timer.h"
@@ -107,10 +107,9 @@ void main_outI1(fd_t whack_sock,
 {
 	struct state *st;
 
-	st = new_state();
+	st = new_v1_istate();
 
 	/* set up new state */
-	get_cookie(TRUE, st->st_icookie, &c->spd.that.host_addr);
 	initialize_new_state(st, c, policy, try, whack_sock);
 	change_state(st, STATE_MAIN_I1);
 
@@ -148,7 +147,7 @@ void main_outI1(fd_t whack_sock,
 			.isa_np = ISAKMP_NEXT_SA,
 			.isa_xchg = ISAKMP_XCHG_IDPROT,
 		};
-		memcpy(hdr.isa_icookie, st->st_icookie, COOKIE_SIZE);
+		hdr.isa_ike_initiator_spi = st->st_ike_spis.initiator;
 		/* R-cookie, flags and MessageID are left zero */
 
 		if (IMPAIR(SEND_BOGUS_ISAKMP_FLAG)) {
@@ -205,7 +204,7 @@ void main_outI1(fd_t whack_sock,
 		"reply packet for main_outI1");
 
 	delete_event(st);
-	start_retransmits(st, EVENT_v1_RETRANSMIT);
+	start_retransmits(st);
 
 	if (predecessor != NULL) {
 		update_pending(predecessor, st);
@@ -242,13 +241,13 @@ static void main_mode_hash_body(struct state *st,
 	if (hashi) {
 		hmac_update_chunk(ctx, st->st_gi);
 		hmac_update_chunk(ctx, st->st_gr);
-		hmac_update(ctx, st->st_icookie, COOKIE_SIZE);
-		hmac_update(ctx, st->st_rcookie, COOKIE_SIZE);
+		hmac_update(ctx, st->st_ike_spis.initiator.bytes, COOKIE_SIZE);
+		hmac_update(ctx, st->st_ike_spis.responder.bytes, COOKIE_SIZE);
 	} else {
 		hmac_update_chunk(ctx, st->st_gr);
 		hmac_update_chunk(ctx, st->st_gi);
-		hmac_update(ctx, st->st_rcookie, COOKIE_SIZE);
-		hmac_update(ctx, st->st_icookie, COOKIE_SIZE);
+		hmac_update(ctx, st->st_ike_spis.responder.bytes, COOKIE_SIZE);
+		hmac_update(ctx, st->st_ike_spis.initiator.bytes, COOKIE_SIZE);
 	}
 
 	DBG(DBG_CRYPT,
@@ -398,7 +397,9 @@ notification_t accept_v1_nonce(struct msg_digest *md, chunk_t *dest,
 		       name, IKEv1_MINIMUM_NONCE_SIZE, IKEv1_MAXIMUM_NONCE_SIZE);
 		return PAYLOAD_MALFORMED; /* ??? */
 	}
-	clonereplacechunk(*dest, nonce_pbs->cur, len, "nonce");
+	free_chunk_contents(dest);
+	*dest = clone_in_pbs_left_as_chunk(nonce_pbs, "nonce");
+	passert(len == dest->len);
 	return NOTHING_WRONG;
 }
 
@@ -414,12 +415,11 @@ bool ikev1_encrypt_message(pb_stream *pbs, struct state *st)
 	uint8_t *enc_start = pbs->start + sizeof(struct isakmp_hdr);
 	size_t enc_len = pbs_offset(pbs) - sizeof(struct isakmp_hdr);
 
-	DBG_cond_dump(DBG_CRYPT | DBG_RAW, "encrypting:", enc_start,
-		enc_len);
-	DBG_cond_dump(DBG_CRYPT | DBG_RAW, "IV:",
-		st->st_new_iv,
-		st->st_new_iv_len);
-	DBG(DBG_CRYPT, DBG_log("unpadded size is: %u", (unsigned int)enc_len));
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump("encrypting:", enc_start, enc_len);
+		DBG_dump("IV:", st->st_new_iv, st->st_new_iv_len);
+		DBG_log("unpadded size is: %u", (unsigned int)enc_len);
+	}
 
 	/*
 	 * Pad up to multiple of encryption blocksize.
@@ -453,7 +453,9 @@ bool ikev1_encrypt_message(pb_stream *pbs, struct state *st)
 				 st->st_new_iv, TRUE);
 
 	update_iv(st);
-	DBG_cond_dump(DBG_CRYPT, "next IV:", st->st_iv, st->st_iv_len);
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump("next IV:", st->st_iv, st->st_iv_len);
+	}
 
 	return TRUE;
 }
@@ -479,7 +481,7 @@ bool ikev1_encrypt_message(pb_stream *pbs, struct state *st)
  */
 bool ikev1_close_message(pb_stream *pbs, const struct state *st)
 {
-	passert(!st->st_ikev2);
+	passert(st->st_ike_version == IKEv1);
 	size_t padding = pad_up(pbs_offset(pbs), 4);
 
 	if (padding == 0) {
@@ -657,7 +659,7 @@ stf_status main_inI1_outR1(struct state *st, struct msg_digest *md)
 
 	/* Set up state */
 	pexpect(st == NULL);
-	md->st = st = new_rstate(md);
+	md->st = st = new_v1_rstate(md);
 
 	passert(!st->st_oakley.doing_xauth);
 
@@ -669,10 +671,7 @@ stf_status main_inI1_outR1(struct state *st, struct msg_digest *md)
 	st->st_policy = c->policy & ~POLICY_IPSEC_MASK;
 	change_state(st, STATE_MAIN_R0);
 
-	memcpy(st->st_icookie, md->hdr.isa_icookie, COOKIE_SIZE);
-	get_cookie(FALSE, st->st_rcookie, &md->sender);
-
-	insert_state(st); /* needs cookies, connection, and msgid (0) */
+	binlog_refresh_state(st);
 
 	merge_quirks(st, md);
 
@@ -692,7 +691,7 @@ stf_status main_inI1_outR1(struct state *st, struct msg_digest *md)
 		libreswan_log("responding to Main Mode from unknown peer %s on port %u",
 			sensitive_ipstr(&c->spd.that.host_addr, &b),
 			hportof(&md->sender));
-		DBG(DBG_CONTROL, DBG_dump("  ICOOKIE-DUMP:", st->st_icookie, COOKIE_SIZE));
+		DBG(DBG_CONTROL, DBG_dump("  ICOOKIE-DUMP:", st->st_ike_spis.initiator.bytes, COOKIE_SIZE));
 	} else {
 		libreswan_log("responding to Main Mode");
 	}
@@ -714,7 +713,7 @@ stf_status main_inI1_outR1(struct state *st, struct msg_digest *md)
 		struct isakmp_hdr hdr = md->hdr;
 
 		hdr.isa_flags = 0; /* clear all flags */
-		memcpy(hdr.isa_rcookie, st->st_rcookie, COOKIE_SIZE);
+		hdr.isa_ike_responder_spi = st->st_ike_spis.responder;
 		hdr.isa_np = ISAKMP_NEXT_SA;
 
 		if (IMPAIR(SEND_BOGUS_ISAKMP_FLAG)) {
@@ -756,8 +755,9 @@ stf_status main_inI1_outR1(struct state *st, struct msg_digest *md)
 		return STF_INTERNAL_ERROR;
 
 	/* save initiator SA for HASH */
-	clonereplacechunk(st->st_p1isa, sa_pd->pbs.start, pbs_room(
-				&sa_pd->pbs), "sa in main_inI1_outR1()");
+	free_chunk_contents(&st->st_p1isa);
+	st->st_p1isa = clone_in_pbs_as_chunk(&sa_pd->pbs,
+					    "sa in main_inI1_outR1()");
 
 	return STF_OK;
 }
@@ -839,7 +839,7 @@ bool ikev1_justship_KE(chunk_t *g,
 	case SEND_EMPTY:
 		libreswan_log("IMPAIR: sending empty KE (g^x)");
 		return ikev1_out_generic_chunk(0, &isakmp_keyex_desc, outs,
-					       empty_chunk, "empty KE");
+					       EMPTY_CHUNK, "empty KE");
 	case SEND_ROOF:
 	default:
 	{
@@ -936,7 +936,7 @@ static stf_status main_inR1_outI2_tail(struct state *st, struct msg_digest *md,
 		return STF_INTERNAL_ERROR;
 
 	/* Reinsert the state, using the responder cookie we just received */
-	rehash_state(st, NULL, md->hdr.isa_rcookie);
+	rehash_state(st, &md->hdr.isa_ike_responder_spi);
 
 	return STF_OK;
 }
@@ -975,8 +975,10 @@ static void main_inI2_outR2_continue1(struct state *st,
 stf_status main_inI2_outR2(struct state *st, struct msg_digest *md)
 {
 	/* KE in */
-	RETURN_STF_FAILURE(accept_KE(&st->st_gi, "Gi", st->st_oakley.ta_dh,
-				     &md->chain[ISAKMP_NEXT_KE]->pbs));
+	if (!accept_KE(&st->st_gi, "Gi", st->st_oakley.ta_dh,
+		       md->chain[ISAKMP_NEXT_KE])) {
+		return STF_FAIL + INVALID_KEY_INFORMATION;
+	}
 
 	/* Ni in */
 	RETURN_STF_FAILURE(accept_v1_nonce(md, &st->st_ni, "Ni"));
@@ -1121,7 +1123,7 @@ stf_status main_inI2_outR2_continue1_tail(struct state *st, struct msg_digest *m
 				free_generalNames(ca, FALSE);
 			} else {
 				if (!ikev1_build_and_ship_CR(CERT_X509_SIGNATURE,
-							empty_chunk,
+							EMPTY_CHUNK,
 							&rbody,
 							ISAKMP_NEXT_NONE))
 					return STF_INTERNAL_ERROR;
@@ -1161,7 +1163,7 @@ stf_status main_inI2_outR2_continue1_tail(struct state *st, struct msg_digest *m
 				     st, ORIGINAL_RESPONDER, st->st_oakley.ta_dh);
 
 		/* we are calculating in the background, so it doesn't count */
-		DBG(DBG_CONTROLMORE, DBG_log("#%lu %s:%u st->st_calculating = FALSE;", st->st_serialno, __FUNCTION__, __LINE__));
+		DBG(DBG_CONTROLMORE, DBG_log("#%lu %s:%u st->st_calculating = FALSE;", st->st_serialno, __func__, __LINE__));
 		st->st_v1_offloaded_task_in_background = true;
 	}
 	return STF_OK;
@@ -1416,9 +1418,9 @@ static stf_status main_inR2_outI3_continue_tail(struct msg_digest *md,
 
 		if (!out_struct(&isan, &isakmp_notification_desc, rbody,
 					&notify_pbs) ||
-		    !out_raw(st->st_icookie, COOKIE_SIZE, &notify_pbs,
+		    !out_raw(st->st_ike_spis.initiator.bytes, COOKIE_SIZE, &notify_pbs,
 				"notify icookie") ||
-		    !out_raw(st->st_rcookie, COOKIE_SIZE, &notify_pbs,
+		    !out_raw(st->st_ike_spis.responder.bytes, COOKIE_SIZE, &notify_pbs,
 				"notify rcookie"))
 			return STF_INTERNAL_ERROR;
 
@@ -1460,9 +1462,11 @@ static void main_inR2_outI3_continue(struct state *st,
 stf_status main_inR2_outI3(struct state *st, struct msg_digest *md)
 {
 	/* KE in */
-	RETURN_STF_FAILURE(accept_KE(&st->st_gr, "Gr",
-				     st->st_oakley.ta_dh,
-				     &md->chain[ISAKMP_NEXT_KE]->pbs));
+	if (!accept_KE(&st->st_gr, "Gr",
+		       st->st_oakley.ta_dh,
+		       md->chain[ISAKMP_NEXT_KE])) {
+		return STF_FAIL + INVALID_KEY_INFORMATION;
+	}
 
 	/* Nr in */
 	RETURN_STF_FAILURE(accept_v1_nonce(md, &st->st_nr, "Nr"));
@@ -1501,7 +1505,7 @@ stf_status oakley_id_and_auth(struct msg_digest *md, bool initiator,
 	 * process any CERT payloads if aggrmode
 	 */
 	if (!st->st_peer_alt_id) {
-		ret = ike_decode_cert(md);
+		ret = v1_process_certs(md);
 
 		if (ret != LSW_CERT_NONE && ret != LSW_CERT_ID_OK)
 			return STF_FAIL + INVALID_ID_INFORMATION;
@@ -1526,10 +1530,19 @@ stf_status oakley_id_and_auth(struct msg_digest *md, bool initiator,
 	{
 		pb_stream *const hash_pbs = &md->chain[ISAKMP_NEXT_HASH]->pbs;
 
+		/*
+		 * XXX: looks a lot like the hack CHECK_QUICK_HASH(),
+		 * except this one doesn't return.  Strong indicator
+		 * that CHECK_QUICK_HASH should be changed to a
+		 * function and also not magically force caller to
+		 * return.
+		 */
 		if (pbs_left(hash_pbs) != hash_len ||
 			!memeq(hash_pbs->cur, hash_val, hash_len)) {
-			DBG_cond_dump(DBG_CRYPT, "received HASH:",
-				hash_pbs->cur, pbs_left(hash_pbs));
+			if (DBGP(DBG_CRYPT)) {
+				DBG_dump("received HASH:",
+					 hash_pbs->cur, pbs_left(hash_pbs));
+			}
 			loglog(RC_LOG_SERIOUS,
 				"received Hash Payload does not match computed value");
 			/* XXX Could send notification back */
@@ -1745,19 +1758,16 @@ stf_status main_inI3_outR3(struct state *st, struct msg_digest *md)
 		}
 	}
 
-	if (c->policy & POLICY_IKEV2_ALLOW) {
-		if (!out_vid(ISAKMP_NEXT_NONE, &rbody, VID_MISC_IKEv2))
-			return STF_INTERNAL_ERROR;
-	}
-
 	/* encrypt message, sans fixed part of header */
 
 	if (!ikev1_encrypt_message(&rbody, st))
 		return STF_INTERNAL_ERROR; /* ??? we may be partly committed */
 
 	/* Last block of Phase 1 (R3), kept for Phase 2 IV generation */
-	DBG_cond_dump(DBG_CRYPT, "last encrypted block of Phase 1:",
-		st->st_new_iv, st->st_new_iv_len);
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump("last encrypted block of Phase 1:",
+			 st->st_new_iv, st->st_new_iv_len);
+	}
 
 	set_ph1_iv_from_new(st);
 
@@ -1848,27 +1858,6 @@ stf_status main_inR3(struct state *st, struct msg_digest *md)
 
 	update_iv(st); /* finalize our Phase 1 IV */
 
-	if (md->ikev2) {
-		/*
-		 * We cannot use POLICY_IKEV2_ALLOW here, since this will
-		 * cause two IKEv2 capable but not ikev2= configured endpoints
-		 * to falsely detect a bid down attack.
-		 * Also, only the side that proposed IKEv2 can figure out there
-		 * was a bid down attack to begin with. The side that did not propose
-		 * cannot distinguish attack from regular ikev1 operation.
-		 */
-		if (st->st_connection->policy & POLICY_IKEV2_PROPOSE) {
-			libreswan_log(
-				"Bid-down to IKEv1 attack detected, attempting to rekey connection with IKEv2");
-			st->st_connection->failed_ikev2 = FALSE;
-
-			/* schedule an event to do this as soon as possible */
-			md->event_already_set = TRUE;
-			st->st_rekeytov2 = TRUE;
-			event_force(EVENT_SA_REPLACE, st);
-		}
-	}
-
 	return STF_OK;
 }
 
@@ -1897,9 +1886,10 @@ stf_status send_isakmp_notification(struct state *st,
 			.isa_flags = ISAKMP_FLAGS_v1_ENCRYPTION,
 			.isa_msgid = msgid,
 		};
-		memcpy(hdr.isa_icookie, st->st_icookie, COOKIE_SIZE);
-		memcpy(hdr.isa_rcookie, st->st_rcookie, COOKIE_SIZE);
-		passert(out_struct(&hdr, &isakmp_hdr_desc, &reply_stream, &rbody));
+		hdr.isa_ike_initiator_spi = st->st_ike_spis.initiator;
+		hdr.isa_ike_responder_spi = st->st_ike_spis.responder;
+		if (!out_struct(&hdr, &isakmp_hdr_desc, &reply_stream, &rbody))
+			return STF_INTERNAL_ERROR;
 	}
 	/* HASH -- create and note space to be filled later */
 	START_HASH_PAYLOAD(rbody, ISAKMP_NEXT_N);
@@ -1916,9 +1906,9 @@ stf_status send_isakmp_notification(struct state *st,
 		};
 		if (!out_struct(&isan, &isakmp_notification_desc, &rbody,
 					&notify_pbs) ||
-		    !out_raw(st->st_icookie, COOKIE_SIZE, &notify_pbs,
+		    !out_raw(st->st_ike_spis.initiator.bytes, COOKIE_SIZE, &notify_pbs,
 				"notify icookie") ||
-		    !out_raw(st->st_rcookie, COOKIE_SIZE, &notify_pbs,
+		    !out_raw(st->st_ike_spis.responder.bytes, COOKIE_SIZE, &notify_pbs,
 				"notify rcookie"))
 			return STF_INTERNAL_ERROR;
 
@@ -1935,7 +1925,9 @@ stf_status send_isakmp_notification(struct state *st,
 		struct hmac_ctx ctx;
 
 		hmac_init(&ctx, st->st_oakley.ta_prf, st->st_skeyid_a_nss);
-		hmac_update(&ctx, (const u_char *) &msgid, sizeof(msgid_t));
+		passert(sizeof(msgid_t) == sizeof(uint32_t));
+		msgid_t raw_msgid = htonl(msgid);
+		hmac_update(&ctx, (const void *)&raw_msgid, sizeof(raw_msgid));
 		hmac_update(&ctx, r_hash_start, rbody.cur - r_hash_start);
 		hmac_final(r_hashval, &ctx);
 
@@ -1978,6 +1970,7 @@ stf_status send_isakmp_notification(struct state *st,
  * destination, if we care to.
  * Note: some calls are from send_notification_from_md and
  * those calls pass a fake state as sndst.
+ * Note: msgid is in different order here from other calls :/
  */
 static void send_notification(struct state *sndst, notification_t type,
 			struct state *encst,
@@ -1992,7 +1985,7 @@ static void send_notification(struct state *sndst, notification_t type,
 
 	pb_stream r_hdr_pbs;
 	u_char *r_hashval, *r_hash_start;
-	static monotime_t last_malformed;
+	static monotime_t last_malformed = MONOTIME_EPOCH;
 	monotime_t n = mononow();
 
 	r_hashval = NULL;
@@ -2026,8 +2019,10 @@ static void send_notification(struct state *sndst, notification_t type,
 		}
 
 		if (sndst->st_iv_len != 0) {
-			libreswan_DBG_dump("payload malformed.  IV:", sndst->st_iv,
-					sndst->st_iv_len);
+			LSWLOG(buf) {
+				lswlogf(buf, "payload malformed.  IV: ");
+				lswlog_bytes(buf, sndst->st_iv, sndst->st_iv_len);
+			}
 		}
 
 		/*
@@ -2076,9 +2071,9 @@ static void send_notification(struct state *sndst, notification_t type,
 			.isa_flags = encst ? ISAKMP_FLAGS_v1_ENCRYPTION : 0,
 		};
 		if (icookie != NULL)
-			memcpy(hdr.isa_icookie, icookie, COOKIE_SIZE);
+			memcpy(hdr.isa_ike_initiator_spi.bytes, icookie, COOKIE_SIZE);
 		if (rcookie != NULL)
-			memcpy(hdr.isa_rcookie, rcookie, COOKIE_SIZE);
+			memcpy(hdr.isa_ike_responder_spi.bytes, rcookie, COOKIE_SIZE);
 		passert(out_struct(&hdr, &isakmp_hdr_desc, &pbs, &r_hdr_pbs));
 	}
 
@@ -2121,7 +2116,9 @@ static void send_notification(struct state *sndst, notification_t type,
 
 		hmac_init(&ctx, encst->st_oakley.ta_prf,
 			  encst->st_skeyid_a_nss);
-		hmac_update(&ctx, (u_char *) &msgid, sizeof(msgid_t));
+		passert(sizeof(msgid_t) == sizeof(uint32_t));
+		msgid_t raw_msgid = htonl(msgid);
+		hmac_update(&ctx, (const void *)&raw_msgid, sizeof(raw_msgid));
 		hmac_update(&ctx, r_hash_start, r_hdr_pbs.cur - r_hash_start);
 		hmac_final(r_hashval, &ctx);
 
@@ -2173,16 +2170,16 @@ void send_notification_from_state(struct state *st, enum state_kind from_state,
 			return;
 		}
 		send_notification(st, type, p1st, generate_msgid(p1st),
-				st->st_icookie, st->st_rcookie,
+				st->st_ike_spis.initiator.bytes, st->st_ike_spis.responder.bytes,
 				PROTO_ISAKMP);
 	} else if (IS_ISAKMP_ENCRYPTED(from_state)) {
 		send_notification(st, type, st, generate_msgid(st),
-				st->st_icookie, st->st_rcookie,
+				st->st_ike_spis.initiator.bytes, st->st_ike_spis.responder.bytes,
 				PROTO_ISAKMP);
 	} else {
 		/* no ISAKMP SA established - don't encrypt notification */
 		send_notification(st, type, NULL, v1_MAINMODE_MSGID,
-				st->st_icookie, st->st_rcookie,
+				st->st_ike_spis.initiator.bytes, st->st_ike_spis.responder.bytes,
 				PROTO_ISAKMP);
 	}
 }
@@ -2221,7 +2218,7 @@ void send_notification_from_md(struct msg_digest *md, notification_t type)
 
 	update_ike_endpoints(&fake_state, md);
 	send_notification(&fake_state, type, NULL, 0,
-			md->hdr.isa_icookie, md->hdr.isa_rcookie,
+			md->hdr.isa_ike_initiator_spi.bytes, md->hdr.isa_ike_responder_spi.bytes,
 			PROTO_ISAKMP);
 }
 
@@ -2256,7 +2253,7 @@ void send_v1_delete(struct state *st)
 		p1st = find_phase1_state(st->st_connection,
 					ISAKMP_SA_ESTABLISHED_STATES);
 		if (p1st == NULL) {
-			DBGF(DBG_CONTROL, "no Phase 1 state for Delete");
+			dbg("no Phase 1 state for Delete");
 			return;
 		}
 
@@ -2296,8 +2293,8 @@ void send_v1_delete(struct state *st)
 			.isa_msgid = msgid,
 			.isa_flags = ISAKMP_FLAGS_v1_ENCRYPTION,
 		};
-		memcpy(hdr.isa_icookie, p1st->st_icookie, COOKIE_SIZE);
-		memcpy(hdr.isa_rcookie, p1st->st_rcookie, COOKIE_SIZE);
+		hdr.isa_ike_initiator_spi = p1st->st_ike_spis.initiator;
+		hdr.isa_ike_responder_spi = p1st->st_ike_spis.responder;
 		passert(out_struct(&hdr, &isakmp_hdr_desc, &reply_pbs,
 				   &r_hdr_pbs));
 	}
@@ -2321,19 +2318,17 @@ void send_v1_delete(struct state *st)
 		struct isakmp_delete isad = {
 			.isad_doi = ISAKMP_DOI_IPSEC,
 			.isad_np = ISAKMP_NEXT_NONE,
-			.isad_spisize = (2 * COOKIE_SIZE),
+			.isad_spisize = 2 * COOKIE_SIZE,
 			.isad_protoid = PROTO_ISAKMP,
 			.isad_nospi = 1,
 		};
-		u_char isakmp_spi[2 * COOKIE_SIZE];
-
-		memcpy(isakmp_spi, st->st_icookie, COOKIE_SIZE);
-		memcpy(isakmp_spi + COOKIE_SIZE, st->st_rcookie, COOKIE_SIZE);
 
 		passert(out_struct(&isad, &isakmp_delete_desc, &r_hdr_pbs,
 				   &del_pbs));
-		passert(out_raw(&isakmp_spi, (2 * COOKIE_SIZE), &del_pbs,
-				"delete payload"));
+		passert(out_raw(st->st_ike_spis.initiator.bytes, COOKIE_SIZE,
+				&del_pbs, "initiator SPI"));
+		passert(out_raw(st->st_ike_spis.responder.bytes, COOKIE_SIZE,
+				&del_pbs, "responder SPI"));
 		close_output_pbs(&del_pbs);
 	} else {
 		while (ns != said) {
@@ -2347,12 +2342,35 @@ void send_v1_delete(struct state *st)
 				.isad_protoid = ns->proto,
 				.isad_nospi = 1,
 			};
-			passert(out_struct(&isad, &isakmp_delete_desc, &r_hdr_pbs,
-					   &del_pbs));
+
+			if (DBGP(IMPAIR_IKEv1_DEL_WITH_NOTIFY))
+				isad.isad_np = ISAKMP_NEXT_N; /* Notify */
+
+			passert(out_struct(&isad, &isakmp_delete_desc,
+					   &r_hdr_pbs, &del_pbs));
 			passert(out_raw(&ns->spi, sizeof(ipsec_spi_t),
-					&del_pbs,
-					"delete payload"));
+					&del_pbs, "delete payload"));
 			close_output_pbs(&del_pbs);
+
+			if (DBGP(IMPAIR_IKEv1_DEL_WITH_NOTIFY)) {
+				pb_stream cruft_pbs;
+
+				libreswan_log("IMPAIR: adding bogus Notify payload after IKE Delete payload");
+				struct isakmp_notification isan = {
+					.isan_np = ISAKMP_NEXT_NONE,
+					.isan_doi = ISAKMP_DOI_IPSEC,
+					.isan_protoid = PROTO_ISAKMP,
+					.isan_spisize = COOKIE_SIZE * 2,
+					.isan_type = INVALID_PAYLOAD_TYPE,
+				};
+
+				passert(out_struct(&isan, &isakmp_notification_desc, &r_hdr_pbs,
+					&cruft_pbs));
+				passert(out_raw(&ns->spi, sizeof(ipsec_spi_t), &cruft_pbs,
+					"notify payload"));
+				close_output_pbs(&cruft_pbs);
+			}
+
 		}
 	}
 
@@ -2362,7 +2380,9 @@ void send_v1_delete(struct state *st)
 
 		hmac_init(&ctx, p1st->st_oakley.ta_prf,
 			  p1st->st_skeyid_a_nss);
-		hmac_update(&ctx, (u_char *) &msgid, sizeof(msgid_t));
+		passert(sizeof(msgid_t) == sizeof(uint32_t));
+		msgid_t raw_msgid = htonl(msgid);
+		hmac_update(&ctx, (const void *)&raw_msgid, sizeof(raw_msgid));
 		hmac_update(&ctx, r_hash_start, r_hdr_pbs.cur - r_hash_start);
 		hmac_final(r_hashval, &ctx);
 
@@ -2477,18 +2497,16 @@ bool accept_delete(struct msg_digest *md,
 			/*
 			 * ISAKMP
 			 */
-			uint8_t icookie[COOKIE_SIZE];
-			uint8_t rcookie[COOKIE_SIZE];
+			ike_spis_t cookies;
 			struct state *dst;
 
-			if (!in_raw(icookie, COOKIE_SIZE, &p->pbs, "iCookie"))
+			if (!in_raw(&cookies.initiator, COOKIE_SIZE, &p->pbs, "iCookie"))
 				return FALSE;
 
-			if (!in_raw(rcookie, COOKIE_SIZE, &p->pbs, "rCookie"))
+			if (!in_raw(&cookies.responder, COOKIE_SIZE, &p->pbs, "rCookie"))
 				return FALSE;
 
-			dst = find_state_ikev1(icookie, rcookie,
-					v1_MAINMODE_MSGID);
+			dst = find_state_ikev1(&cookies, v1_MAINMODE_MSGID);
 
 			if (dst == NULL) {
 				loglog(RC_LOG_SERIOUS, "ignoring Delete SA payload: ISAKMP SA not found (maybe expired)");
@@ -2556,38 +2574,19 @@ bool accept_delete(struct msg_digest *md,
 					/*
 					 * Last IPsec SA for a permanent
 					 * connection that we have initiated.
-					 * Replace it in a few seconds.
+					 * Replace it.
 					 *
 					 * Useful if the other peer is
 					 * rebooting.
 					 */
-					if (dst->st_event != NULL &&
-					    dst->st_event->ev_type ==
-						  EVENT_SA_REPLACE &&
-					    !monobefore(monotimesum(mononow(),
-						  deltatime(DELETE_SA_DELAY)),
-						dst->st_event->ev_time)) {
-						/*
-						 * Patch from Angus Lees to
-						 * ignore retransmitted
-						 * Delete SA.
-						 */
-						loglog(RC_LOG_SERIOUS,
-							"received Delete SA payload: already replacing IPSEC State #%lu in %ld seconds",
-							dst->st_serialno,
-							(long)deltasecs(monotimediff(
-								dst->st_event->ev_time,
-								mononow())));
-					} else {
-						loglog(RC_LOG_SERIOUS,
-							"received Delete SA payload: replace IPSEC State #%lu now",
-							dst->st_serialno);
-						dst->st_margin = deltatime(0);
-						event_force(EVENT_SA_REPLACE, dst);
-					}
+					loglog(RC_LOG_SERIOUS,
+						"received Delete SA payload: replace IPsec State #%lu now",
+						dst->st_serialno);
+					dst->st_replace_margin = deltatime(0);
+					event_force(EVENT_SA_REPLACE, dst);
 				} else {
 					loglog(RC_LOG_SERIOUS,
-						"received Delete SA(0x%08" PRIx32 ") payload: deleting IPSEC State #%lu",
+						"received Delete SA(0x%08" PRIx32 ") payload: deleting IPsec State #%lu",
 						ntohl(spi),
 						dst->st_serialno);
 					delete_state(dst);
@@ -2596,10 +2595,13 @@ bool accept_delete(struct msg_digest *md,
 				}
 
 				if (rc->newest_ipsec_sa == SOS_NOBODY) {
+					dbg("connection '%s' -POLICY_UP", rc->name);
 					rc->policy &= ~POLICY_UP;
 					if (!shared_phase1_connection(rc)) {
 						flush_pending_by_connection(rc);
+						/* why loop? there can be only one IKE SA, just delete_state(st) ? */
 						delete_states_by_connection(rc, FALSE);
+						md->st = NULL;
 					}
 					reset_cur_connection();
 				}

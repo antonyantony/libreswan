@@ -5,6 +5,7 @@
  * Copyright (C) 1998-2001, 2013 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013 Tuomo Soini <tis@foobar.fi>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -29,6 +30,7 @@ extern void pfree(void *ptr);
 extern void *alloc_bytes(size_t size, const char *name);
 extern void *clone_bytes(const void *orig, size_t size,
 			  const char *name);
+void resize_bytes(void **ptr, size_t new_size);
 
 extern bool leak_detective;
 extern void report_leaks(void);

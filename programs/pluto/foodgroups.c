@@ -2,6 +2,8 @@
  * Copyright (C) 2002  D. Hugh Redelmeier.
  * Copyright (C) 2005 Michael Richardson <mcr@xelerance.com>
  * Copyright (C) 2009-2010 Paul Wouters <paul@xelerance.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 D. Hugh Redelmeier <hugh@mimosa.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -37,6 +39,7 @@
 #include "lex.h"
 #include "log.h"
 #include "whack.h"
+#include "af_info.h"
 
 #include <errno.h>
 
@@ -236,13 +239,10 @@ static void read_foodgroup(struct fg_groups *g)
 						if (r != 0)
 							break;
 
-						if (proto == (*pp)->proto && sport == (*pp)->sport && dport == (*pp)->dport) {
-							/* ??? we know that r == 0: why set it again? */
-							r = 0;
+						if (proto == (*pp)->proto &&
+						    sport == (*pp)->sport &&
+						    dport == (*pp)->dport) {
 							break;
-						} else {
-							/* ??? since we are looping, r's value won't be used */
-							r = 1;
 						}
 					}
 
@@ -466,37 +466,37 @@ void unroute_group(struct connection *c)
 
 void delete_group(const struct connection *c)
 {
-	struct fg_groups *g;
-
-	/* find and remove from groups */
-	{
-		struct fg_groups **pp;
-
-		for (pp = &groups; (g = *pp)->connection != c;
-		     pp = &(*pp)->next)
-			;
-
-		*pp = g->next;
+	/*
+	 * find and remove from groups
+	 */
+	struct fg_groups *g = NULL;
+	for (struct fg_groups **pp = &groups; *pp != NULL; pp = &(*pp)->next) {
+		if ((*pp)->connection == c) {
+			g = *pp;
+			*pp = g->next;
+			break;
+		}
 	}
 
-	/* find and remove from targets */
-	{
-		struct fg_targets **pp;
-
-		for (pp = &targets; *pp != NULL; ) {
+	/*
+	 * find and remove from targets
+	 */
+	if (pexpect(g != NULL)) {
+		struct fg_targets **pp = &targets;
+		while (*pp != NULL) {
 			struct fg_targets *t = *pp;
-
 			if (t->group == g) {
+				/* remove *PP but advance first */
 				*pp = t->next;
 				remove_group_instance(t->group->connection,
 						      t->name);
 				pfree(t);
 				/* pp is ready for next iteration */
 			} else {
+				/* advance PP */
 				pp = &t->next;
 			}
 		}
+		pfree(g);
 	}
-
-	pfree(g);
 }

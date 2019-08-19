@@ -8,7 +8,7 @@
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013,2017 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2015 Antony Antony <antony@phenome.org>
- * Copyright (C) 2017 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2017-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -49,7 +49,6 @@
 #include "lswlog.h"
 
 #include "defs.h"
-#include "cookie.h"
 #include "id.h"
 #include "x509.h"
 #include "certs.h"
@@ -67,7 +66,10 @@
 #include "udpfromto.h"
 
 #include "ip_address.h"
+#include "ip_endpoint.h"
+#include "af_info.h"
 #include "pluto_stats.h"
+#include "ikev2_send.h"
 
 /* This file does basic header checking and demux of
  * incoming packets.
@@ -88,6 +90,8 @@ void init_demux(void)
 
 static struct msg_digest *read_packet(const struct iface_port *ifp)
 {
+	realtime_t md_inception = realnow();
+
 	int packet_len;
 	/* ??? this buffer seems *way* too big */
 	uint8_t bigbuffer[MAX_INPUT_UDP_SIZE];
@@ -185,7 +189,7 @@ static struct msg_digest *read_packet(const struct iface_port *ifp)
 			LSWLOG_ERRNO(errno, buf) {
 				lswlogf(buf, "recvfrom on %s from ",
 					ifp->ip_dev->id_rname);
-				lswlog_ip(buf, &sender);
+				fmt_endpoint(buf, &sender); /* sensitive? */
 				lswlogs(buf, " failed");
 			}
 		}
@@ -204,7 +208,7 @@ static struct msg_digest *read_packet(const struct iface_port *ifp)
 		if (packet_len < (int)sizeof(uint32_t)) {
 			LSWLOG(buf) {
 				lswlogs(buf, "recvfrom ");
-				lswlog_ip(buf, &sender); /* sensitive? */
+				fmt_endpoint(buf, &sender); /* sensitive? */
 				lswlogf(buf, " too small packet (%d)",
 					packet_len);
 			}
@@ -214,7 +218,7 @@ static struct msg_digest *read_packet(const struct iface_port *ifp)
 		if (non_esp != 0) {
 			LSWLOG(buf) {
 				lswlogs(buf, "recvfrom ");
-				lswlog_ip(buf, &sender);
+				fmt_endpoint(buf, &sender); /* sensitive? */
 				lswlogs(buf, " has no Non-ESP marker");
 			}
 			return NULL;
@@ -236,7 +240,7 @@ static struct msg_digest *read_packet(const struct iface_port *ifp)
 			   NON_ESP_MARKER_SIZE)) {
 			LSWLOG(buf) {
 				lswlogs(buf, "Mangled packet with potential spurious non-esp marker ignored. Sender: ");
-				lswlog_ip(buf, &sender); /* sensitiv? */
+				fmt_endpoint(buf, &sender); /* sensitiv? */
 			}
 			return NULL;
 		}
@@ -251,7 +255,7 @@ static struct msg_digest *read_packet(const struct iface_port *ifp)
 		 */
 		LSWDBGP(DBG_NATT, buf) {
 			lswlogs(buf, "NAT-T keep-alive (bogus ?) should not reach this point. Ignored. Sender: ");
-			lswlog_ip(buf, &sender);
+			fmt_endpoint(buf, &sender); /* sensitive? */
 		};
 		return NULL;
 	}
@@ -263,6 +267,7 @@ static struct msg_digest *read_packet(const struct iface_port *ifp)
 	struct msg_digest *md = alloc_md("msg_digest in read_packet");
 	md->iface = ifp;
 	md->sender = sender;
+	md->md_inception = md_inception;
 
 	init_pbs(&md->packet_pbs
 		 , clone_bytes(_buffer, packet_len,
@@ -272,7 +277,7 @@ static struct msg_digest *read_packet(const struct iface_port *ifp)
 	LSWDBGP(DBG_RAW | DBG_CRYPT | DBG_PARSING | DBG_CONTROL, buf) {
 		lswlogf(buf, "*received %d bytes from ",
 			(int) pbs_room(&md->packet_pbs));
-		lswlog_ip(buf, &sender);
+		fmt_endpoint(buf, &sender);
 		lswlogf(buf, " on %s (port=%d)",
 			ifp->ip_dev->id_rname, ifp->port);
 	};
@@ -300,16 +305,15 @@ static struct msg_digest *read_packet(const struct iface_port *ifp)
 void process_packet(struct msg_digest **mdp)
 {
 	struct msg_digest *md = *mdp;
-	int vmaj, vmin;
 
 	if (!in_struct(&md->hdr, &isakmp_hdr_desc, &md->packet_pbs,
 		       &md->message_pbs)) {
-		/* The packet was very badly mangled. We can't be sure of any
-		 * content - not even to look for major version number!
-		 * So we'll just drop it.
+		/*
+		 * The packet was very badly mangled. We can't be sure
+		 * of any content - not even to look for major version
+		 * number!  So we'll just drop it.
 		 */
 		libreswan_log("Received packet with mangled IKE header - dropped");
-		send_notification_from_md(md, PAYLOAD_MALFORMED);
 		return;
 	}
 
@@ -327,10 +331,18 @@ void process_packet(struct msg_digest **mdp)
 		});
 	}
 
-	vmaj = md->hdr.isa_version >> ISA_MAJ_SHIFT;
-	vmin = md->hdr.isa_version & ISA_MIN_MASK;
+	unsigned vmaj = md->hdr.isa_version >> ISA_MAJ_SHIFT;
+	unsigned vmin = md->hdr.isa_version & ISA_MIN_MASK;
 
 	switch (vmaj) {
+	case 0:
+		/*
+		 * IKEv2 doesn't say what to do with low versions,
+		 * just drop them.
+		 */
+		libreswan_log("ignoring packet with IKE major version '%d'", vmaj);
+		return;
+
 	case ISAKMP_MAJOR_VERSION: /* IKEv1 */
 		if (vmin > ISAKMP_MINOR_VERSION) {
 			/* RFC2408 3.1 ISAKMP Header Format:
@@ -377,8 +389,46 @@ void process_packet(struct msg_digest **mdp)
 		break;
 
 	default:
-		libreswan_log("Unexpected IKE major '%d'", vmaj);
-		send_notification_from_md(md, INVALID_MAJOR_VERSION);
+		libreswan_log("message contains unsupported IKE major version '%d'", vmaj);
+		/*
+		 * According to 1.5.  Informational Messages outside
+		 * of an IKE SA, [...] the message is always sent
+		 * without cryptographic protection (outside of an IKE
+		 * SA), and includes either an INVALID_IKE_SPI or an
+		 * INVALID_MAJOR_VERSION notification (with no
+		 * notification data).  The message is a response
+		 * message, and thus it is sent to the IP address and
+		 * port from whence it came with the same IKE SPIs and
+		 * the Message ID and Exchange Type are copied from
+		 * the request.  The Response flag is set to 1, and
+		 * the version flags are set in the normal fashion.
+		 *
+		 * XXX: But this this doesn't specify the I
+		 * (Initiator) flag.  Normally the MD's I flag can be
+		 * flipped.  But does IKEv++ even have an I
+		 * (Initiator) flag?  Presumably it's an initial
+		 * response so the flag should be clear.
+		 *
+		 * XXX: According to 2.5. Version Numbers and Forward
+		 * Compatibility, it "SHOULD send an unauthenticated
+		 * Notify message of type INVALID_MAJOR_VERSION
+		 * containing the highest (closest) version number it
+		 * supports".  Does the INVALID_MAJOR_VERSION
+		 * notification contain the version or is it implied
+		 * by the message header.  Presumably the latter -
+		 * nothing describes the Notification Data for this
+		 * notification.
+		 *
+		 * XXX: According to 3.1. The IKE Header,
+		 * implementations "MUST reject or ignore messages
+		 * containing a version number greater than 2 with an
+		 * INVALID_MAJOR_VERSION".  Does this mean reject
+		 * IKEv++ messages that contain INVALID_MAJOR_VERSION,
+		 * or reject IKEv++ messages by responding with an
+		 * INVALID_MAJOR_VERSION.  Presumably the latter.
+		 */
+		send_v2N_response_from_md(md, v2N_INVALID_MAJOR_VERSION,
+					  NULL/*no data*/);
 		return;
 	}
 }
@@ -501,8 +551,7 @@ static size_t log_replay_entry(struct lswlog *buf, void *data)
 
 static struct list_head replay_packets;
 
-static struct list_info replay_info = {
-	.debug = DBG_CONTROLMORE,
+static const struct list_info replay_info = {
 	.name = "replay list",
 	.log = log_replay_entry,
 };
@@ -569,6 +618,59 @@ void schedule_md_event(const char *name, struct msg_digest *md)
 	pluto_event_now(name, SOS_NOBODY, handle_md_event, md);
 }
 
+enum ike_version msg_ike_version(const struct msg_digest *md)
+{
+	if (md == NULL) {
+		return 0; /* reserved */
+	}
+	unsigned vmaj = md->hdr.isa_version >> ISA_MAJ_SHIFT;
+	switch (vmaj) {
+	case ISAKMP_MAJOR_VERSION: return IKEv1;
+	case IKEv2_MAJOR_VERSION: return IKEv2;
+	default: return 0;
+	}
+}
+
+/*
+ * Map the IKEv2 MSG_R bit onto the ENUM message_role.
+ *
+ * Several reasons:
+ *
+ * - makes passing a role parameter clearer, that is:
+ *       foo(MESSAGE_RESPONSE)
+ *   is better than:
+ *       foo(true)
+ *
+ * - zero is 'reserved' for no MD and/or default value so won't match
+ *   either of the initiator and/or responder values
+ *
+ * - encourages the coding style where the two cases - REQUEST and
+ *   RESPONSE - are clearly labled, that is:
+ *
+ *       switch(role) {
+ *       case MESSAGE_REQUEST: ...; break;
+ *       case MESSAGE_RESPONSE: ...; break;
+ *       default: bad_case(role);
+ *       }
+ *
+ */
+enum message_role v2_msg_role(const struct msg_digest *md)
+{
+	if (md == NULL) {
+		return NO_MESSAGE;
+	}
+	if (!pexpect(msg_ike_version(md) == IKEv2)) {
+		return NO_MESSAGE;
+	}
+	if (md->fake_dne) {
+		return NO_MESSAGE;
+	}
+	/* determine the role */
+	enum message_role role =
+		(md->hdr.isa_flags & ISAKMP_FLAGS_v2_MSG_R) ? MESSAGE_RESPONSE : MESSAGE_REQUEST;
+	return role;
+}
+
 /*
  * cisco_stringify()
  *
@@ -599,4 +701,43 @@ char *cisco_stringify(pb_stream *pbs, const char *attr_name)
 	sanitize_string(strbuf, sizeof(strbuf));
 	loglog(RC_INFORMATIONAL, "Received %s: %s", attr_name, strbuf);
 	return clone_str(strbuf, attr_name);
+}
+
+/*
+ * list all the payload types
+ */
+void lswlog_msg_digest(struct lswlog *buf, const struct msg_digest *md)
+{
+	enum ike_version ike_version = msg_ike_version(md);
+	lswlog_enum_enum_short(buf, &exchange_type_names, ike_version,
+			       md->hdr.isa_xchg);
+	if (ike_version == IKEv2) {
+		switch (v2_msg_role(md)) {
+		case MESSAGE_REQUEST: lswlogs(buf, " request"); break;
+		case MESSAGE_RESPONSE: lswlogs(buf, " response"); break;
+		case NO_MESSAGE: break;
+		}
+	}
+	const char *sep = ": ";
+	const char *term = "";
+	for (unsigned d = 0; d < md->digest_roof; d++) {
+		const struct payload_digest *pd = &md->digest[d];
+		lswlogs(buf, sep);
+		if (ike_version == IKEv2 &&
+		    d+1 < md->digest_roof &&
+		    pd->payload_type == ISAKMP_NEXT_v2SK) {
+			/*
+			 * HACK to dump decrypted SK payload contents
+			 * (which come after the SK payload).
+			 */
+			sep = "{";
+			term = "}";
+		} else {
+			sep = ",";
+		}
+		lswlog_enum_enum_short(buf, &payload_type_names,
+				       ike_version,
+				       pd->payload_type);
+	}
+	lswlogs(buf, term);
 }

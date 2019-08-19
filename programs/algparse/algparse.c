@@ -9,15 +9,15 @@
 #include "lswconf.h"
 
 #include "ike_alg.h"
-#include "alg_info.h"
+#include "proposals.h"
 
 static bool test_proposals = false;
 static bool test_algs = false;
 static bool verbose = false;
 static bool debug = false;
 static bool impair = false;
-static bool ikev1 = false;
-static bool ikev2 = false;
+static enum ike_version ike_version = IKEv2;
+static unsigned parser_version = 0;
 static bool fips = false;
 static bool pfs = false;
 static int failures = 0;
@@ -25,23 +25,29 @@ static int failures = 0;
 enum status { PASSED = 0, FAILED = 1, ERROR = 126, };
 enum expect { FAIL = false, PASS = true, COUNT, };
 
-#define CHECK(TYPE,PARSE,OK) {						\
+#define CHECK(CHECK,PARSE,OK) {						\
 		struct proposal_policy policy = {			\
-			.ikev1 = ikev1,					\
-			.ikev2 = ikev2,					\
+			.version = ike_version,				\
+			.parser_version = parser_version,		\
 			.alg_is_ok = OK,				\
 			.pfs = pfs,					\
 			.warning = warning,				\
+			.check_pfs_vs_dh = CHECK,			\
 		};							\
 		printf("algparse ");					\
+		if (impair) {						\
+			printf("-impair ");				\
+		}							\
+		if (parser_version > 0) {				\
+			printf("-p%d ", parser_version);		\
+		}							\
 		if (fips) {						\
 			printf("-fips ");				\
 		}							\
-		if (ikev1) {						\
-			printf("-v1 ");					\
-		}							\
-		if (ikev2) {						\
-			printf("-v2 ");					\
+		switch (ike_version) {					\
+		case IKEv1: printf("-v1 "); break;			\
+		case IKEv2: printf("-v2 "); break;			\
+		default: break;						\
 		}							\
 		if (pfs) {						\
 			printf("-pfs ");				\
@@ -52,21 +58,19 @@ enum expect { FAIL = false, PASS = true, COUNT, };
 			printf("'%s=%s'\n", #PARSE, algstr);		\
 		}							\
 		fflush(NULL);						\
-		char err_buf[512] = "";	/* ??? big enough? */		\
-		struct alg_info_##TYPE *e =				\
-			alg_info_##PARSE##_create_from_str(&policy,	\
-							   algstr,	\
-							   err_buf,	\
-							   sizeof(err_buf)); \
-		if (e != NULL) {					\
-			passert(err_buf[0] == '\0');			\
-			FOR_EACH_PROPOSAL_INFO(&e->ai, proposal) {	\
+		struct proposal_parser *parser =			\
+			PARSE##_proposal_parser(&policy);		\
+		struct proposals *proposals =				\
+			proposals_from_str(parser, algstr);		\
+		if (proposals != NULL) {				\
+			pexpect(parser->error[0] == '\0');		\
+			FOR_EACH_PROPOSAL(proposals, proposal) {	\
 				LSWLOG_FILE(stdout, log) {		\
 					lswlogf(log, "\t");		\
-					lswlog_proposal_info(log, proposal); \
+					fmt_proposal(log, proposal);	\
 				}					\
 			}						\
-			alg_info_free(&e->ai);				\
+			proposals_delref(&proposals);			\
 			if (expected == FAIL) {				\
 				failures++;				\
 				fprintf(stderr,				\
@@ -76,8 +80,8 @@ enum expect { FAIL = false, PASS = true, COUNT, };
 					algstr == NULL ? "" : algstr);	\
 			}						\
 		} else {						\
-			passert(err_buf[0]);				\
-			printf("\tERROR: %s\n", err_buf);		\
+			pexpect(parser->error[0]);			\
+			printf("\tERROR: %s\n", parser->error);		\
 			if (expected == PASS) {				\
 				failures++;				\
 				fprintf(stderr,				\
@@ -89,6 +93,7 @@ enum expect { FAIL = false, PASS = true, COUNT, };
 				failures++;				\
 			}						\
 		}							\
+		free_proposal_parser(&parser);				\
 		fflush(NULL);						\
 	}
 
@@ -122,17 +127,17 @@ static bool kernel_alg_is_ok(const struct ike_alg *alg)
 
 static void esp(enum expect expected, const char *algstr)
 {
-	CHECK(esp, esp, kernel_alg_is_ok);
+	CHECK(true, esp, kernel_alg_is_ok);
 }
 
 static void ah(enum expect expected, const char *algstr)
 {
-	CHECK(esp, ah, kernel_alg_is_ok);
+	CHECK(true, ah, kernel_alg_is_ok);
 }
 
 static void ike(enum expect expected, const char *algstr)
 {
-	CHECK(ike, ike, ike_alg_is_ike);
+	CHECK(false, ike, ike_alg_is_ike);
 }
 
 typedef void (protocol_t)(enum expect expected, const char *);
@@ -203,8 +208,8 @@ static void test(void)
 	esp(!fips, "3des-sha1;modp1024");
 	esp(!fips, "3des-sha1;modp1536");
 	esp(true, "3des-sha1;modp2048");
-	esp(!ikev1, "3des-sha1;dh21");
-	esp(!ikev1, "3des-sha1;ecp_521");
+	esp(ike_version == IKEv2, "3des-sha1;dh21");
+	esp(ike_version == IKEv2, "3des-sha1;ecp_521");
 	esp(false, "3des-sha1;dh23");
 	esp(false, "3des-sha1;dh24");
 	esp(true, "3des-sha1");
@@ -218,7 +223,7 @@ static void test(void)
 	esp(true, "aes-sha384");
 	esp(true, "aes-sha512");
 	esp(true, "aes128-sha1");
-	esp(true, "aes128-aes_xcbc");
+	esp(!fips, "aes128-aes_xcbc");
 	esp(true, "aes192-sha1");
 	esp(true, "aes256-sha1");
 	esp(true, "aes256-sha");
@@ -300,18 +305,18 @@ static void test(void)
 	esp(!fips, "twofish");
 
 	esp(!fips, "camellia_cbc_256-hmac_sha2_512_256;modp8192"); /* long */
-	esp(!fips, "null_auth_aes_gmac_256-null;modp8192"); /* long */
+	esp(true, "null_auth_aes_gmac_256-null;modp8192"); /* long */
 	esp(true, "3des-sha1;modp8192"); /* allow ';' when unambigious */
 	esp(true, "3des-sha1-modp8192"); /* allow '-' when unambigious */
 	esp(!pfs, "aes-sha1,3des-sha1;modp8192");
 	esp(true, "aes-sha1-modp8192,3des-sha1-modp8192"); /* silly */
 	esp(true, "aes-sha1-modp8192,aes-sha1-modp8192,aes-sha1-modp8192"); /* suppress duplicates */
 
-	esp(!ikev1, "aes;none");
-	esp(!ikev1 && !pfs, "aes;none,aes");
-	esp(!ikev1, "aes;none,aes;modp2048");
-	esp(!ikev1, "aes-sha1-none");
-	esp(!ikev1, "aes-sha1;none");
+	esp(ike_version == IKEv2, "aes;none");
+	esp(ike_version == IKEv2 && !pfs, "aes;none,aes");
+	esp(ike_version == IKEv2, "aes;none,aes;modp2048");
+	esp(ike_version == IKEv2, "aes-sha1-none");
+	esp(ike_version == IKEv2, "aes-sha1;none");
 
 	/*
 	 * should this be supported - for now man page says not
@@ -374,9 +379,9 @@ static void test(void)
 	ah(true, "sha2_256");
 	ah(true, "sha2_384");
 	ah(true, "sha2_512");
-	ah(true, "aes_xcbc");
-	ah(!ikev1, "sha2-none");
-	ah(!ikev1, "sha2;none");
+	ah(!fips, "aes_xcbc");
+	ah(ike_version == IKEv2, "sha2-none");
+	ah(ike_version == IKEv2, "sha2;none");
 	ah(true, "sha1-modp8192,sha1-modp8192,sha1-modp8192"); /* suppress duplicates */
 	ah(impair, "aes-sha1");
 	ah(false, "vanityhash1");
@@ -400,12 +405,15 @@ static void test(void)
 	ike(true, "3des;dh21");
 	ike(true, "3des-sha1;dh21");
 	ike(true, "3des-sha1-ecp_521");
-	ike(!ikev1, "aes_gcm");
+	ike(ike_version == IKEv2, "aes_gcm");
 	ike(true, "aes-sha1-modp8192,aes-sha1-modp8192,aes-sha1-modp8192"); /* suppress duplicates */
 	ike(false, "aes;none");
 	ike(false, "id2"); /* should be rejected; idXXX removed */
 	ike(false, "3des-id2"); /* should be rejected; idXXX removed */
 	ike(false, "aes_ccm"); /* ESP/AH only */
+	ike(impair, "aes_gcm-sha1-none-modp2048");
+	ike(impair, "aes_gcm+aes_gcm-sha1-none-modp2048");
+	ike(false, "aes+aes_gcm"); /* mixing AEAD and NORM encryption */
 }
 
 static void usage(void)
@@ -432,9 +440,8 @@ static void usage(void)
 		"\n"
 		"Additional options:\n"
 		"\n"
-		"    -v1 | -ikev1: require IKEv1 support\n"
-		"    -v2 | -ikev2: require IKEv2 support\n"
-		"         default: require either IKEv1 or IKEv2 support\n"
+		"    -v2 | -ikev2: configure for IKEv2 (default)\n"
+		"    -v1 | -ikev1: configure for IKEv1\n"
 		"    -pfs | -pfs=yes | -pfs=no: specify PFS (perfect forward privicy)\n"
 		"         default: no\n"
 		"    -fips | -fips=yes | -fips=no: force NSS's FIPS mode\n"
@@ -446,6 +453,8 @@ static void usage(void)
 		"    -v --verbose: be more verbose\n"
 		"    -d --debug: enable debug logging\n"
 		"    -i --impair: disable all algorithm parser checks\n"
+		"    -p1: simple parser\n"
+		"    -p2: complex parser\n"
 		"\n"
 		"Examples:\n"
 		"\n"
@@ -483,10 +492,14 @@ int main(int argc, char *argv[])
 			test_proposals = true;
 		} else if (streq(arg, "ta")) {
 			test_algs = true;
+		} else if (streq(arg, "p1")) {
+			parser_version = 1;
+		} else if (streq(arg, "p2")) {
+			parser_version = 2;
 		} else if (streq(arg, "v1") || streq(arg, "ikev1")) {
-			ikev1 = true;
+			ike_version = IKEv1;
 		} else if (streq(arg, "v2") || streq(arg, "ikev2")) {
-			ikev2 = true;
+			ike_version = IKEv2;
 		} else if (streq(arg, "pfs") || streq(arg, "pfs=yes") || streq(arg, "pfs=on")) {
 			pfs = true;
 		} else if (streq(arg, "pfs=no") || streq(arg, "pfs=off")) {

@@ -1,0 +1,299 @@
+From: Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+Date: Sun, 2 Jun 2019 19:00:24 -0400
+Subject: minor: Fix spelling and grammar
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+therefor → therefore
+transfered → transferred
+acceptible → acceptable
+
+This also involves some clean up of "allow to", the use of which
+typically presents some amount of confusion about who is doing the
+allowing, and who is being allowed.  Given that the options in
+question are all called accept-*, it makes more sense to describe them
+as "accepting" anyway.
+
+Signed-off-by: Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+---
+ linux/net/ipsec/des/Makefile.fs2_6                    | 2 +-
+ programs/configs/d.ipsec.conf/aggressive.xml          | 2 +-
+ programs/configs/d.ipsec.conf/phase2alg.xml           | 4 ++--
+ programs/configs/d.ipsec.conf/redirect.xml            | 4 ++--
+ programs/configs/d.ipsec.conf/reqid.xml               | 2 +-
+ programs/configs/d.ipsec.conf/seedbits.xml            | 2 +-
+ programs/pluto/ikev1.c                                | 2 +-
+ programs/pluto/ikev2.c                                | 2 +-
+ programs/pluto/ikev2_parent.c                         | 6 +++---
+ programs/pluto/ikev2_redirect.c                       | 2 +-
+ programs/pluto/ikev2_redirect.h                       | 2 +-
+ programs/pluto/ipsec_pluto.8.xml                      | 6 +++---
+ programs/pluto/state.c                                | 2 +-
+ testing/pluto/bad-nexthop-01/description.txt          | 2 +-
+ testing/pluto/basic-pluto-01-nokey/description.txt    | 2 +-
+ testing/pluto/basic-pluto-01-wrongkey/description.txt | 2 +-
+ testing/pluto/x509-pluto-frag-04/description.txt      | 2 +-
+ 17 files changed, 23 insertions(+), 23 deletions(-)
+
+diff --git a/linux/net/ipsec/des/Makefile.fs2_6 b/linux/net/ipsec/des/Makefile.fs2_6
+index 51471dc..d149fe1 100644
+--- a/linux/net/ipsec/des/Makefile.fs2_6
++++ b/linux/net/ipsec/des/Makefile.fs2_6
+@@ -31,7 +31,7 @@ endif
+ # The assembly version is incompatible with CONFIG_REGPARM=y The
+ # CONFIG_REGPARM defines whether it uses registers or stack to pass
+ # arguments and recent kernels (after 2.6.17 or 2.6.18) uses registers
+-# unconditionally. Therefor, we disable the assembly version for ix86's
++# unconditionally. Therefore, we disable the assembly version for ix86's
+ # completely.
+ # #
+ # the assembly version expects frame pointers, which are
+diff --git a/programs/configs/d.ipsec.conf/aggressive.xml b/programs/configs/d.ipsec.conf/aggressive.xml
+index d8054a3..47016cd 100644
+--- a/programs/configs/d.ipsec.conf/aggressive.xml
++++ b/programs/configs/d.ipsec.conf/aggressive.xml
+@@ -15,7 +15,7 @@ If the remote system administrator insists on staying irresponsible,
+ enable this option.</para>
+ 
+ <para>Aggressive Mode is further limited to only proposals with one
+-DH group as there is no room to negotiate the DH group. Therefor
++DH group as there is no room to negotiate the DH group. Therefore
+ it is mandatory for Aggressive Mode connections that both
+ <emphasis remap='B'>ike=</emphasis> and <emphasis remap='B'>phase2alg=</emphasis>
+ options are specified with only one fully specified proposal using one
+diff --git a/programs/configs/d.ipsec.conf/phase2alg.xml b/programs/configs/d.ipsec.conf/phase2alg.xml
+index 20def97..9149854 100644
+--- a/programs/configs/d.ipsec.conf/phase2alg.xml
++++ b/programs/configs/d.ipsec.conf/phase2alg.xml
+@@ -34,7 +34,7 @@ subscript of <emphasis remap='I'>_c</emphasis>, <emphasis remap='I'>_b</emphasis
+ or <emphasis remap='I'>_a</emphasis> can be used to refer to the different ICV variants
+ where a means 8 bytes, b means 12 bytes and c means 16 bytes. The default
+ when not using a subscript is the 16 byte ICV, the recommended value by RFC-4106.
+-Therefor phase2alg=aes_gcm256-null is equivalent to phase2alg=aes_gcm_c256-null.
++Therefore phase2alg=aes_gcm256-null is equivalent to phase2alg=aes_gcm_c256-null.
+ It is recommended to migrate to the _c versions (without specifying _c),
+ as support for smaller ICV's might be removed in the near future.</para>
+ 
+@@ -43,7 +43,7 @@ kernel stack used. Possible ciphers are aes, 3des, aes_ctr, aes_gcm,
+ aes_ccm, camellia, serpent and twofish.</para>
+ 
+ <para>Note that openswan and versions of libreswan up to 3.6 require manually
+-adding the salt size to the key size. Therefor, to configure an older
++adding the salt size to the key size. Therefore, to configure an older
+ version of openswan or libreswan, use: "phase2alg=aes_ccm_c-280-null" to
+ interop with a new libreswan using "phase2alg=aes_ccm256". For
+ CCM, the 'keysize' needs to be increased by 24, resulted in valid keysizes
+diff --git a/programs/configs/d.ipsec.conf/redirect.xml b/programs/configs/d.ipsec.conf/redirect.xml
+index d424476..3427d2f 100644
+--- a/programs/configs/d.ipsec.conf/redirect.xml
++++ b/programs/configs/d.ipsec.conf/redirect.xml
+@@ -10,8 +10,8 @@
+   <term><emphasis remap='B'>accept-redirect-to</emphasis></term>
+   <listitem>
+ <para>
+-Specify the comma separated list of addresses where we
+-allow to be redirected to. Both IPv4 and IPv6 addresses
++Specify the comma separated list of addresses we accept being
++redirected to. Both IPv4 and IPv6 addresses
+ are supported as well the FQDNs. The value
+ <emphasis remap='B'>%any</emphasis>, as well as not specifying
+ any address, signifes that we will redirect to any address
+diff --git a/programs/configs/d.ipsec.conf/reqid.xml b/programs/configs/d.ipsec.conf/reqid.xml
+index d5acf49..449f2c6 100644
+--- a/programs/configs/d.ipsec.conf/reqid.xml
++++ b/programs/configs/d.ipsec.conf/reqid.xml
+@@ -7,7 +7,7 @@ NETKEY/XFRM. This identifier is normally automatically allocated in groups
+ of 4. It is exported to the _updown script as REQID. On Linux, reqids are
+ supported with IP Connection Tracking and NAT (iptables). Automatically
+ generated values use the range 16380 and higher. Manually specified
+-reqid values therefor must be between 1 and 16379.
++reqid values therefore must be between 1 and 16379.
+ </para>
+ <para>
+ Automatically generated reqids use a range of 0-3 (eg 16380-16383 for the
+diff --git a/programs/configs/d.ipsec.conf/seedbits.xml b/programs/configs/d.ipsec.conf/seedbits.xml
+index b0b88bb..b080ae0 100644
+--- a/programs/configs/d.ipsec.conf/seedbits.xml
++++ b/programs/configs/d.ipsec.conf/seedbits.xml
+@@ -7,7 +7,7 @@ Three Letter Agencies require that pluto reads additional bits from /dev/random
+ and feed these into the NSS RNG before drawing random from the NSS library,
+ despite the NSS library itself already seeding its internal state. This
+ process can block pluto for an extended time during startup, depending on
+-the entropy of the system. Therefor, the default is to not perform this
++the entropy of the system. Therefore, the default is to not perform this
+ redundant seeding. If specifying a value, it is recommended to specify at
+ least 460 bits (for FIPS) or 440 bits (for BSI).
+ </para>
+diff --git a/programs/pluto/ikev1.c b/programs/pluto/ikev1.c
+index 869b640..dac8215 100644
+--- a/programs/pluto/ikev1.c
++++ b/programs/pluto/ikev1.c
+@@ -2519,7 +2519,7 @@ void complete_v1_state_transition(struct msg_digest **mdp, stf_status result)
+ 			 * well.
+ 			 */
+ 			suspend_md(md->st, mdp);
+-			passert(*mdp == NULL); /* ownership transfered */
++			passert(*mdp == NULL); /* ownership transferred */
+ 		}
+ 		return;
+ 	case STF_IGNORE:
+diff --git a/programs/pluto/ikev2.c b/programs/pluto/ikev2.c
+index d0d2852..c5f759a 100644
+--- a/programs/pluto/ikev2.c
++++ b/programs/pluto/ikev2.c
+@@ -3218,7 +3218,7 @@ void complete_v2_state_transition(struct state *st,
+ 			 */
+ 			if (*mdp != NULL) {
+ 				suspend_md(st, mdp);
+-				passert(*mdp == NULL); /* ownership transfered */
++				passert(*mdp == NULL); /* ownership transferred */
+ 			}
+ 			log_stf_suspend(st, result);
+ 		}
+diff --git a/programs/pluto/ikev2_parent.c b/programs/pluto/ikev2_parent.c
+index d84c84d..de40180 100644
+--- a/programs/pluto/ikev2_parent.c
++++ b/programs/pluto/ikev2_parent.c
+@@ -392,7 +392,7 @@ static bool v2_check_auth(enum ikev2_auth_method recv_auth,
+ 
+ 		for (hap = ha; ; hap++) {
+ 			if (hap == &ha[elemsof(ha)]) {
+-				libreswan_log("No acceptible ASN.1 hash blob found for %d in %s",
++				libreswan_log("No acceptable ASN.1 hash blob found for %d in %s",
+ 					that_authby, context);
+ 				DBG(DBG_BASE, {
+ 					size_t dl = min(pbs_left(pbs),
+@@ -1679,7 +1679,7 @@ stf_status ikev2_parent_inR1outI2(struct state *st, struct msg_digest *md)
+ 			DBG(DBG_CONTROL, DBG_log("received v2N_REDIRECT in IKE_SA_INIT reply"));
+ 
+ 			if (!LIN(POLICY_ACCEPT_REDIRECT_YES, st->st_connection->policy)) {
+-				DBG(DBG_CONTROL, DBG_log("ignoring v2N_REDIRECT, we don't allow to be redirected"));
++				DBG(DBG_CONTROL, DBG_log("ignoring v2N_REDIRECT, we don't accept being redirected"));
+ 				break;
+ 			}
+ 
+@@ -3647,7 +3647,7 @@ stf_status ikev2_parent_inR2(struct state *st, struct msg_digest *md)
+ 			DBG(DBG_CONTROL, DBG_log("received v2N_REDIRECT in IKE_AUTH reply"));
+ 
+ 			if (!LIN(POLICY_ACCEPT_REDIRECT_YES, st->st_connection->policy)) {
+-				DBG(DBG_CONTROL, DBG_log("ignoring v2N_REDIRECT, we don't allow to be redirected"));
++				DBG(DBG_CONTROL, DBG_log("ignoring v2N_REDIRECT, we don't accept being redirected"));
+ 				break;
+ 			}
+ 
+diff --git a/programs/pluto/ikev2_redirect.c b/programs/pluto/ikev2_redirect.c
+index 8e92995..273e5b3 100644
+--- a/programs/pluto/ikev2_redirect.c
++++ b/programs/pluto/ikev2_redirect.c
+@@ -224,7 +224,7 @@ err_t parse_redirect_payload(pb_stream *input_pbs,
+ 	case AF_INET6:
+ 	{
+ 		if (pbs_left(input_pbs) < gw_info.gw_identity_len)
+-			return "variable part of payload is smaller than transfered GW Identity Length";
++			return "variable part of payload is smaller than transferred GW Identity Length";
+ 
+ 		/* parse address directly to redirect_ip */
+ 		err_t ugh = initaddr(input_pbs->cur, gw_info.gw_identity_len, af, redirect_ip);
+diff --git a/programs/pluto/ikev2_redirect.h b/programs/pluto/ikev2_redirect.h
+index 5bfd4c9..75090a0 100644
+--- a/programs/pluto/ikev2_redirect.h
++++ b/programs/pluto/ikev2_redirect.h
+@@ -55,7 +55,7 @@ extern bool emit_redirect_notification_decoded_dest(
+  * notification.
+  *
+  * @param data that was transferred in v2_REDIRECT Notify
+- * @param char* list of addresses we allow to be redirected
++ * @param char* list of addresses we accept being redirected
+  * 	  to, specified with conn option accept-redirect-to
+  * @param nonce that was send in IKE_SA_INIT request,
+  * 	  we need to compare it with nonce data sent
+diff --git a/programs/pluto/ipsec_pluto.8.xml b/programs/pluto/ipsec_pluto.8.xml
+index 66502ce..f4f2b50 100644
+--- a/programs/pluto/ipsec_pluto.8.xml
++++ b/programs/pluto/ipsec_pluto.8.xml
+@@ -1495,7 +1495,7 @@
+             make the gateway itself use its internal IP, which is part of the
+             <option>--client subnet</option>. Otherwise it will use its
+             nearest IP address, which is its public IP address, which is not
+-            part of the subnet-subnet IPsec tunnel, and would therefor not get
++            part of the subnet-subnet IPsec tunnel, and would therefore not get
+             encrypted.</para>
+           </listitem>
+         </varlistentry>
+@@ -2280,7 +2280,7 @@
+           remap="i">ip-address</emphasis></term>
+ 
+           <listitem>
+-            <para>If the remote peer has crashed, and therefor did not notify
++            <para>If the remote peer has crashed, and therefore did not notify
+             us, we keep sending encrypted traffic, and rejecting all plaintext
+             (non-IKE) traffic from that remote peer. The
+             <option>--crash</option> brings our end down as well for all the
+@@ -2324,7 +2324,7 @@
+           <term><emphasis remap="i">ip-address</emphasis></term>
+ 
+           <listitem>
+-            <para>If the remote peer has crashed, and therefor did not notify
++            <para>If the remote peer has crashed, and therefore did not notify
+             us, we keep sending encrypted traffic, and rejecting all plaintext
+             (non-IKE) traffic from that remote peer. The
+             <option>--crash</option> brings our end down as well for all the
+diff --git a/programs/pluto/state.c b/programs/pluto/state.c
+index e79c886..49e005d 100644
+--- a/programs/pluto/state.c
++++ b/programs/pluto/state.c
+@@ -315,7 +315,7 @@ static void update_state_stat(struct state *st,
+ 		/*
+ 		 * When deleting, st->st_connection can be NULL, so we
+ 		 * cannot look at the policy to determine
+-		 * anonimity. We therefor use a scratchpad at
++		 * anonimity. We therefore use a scratchpad at
+ 		 * st->st_ikev2_anon (a bool) which is copied from
+ 		 * parent to child states
+ 		 */
+diff --git a/testing/pluto/bad-nexthop-01/description.txt b/testing/pluto/bad-nexthop-01/description.txt
+index 7fd1109..7825407 100644
+--- a/testing/pluto/bad-nexthop-01/description.txt
++++ b/testing/pluto/bad-nexthop-01/description.txt
+@@ -1,6 +1,6 @@
+ 
+ Build a host-host network where routing works, but the nexthop is
+-wrong, and therefor _updown fails to add the route, but the eroute
++wrong, and therefore _updown fails to add the route, but the eroute
+ is created, and traffic flows encrypted one way, but not the other.
+ 
+ Reported by Hugh Daniel that
+diff --git a/testing/pluto/basic-pluto-01-nokey/description.txt b/testing/pluto/basic-pluto-01-nokey/description.txt
+index e33628e..5e368b0 100644
+--- a/testing/pluto/basic-pluto-01-nokey/description.txt
++++ b/testing/pluto/basic-pluto-01-nokey/description.txt
+@@ -1,5 +1,5 @@
+ 
+-On west, the leftrsasigkey= to use is mangled. Therefor the connection
++On west, the leftrsasigkey= to use is mangled. Therefore the connection
+ should not establishd.
+ 
+ the nss database is wiped to ensure no key is present
+diff --git a/testing/pluto/basic-pluto-01-wrongkey/description.txt b/testing/pluto/basic-pluto-01-wrongkey/description.txt
+index 82b4728..c8a07b28 100644
+--- a/testing/pluto/basic-pluto-01-wrongkey/description.txt
++++ b/testing/pluto/basic-pluto-01-wrongkey/description.txt
+@@ -1,5 +1,5 @@
+ 
+-On west, the leftrsasigkey= to use is mangled. Therefor the connection
++On west, the leftrsasigkey= to use is mangled. Therefore the connection
+ should not establishd.
+ 
+ In fact, the connection should fail to load due to missing private key
+diff --git a/testing/pluto/x509-pluto-frag-04/description.txt b/testing/pluto/x509-pluto-frag-04/description.txt
+index 69a2a91..8679f3c 100644
+--- a/testing/pluto/x509-pluto-frag-04/description.txt
++++ b/testing/pluto/x509-pluto-frag-04/description.txt
+@@ -2,5 +2,5 @@ Basic pluto X.509 test from x509-pluto-01, but now
+ east has ike_frag=no, so road will not see its vendorid, and
+ so cannot fall back to sending IKE fragments.
+ 
+-The connection should therefor fail.
++The connection should therefore fail.
+ 

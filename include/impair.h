@@ -1,6 +1,6 @@
 /* impair operation
  *
- * Copyright (C) 2018 Andrew Cagney
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -47,6 +47,7 @@ enum xxx_impair ...;
  * XXX: make this a structure so it can be copied?
  */
 
+extern bool impair_revival;
 extern bool impair_emitting;
 extern enum send_impairment impair_ke_payload;
 extern enum send_impairment impair_ike_key_length_attribute;
@@ -66,5 +67,7 @@ bool parse_impair(const char *optarg, struct whack_impair *whack_impair, bool en
 void process_impair(const struct whack_impair *whack_impair);
 
 void help_impair(const char *prefix);
+
+void lswlog_impairments(struct lswlog *buf, const char *prefix, const char *sep);
 
 #endif

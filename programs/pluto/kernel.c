@@ -8,10 +8,11 @@
  * Copyright (C) 2010 Bart Trojanowski <bart@jukie.net>
  * Copyright (C) 2009-2010 Tuomo Soini <tis@foobar.fi>
  * Copyright (C) 2010 Avesh Agarwal <avagarwa@redhat.com>
- * Copyright (C) 2010,2013 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2010-2019 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2012-2015 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013 Kim B. Heino <b@bbbs.net>
- * Copyright (C) 2016-2017, Andrew Cagney
+ * Copyright (C) 2016-2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -78,6 +79,7 @@
 #include "packet.h"  /* for pb_stream in nat_traversal.h */
 #include "nat_traversal.h"
 #include "ip_address.h"
+#include "af_info.h"
 #include "lswfips.h" /* for libreswan_fipsmode() */
 
 /* which kernel interface to use */
@@ -292,36 +294,38 @@ static reqid_t get_proto_reqid(reqid_t base, int proto)
  * check if the number was previously used (assuming that no
  * SPI lives longer than 4G of its successors).
  */
-ipsec_spi_t get_ipsec_spi(ipsec_spi_t avoid, int proto, const struct spd_route *sr,
+ipsec_spi_t get_ipsec_spi(ipsec_spi_t avoid,
+			int proto,
+			const struct spd_route *sr,
 			bool tunnel)
 {
-	static ipsec_spi_t spi = 0; /* host order, so not returned directly! */
-	char text_said[SATOT_BUF];
-
 	passert(proto == IPPROTO_AH || proto == IPPROTO_ESP);
-	set_text_said(text_said, &sr->this.host_addr, 0, proto);
 
 	if (kernel_ops->get_spi != NULL) {
+		char text_said[SATOT_BUF];
+		set_text_said(text_said, &sr->this.host_addr, 0, proto);
 		return kernel_ops->get_spi(&sr->that.host_addr,
 					&sr->this.host_addr, proto, tunnel,
 					get_proto_reqid(sr->reqid, proto),
 					IPSEC_DOI_SPI_OUR_MIN, 0xffffffff,
 					text_said);
+	} else {
+		static ipsec_spi_t spi = 0; /* host order, so not returned directly! */
+
+		spi++;
+		while (spi < IPSEC_DOI_SPI_OUR_MIN || spi == ntohl(avoid))
+			get_rnd_bytes((u_char *)&spi, sizeof(spi));
+
+		DBG(DBG_CONTROL,
+			{
+				ipsec_spi_t spi_net = htonl(spi);
+
+				DBG_dump("generate SPI:", (u_char *)&spi_net,
+					sizeof(spi_net));
+			});
+
+		return htonl(spi);
 	}
-
-	spi++;
-	while (spi < IPSEC_DOI_SPI_OUR_MIN || spi == ntohl(avoid))
-		get_rnd_bytes((u_char *)&spi, sizeof(spi));
-
-	DBG(DBG_CONTROL,
-		{
-			ipsec_spi_t spi_net = htonl(spi);
-
-			DBG_dump("generate SPI:", (u_char *)&spi_net,
-				sizeof(spi_net));
-		});
-
-	return htonl(spi);
 }
 
 /* Generate Unique CPI numbers.
@@ -334,14 +338,9 @@ ipsec_spi_t get_ipsec_spi(ipsec_spi_t avoid, int proto, const struct spd_route *
  */
 ipsec_spi_t get_my_cpi(const struct spd_route *sr, bool tunnel)
 {
-	static cpi_t
-		first_busy_cpi = 0,
-		latest_cpi;
-	char text_said[SATOT_BUF];
-
-	set_text_said(text_said, &sr->this.host_addr, 0, IPPROTO_COMP);
-
 	if (kernel_ops->get_spi != NULL) {
+		char text_said[SATOT_BUF];
+		set_text_said(text_said, &sr->this.host_addr, 0, IPPROTO_COMP);
 		return kernel_ops->get_spi(&sr->that.host_addr,
 					&sr->this.host_addr, IPPROTO_COMP,
 					tunnel,
@@ -350,24 +349,27 @@ ipsec_spi_t get_my_cpi(const struct spd_route *sr, bool tunnel)
 					IPCOMP_FIRST_NEGOTIATED,
 					IPCOMP_LAST_NEGOTIATED,
 					text_said);
+	} else {
+		static cpi_t first_busy_cpi = 0;
+		static cpi_t latest_cpi = 0;
+
+		while (!(IPCOMP_FIRST_NEGOTIATED <= first_busy_cpi &&
+				first_busy_cpi < IPCOMP_LAST_NEGOTIATED)) {
+			get_rnd_bytes((u_char *)&first_busy_cpi,
+				sizeof(first_busy_cpi));
+			latest_cpi = first_busy_cpi;
+		}
+
+		latest_cpi++;
+
+		if (latest_cpi == first_busy_cpi)
+			find_my_cpi_gap(&latest_cpi, &first_busy_cpi);
+
+		if (latest_cpi > IPCOMP_LAST_NEGOTIATED)
+			latest_cpi = IPCOMP_FIRST_NEGOTIATED;
+
+		return htonl((ipsec_spi_t)latest_cpi);
 	}
-
-	while (!(IPCOMP_FIRST_NEGOTIATED <= first_busy_cpi &&
-			first_busy_cpi < IPCOMP_LAST_NEGOTIATED)) {
-		get_rnd_bytes((u_char *)&first_busy_cpi,
-			sizeof(first_busy_cpi));
-		latest_cpi = first_busy_cpi;
-	}
-
-	latest_cpi++;
-
-	if (latest_cpi == first_busy_cpi)
-		find_my_cpi_gap(&latest_cpi, &first_busy_cpi);
-
-	if (latest_cpi > IPCOMP_LAST_NEGOTIATED)
-		latest_cpi = IPCOMP_FIRST_NEGOTIATED;
-
-	return htonl((ipsec_spi_t)latest_cpi);
 }
 
 /* note: this mutates *st by calling get_sa_info */
@@ -977,22 +979,25 @@ static enum routability could_route(struct connection *c)
 	 */
 	if (ro != NULL && !routes_agree(ro, c)) {
 		char cib[CONN_INST_BUF];
-		loglog(RC_LOG_SERIOUS,
-			"cannot route -- route already in use for \"%s\"%s",
-			ro->name, fmt_conn_instance(ro, cib));
-		/*
-		 * We ignore this if the stack supports overlapping, and this
-		 * connection was marked that overlapping is OK.  Below we will
-		 * check the other eroute, ero.
-		 */
+
 		if (!compatible_overlapping_connections(c, ero)) {
 			/*
 			 * Another connection is already using the eroute.
-			 * TODO: NETKEY can do this?
+			 * TODO: NETKEY can do this? For now excempt OE only
 			 */
-			return route_impossible;
+			if ((c->policy & POLICY_OPPORTUNISTIC) == LEMPTY) {
+				loglog(RC_LOG_SERIOUS,
+					"cannot route -- route already in use for \"%s\"%s",
+					ro->name, fmt_conn_instance(ro, cib));
+				return route_impossible;
+			} else {
+				loglog(RC_LOG_SERIOUS,
+					"cannot route -- route already in use for \"%s\"%s - but allowing anyway",
+					ro->name, fmt_conn_instance(ro, cib));
+			}
 		}
 	}
+
 
 	/* if there is an eroute for another connection, there is a problem */
 	if (ero != NULL && ero != c) {
@@ -1176,7 +1181,6 @@ void unroute_connection(struct connection *c)
 	}
 }
 
-#include "alg_info.h"
 #include "kernel_alg.h"
 
 void set_text_said(char *text_said, const ip_address *dst,
@@ -1748,7 +1752,7 @@ ipsec_spi_t shunt_policy_spi(const struct connection *c, bool prospective)
 		fail_spi[(c->policy & POLICY_FAIL_MASK) >> POLICY_FAIL_SHIFT];
 }
 
-static bool del_spi(ipsec_spi_t spi, int proto,
+bool del_spi(ipsec_spi_t spi, int proto,
 		const ip_address *src, const ip_address *dest)
 {
 	char text_said[SATOT_BUF];
@@ -1775,14 +1779,20 @@ static void setup_esp_nic_offload(struct kernel_sa *sa, struct connection *c,
 {
 	if (c->nic_offload == yna_no ||
 	    c->interface == NULL || c->interface->ip_dev == NULL ||
-	    c->interface->ip_dev->id_rname == NULL)
+	    c->interface->ip_dev->id_rname == NULL) {
+		dbg("NIC esp-hw-offload disabled for connection '%s'", c->name);
 		return;
+	}
 
 	if (c->nic_offload == yna_auto) {
-		if (!c->interface->ip_dev->id_nic_offload)
+		if (!c->interface->ip_dev->id_nic_offload) {
+			dbg("NIC esp-hw-offload not for connection '%s' not available on nic %s",
+				c->name, c->interface->ip_dev->id_rname);
 			return;
-
+		}
 		*nic_offload_fallback = TRUE;
+		dbg("NIC esp-hw-offload offload for connection '%s' enabled on nic %s",
+				c->name, c->interface->ip_dev->id_rname);
 	}
 	sa->nic_offload_dev = c->interface->ip_dev->id_rname;
 }
@@ -1976,8 +1986,7 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 
 	if (st->st_ipcomp.present) {
 		ipsec_spi_t ipcomp_spi =
-			inbound ? st->st_ipcomp.our_spi : st->st_ipcomp.attrs.
-			spi;
+			inbound ? st->st_ipcomp.our_spi : st->st_ipcomp.attrs.spi;
 		unsigned compalg;
 
 		switch (st->st_ipcomp.attrs.transattrs.ta_comp) {
@@ -2213,13 +2222,6 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		said_next->natt_dport = natt_dport;
 		said_next->natt_type = natt_type;
 		said_next->natt_oa = &natt_oa;
-#ifdef KLIPS_MAST
-		if (st->st_esp.attrs.encapsulation ==
-			ENCAPSULATION_MODE_TRANSPORT &&
-			useful_mastno != -1)
-			said_next->outif = MASTTRANSPORT_OFFSET +
-				useful_mastno;
-#endif
 		said_next->text_said = text_esp;
 
 		DBG(DBG_PRIVATE, {
@@ -2518,6 +2520,23 @@ static bool teardown_half_ipsec_sa(struct state *st, bool inbound)
 		struct ipsec_proto_info *info;
 	} protos[4];
 	int i = 0;
+	bool redirected = FALSE;
+	ip_address tmp_ip;
+
+	/*
+	 * If we are the initiator, were redirected and
+	 * now are trying to remove 'old' stuff, we
+	 * are going to temporary hack c->spd.that.host_addr,
+	 * because we changed it when we were redirected
+	 * and it has now the new address (but we need
+	 * the old one).
+	 */
+	if (!sameaddr(&st->st_remoteaddr, &c->spd.that.host_addr) &&
+			!isanyaddr(&c->temp_vars.redirect_ip)) {
+		redirected = TRUE;
+		tmp_ip = c->spd.that.host_addr;
+		c->spd.that.host_addr = st->st_remoteaddr;
+	}
 
 	/* ??? CLANG 3.5 thinks that c might be NULL */
 	if (kernel_ops->inbound_eroute && inbound &&
@@ -2595,6 +2614,10 @@ static bool teardown_half_ipsec_sa(struct state *st, bool inbound)
 
 		result &= del_spi(spi, proto, src, dst);
 	}
+
+	if (redirected)
+		c->spd.that.host_addr = tmp_ip;
+
 	return result;
 }
 
@@ -2610,14 +2633,13 @@ static void kernel_process_msg_cb(evutil_socket_t fd,
 	pexpect_reset_globals();
 }
 
-static event_callback_routine kernel_process_queue_cb;
+static global_timer_cb kernel_process_queue_cb;
 
-static void kernel_process_queue_cb(evutil_socket_t fd UNUSED,
-		const short event UNUSED, void *arg)
+static void kernel_process_queue_cb(void)
 {
-	const struct kernel_ops *kernel_ops = arg;
-
-	kernel_ops->process_queue();
+	if (pexpect(kernel_ops->process_queue != NULL)) {
+		kernel_ops->process_queue();
+	}
 	pexpect_reset_globals();
 }
 
@@ -2627,12 +2649,16 @@ static char kversion[256];
 const struct kernel_ops *kernel_ops = NULL;
 deltatime_t bare_shunt_interval = DELTATIME_INIT(SHUNT_SCAN_INTERVAL);
 
+static void kernel_scan_shunts(void)
+{
+	kernel_ops->scan_shunts();
+}
 
 void init_kernel(void)
 {
 	struct utsname un;
 
-#if defined(NETKEY_SUPPORT) || defined(KLIPS) || defined(KLIPS_MAST)
+#if defined(NETKEY_SUPPORT) || defined(KLIPS)
 	struct stat buf;
 #endif
 
@@ -2643,9 +2669,8 @@ void init_kernel(void)
 	switch (kern_interface) {
 #if defined(NETKEY_SUPPORT)
 	case USE_NETKEY:
-		if (stat("/proc/net/pfkey", &buf) != 0) {
-			libreswan_log(
-				"No XFRM/NETKEY kernel interface detected");
+		if (stat("/proc/sys/net/core/xfrm_acq_expires", &buf) != 0) {
+			libreswan_log("No XFRM kernel interface detected");
 			exit_pluto(PLUTO_EXIT_KERNEL_FAIL);
 		}
 		libreswan_log(
@@ -2667,31 +2692,11 @@ void init_kernel(void)
 		break;
 #endif
 
-#if defined(KLIPS_MAST)
-	case USE_MASTKLIPS:
-		if (stat("/proc/sys/net/ipsec/debug_mast", &buf) != 0) {
-			libreswan_log("No MASTKLIPS kernel interface detected");
-			exit_pluto(PLUTO_EXIT_KERNEL_FAIL);
-		}
-		libreswan_log("Using KLIPSng (mast) IPsec interface code on %s",
-			kversion);
-		kernel_ops = &mast_kernel_ops;
-		break;
-#endif
-
 #if defined(BSD_KAME)
 	case USE_BSDKAME:
 		libreswan_log("Using BSD/KAME IPsec interface code on %s",
 			kversion);
 		kernel_ops = &bsdkame_kernel_ops;
-		break;
-#endif
-
-#if defined(WIN32) && defined(WIN32_NATIVE)
-	case USE_WIN32_NATIVE:
-		libreswan_log("Using Win2K native IPsec interface code on %s",
-			kversion);
-		kernel_ops = &win2k_kernel_ops;
 		break;
 #endif
 
@@ -2724,7 +2729,8 @@ void init_kernel(void)
 	if (kernel_ops->pfkey_register != NULL)
 		kernel_ops->pfkey_register();
 
-	event_schedule_s(EVENT_SHUNT_SCAN, SHUNT_SCAN_INTERVAL, NULL);
+	enable_periodic_timer(EVENT_SHUNT_SCAN, kernel_scan_shunts,
+			      bare_shunt_interval);
 
 	DBG(DBG_KERNEL, DBG_log("setup kernel fd callback"));
 
@@ -2746,12 +2752,9 @@ void init_kernel(void)
 		 * call process_queue periodically.  Does the order
 		 * matter?
 		 */
-		static const deltatime_t delay = DELTATIME_INIT(KERNEL_PROCESS_Q_PERIOD);
-
-		/* Note: kernel_ops is read-only but pluto_event_add cannot know that */
-		pluto_event_add(NULL_FD, EV_TIMEOUT | EV_PERSIST,
-				kernel_process_queue_cb, (void *)kernel_ops,
-				&delay, "KERNEL_PROCESS_Q_FD");
+		enable_periodic_timer(EVENT_PROCESS_KERNEL_QUEUE,
+				      kernel_process_queue_cb,
+				      deltatime(KERNEL_PROCESS_Q_PERIOD));
 	}
 }
 
@@ -3059,7 +3062,9 @@ bool route_and_eroute(struct connection *c,
 		/* record unrouting */
 		if (route_installed) {
 			do {
-				passert(!erouted(rosr->routing));
+				dbg("installed route: ro name=%s, rosr->routing=%d", ro->name,
+					rosr->routing);
+				pexpect(!erouted(rosr->routing)); /* warn for now - requires fixing */
 				rosr->routing = RT_UNROUTED;
 
 				/* no need to keep old value */
@@ -3231,6 +3236,7 @@ bool route_and_eroute(struct connection *c,
 
 bool install_ipsec_sa(struct state *st, bool inbound_also)
 {
+	statetime_t start = statetime_start(&ike_sa(st)->sa); /* bill parent */
 	DBG(DBG_CONTROL, DBG_log("install_ipsec_sa() for #%lu: %s",
 					st->st_serialno,
 					inbound_also ?
@@ -3271,6 +3277,14 @@ bool install_ipsec_sa(struct state *st, bool inbound_also)
 		DBG(DBG_KERNEL,
 			DBG_log("set up incoming SA, ref=%u/%u", st->st_ref,
 				st->st_refhim));
+
+		/*
+		 * We successfully installed an IPsec SA, meaning it is safe
+		 * to clear our revival back-off delay. This is based on the
+		 * assumption that an unwilling partner might complete an IKE
+		 * SA to us, but won't complete an IPsec SA to us.
+		 */
+		st->st_connection->temp_vars.revive_delay = 0;
 	}
 
 	if (rb == route_unnecessary)
@@ -3322,6 +3336,7 @@ bool install_ipsec_sa(struct state *st, bool inbound_also)
 #ifdef USE_LINUX_AUDIT
 	linux_audit_conn(st, LAK_CHILD_START);
 #endif
+	statetime_stop(&start, "%s()", __func__);
 
 	return TRUE;
 }
@@ -3367,7 +3382,6 @@ void delete_ipsec_sa(struct state *st)
 		linux_audit_conn(st, LAK_CHILD_DESTROY);
 #endif
 	switch (kern_interface) {
-	case USE_MASTKLIPS:
 	case USE_KLIPS:
 	case USE_NETKEY:
 		{
@@ -3437,16 +3451,6 @@ void delete_ipsec_sa(struct state *st)
 							libreswan_log("shunt_eroute() failed replace with shunt in delete_ipsec_sa()");
 						}
 					}
-
-#ifdef KLIPS_MAST
-					/* in mast mode we must also delete the iptables rule */
-					if (kern_interface == USE_MASTKLIPS)
-						if (!sag_eroute(st, sr,
-									ERO_DELETE,
-									"delete")) {
-							libreswan_log("sag_eroute() failed delete in delete_ipsec_sa()");
-						}
-#endif
 				}
 			}
 			(void) teardown_half_ipsec_sa(st, FALSE);
@@ -3454,12 +3458,6 @@ void delete_ipsec_sa(struct state *st)
 		(void) teardown_half_ipsec_sa(st, TRUE);
 
 		break;
-#if defined(WIN32) && defined(WIN32_NATIVE)
-	case USE_WIN32_NATIVE:
-		DBG(DBG_CONTROL,
-			DBG_log("No support (required?) to delete_ipsec_sa with Win2k"));
-		break;
-#endif
 	case NO_KERNEL:
 		DBG(DBG_CONTROL,
 			DBG_log("No support required to delete_ipsec_sa with NoKernel support"));
@@ -3487,7 +3485,7 @@ bool was_eroute_idle(struct state *st, deltatime_t since_when)
  */
 bool get_sa_info(struct state *st, bool inbound, deltatime_t *ago /* OUTPUT */)
 {
-	const struct connection *const c = st->st_connection;
+	struct connection *const c = st->st_connection;
 
 	if (kernel_ops->get_sa == NULL || (!st->st_esp.present && !st->st_ah.present)) {
 		return FALSE;
@@ -3508,6 +3506,21 @@ bool get_sa_info(struct state *st, bool inbound, deltatime_t *ago /* OUTPUT */)
 
 	const ip_address *src, *dst;
 	ipsec_spi_t spi;
+	bool redirected = FALSE;
+	ip_address tmp_ip;
+
+	/*
+	 * if we were redirected (using the REDIRECT
+	 * mechanism), change
+	 * spd.that.host_addr temporarily, we reset
+	 * it back later
+	 */
+	if (!sameaddr(&st->st_remoteaddr, &c->spd.that.host_addr) &&
+			!isanyaddr(&c->temp_vars.redirect_ip)) {
+		redirected = TRUE;
+		tmp_ip = c->spd.that.host_addr;
+		c->spd.that.host_addr = st->st_remoteaddr;
+	}
 
 	if (inbound) {
 		src = &c->spd.that.host_addr;
@@ -3561,6 +3574,10 @@ bool get_sa_info(struct state *st, bool inbound, deltatime_t *ago /* OUTPUT */)
 		if (ago != NULL)
 			*ago = monotimediff(mononow(), p2->peer_lastused);
 	}
+
+	if (redirected)
+		c->spd.that.host_addr = tmp_ip;
+
 	return TRUE;
 }
 
@@ -3686,6 +3703,4 @@ void expire_bare_shunts(void)
 			bspp = &bsp->next;
 		}
 	}
-
-	event_schedule(EVENT_SHUNT_SCAN, bare_shunt_interval, NULL);
 }

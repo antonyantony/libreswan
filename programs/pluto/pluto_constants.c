@@ -1,8 +1,8 @@
 /* tables of names for values defined in constants.h
  *
  * Copyright (C) 1998-2002,2013 D. Hugh Redelmeier <hugh@mimosa.com>
- * Copyright (C) 2013-2018 Paul Wouters <pwouters@redhat.com>
- * Copyright (C) 2015 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2013-2019 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2015-2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -117,37 +117,43 @@ enum_names sd_action_names = {
 
 /* Timer events */
 static const char *const timer_event_name[] = {
-	"EVENT_NULL",
+#define E(EVENT) [EVENT] = #EVENT
 
-	"EVENT_REINIT_SECRET",
-	"EVENT_SHUNT_SCAN",
-	"EVENT_PENDING_DDNS",
-	"EVENT_SD_WATCHDOG",
-	"EVENT_PENDING_PHASE2",
-	"EVENT_CHECK_CRLS",
+	E(EVENT_NULL),
 
-	"EVENT_SO_DISCARD",
-	"EVENT_v1_RETRANSMIT",
-	"EVENT_v1_SEND_XAUTH",
-	"EVENT_SA_REPLACE",
-	"EVENT_SA_REPLACE_IF_USED",
-	"EVENT_v2_SA_REPLACE_IF_USED_IKE",
-	"EVENT_v2_SA_REPLACE_IF_USED",
-	"EVENT_SA_EXPIRE",
-	"EVENT_NAT_T_KEEPALIVE",
-	"EVENT_DPD",
-	"EVENT_DPD_TIMEOUT",
-	"EVENT_CRYPTO_TIMEOUT",
-	"EVENT_PAM_TIMEOUT",
+	E(EVENT_REINIT_SECRET),
+	E(EVENT_SHUNT_SCAN),
+	E(EVENT_PENDING_DDNS),
+	E(EVENT_SD_WATCHDOG),
+	E(EVENT_PENDING_PHASE2),
+	E(EVENT_CHECK_CRLS),
+	E(EVENT_REVIVE_CONNS),
+	E(EVENT_FREE_ROOT_CERTS),
 
-	"EVENT_v2_RETRANSMIT",
-	"EVENT_v2_RESPONDER_TIMEOUT",
-	"EVENT_v2_LIVENESS",
-	"EVENT_v2_RELEASE_WHACK",
-	"EVENT_v2_INITIATE_CHILD",
-	"EVENT_v2_SEND_NEXT_IKE",
-	"EVENT_v2_ADDR_CHANGE",
-	"EVENT_RETAIN",
+	E(EVENT_SO_DISCARD),
+	E(EVENT_RETRANSMIT),
+
+	E(EVENT_SA_REKEY),
+	E(EVENT_SA_REPLACE),
+	E(EVENT_SA_EXPIRE),
+
+	E(EVENT_v1_SEND_XAUTH),
+	E(EVENT_v1_SA_REPLACE_IF_USED),
+	E(EVENT_NAT_T_KEEPALIVE),
+	E(EVENT_DPD),
+	E(EVENT_DPD_TIMEOUT),
+	E(EVENT_CRYPTO_TIMEOUT),
+	E(EVENT_PAM_TIMEOUT),
+
+	E(EVENT_v2_LIVENESS),
+	E(EVENT_v2_RELEASE_WHACK),
+	E(EVENT_v2_INITIATE_CHILD),
+	E(EVENT_v2_SEND_NEXT_IKE),
+	E(EVENT_v2_ADDR_CHANGE),
+	E(EVENT_v2_REDIRECT),
+	E(EVENT_RETAIN),
+
+#undef E
 };
 
 enum_names timer_event_names = {
@@ -201,7 +207,6 @@ static const char *const state_name[] = {
 	S(STATE_IKEv1_ROOF),
 
 	/* v2 */
-	S(STATE_IKEv2_BASE),
 	S(STATE_PARENT_I0),
 	S(STATE_PARENT_I1),
 	S(STATE_PARENT_I2),
@@ -276,7 +281,6 @@ static const char *const state_story[] = {
 	[STATE_XAUTH_I1] = "XAUTH client - possibly awaiting CFG_set",
 
 	[STATE_IKEv1_ROOF] = "invalid state - IKE roof",
-	[STATE_IKEv2_FLOOR] = "invalid state - IKEv2 base",
 
 	[STATE_PARENT_I0] = "waiting for KE to finish",
 	[STATE_PARENT_I1] = "sent v2I1, expected v2R1",
@@ -407,9 +411,11 @@ const char *const sa_policy_bit_names[] = {
 	"OVERLAPIP",
 	"IKEV1_ALLOW",
 	"IKEV2_ALLOW",
-	"IKEV2_PROPOSE",
 	"IKEV2_ALLOW_NARROWING",
 	"IKEV2_PAM_AUTHORIZE",
+	"SEND_REDIRECT_ALWAYS",
+	"SEND_REDIRECT_NEVER",
+	"ACCEPT_REDIRECT_YES",
 	"SAREF_TRACK",
 	"SAREF_TRACK_CONNTRACK",
 	"IKE_FRAG_ALLOW",
@@ -436,6 +442,20 @@ enum_names ikev2_asym_auth_name = {
 	AUTH_UNSET, AUTH_NULL,
 	ARRAY_REF(ikev2_asym_auth_names),
 	NULL, /* prefix */
+	NULL
+};
+
+static const char *const allow_global_redirect_name[] = {
+	"no",
+	"yes",
+	"auto",
+};
+
+enum_names allow_global_redirect_names = {
+	GLOBAL_REDIRECT_NO,
+	GLOBAL_REDIRECT_AUTO,
+	ARRAY_REF(allow_global_redirect_name),
+	NULL,
 	NULL
 };
 

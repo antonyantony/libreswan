@@ -2,7 +2,7 @@
 
 # Run the pluto testsuite, for libreswan
 #
-# Copyright (C) 2015-2016 Andrew Cagney <cagney@gnu.org>
+# Copyright (C) 2015-2019 Andrew Cagney <cagney@gnu.org>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -14,6 +14,8 @@
 # or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
 # for more details.
 
+import signal
+import faulthandler
 import sys
 import argparse
 from datetime import datetime
@@ -28,8 +30,16 @@ from fab import ignore
 from fab import timing
 from fab import publish
 
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Run tests")
+
+    # If SIGUSR1, backtrace all threads; hopefully this is early
+    # enough.
+    faulthandler.register(signal.SIGUSR1)
+
+    parser = argparse.ArgumentParser(description="Run tests",
+                                     epilog="SIGUSR1 will dump all thread stacks")
 
     parser.add_argument("--verbose", "-v", action="count", default=0)
 
@@ -81,8 +91,8 @@ def main():
     test_stats.log_summary(logger.info, header="final test stats:", prefix="  ")
     result_stats.log_summary(logger.info, header="final test results:", prefix="  ")
 
-    end_time = datetime.now()
-    logger.info("run finished at %s after %s", end_time, end_time - timing.START_TIME)
+    stop_time = datetime.now()
+    logger.info("run finished at %s after %s", stop_time, stop_time - timing.START_TIME)
 
     return exit_code
 

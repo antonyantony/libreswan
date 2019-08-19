@@ -10,9 +10,9 @@
  * Copyright (C) 2010 Tuomo Soini <tis@foobar.fi>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2012 Panagiotis Tamtamis <tamtamis@gmail.com>
- * Copyright (C) 2012-2018 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2012-2019 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 Antony Antony <antony@phenome.org>
- *
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -63,7 +63,6 @@
 #include "log.h"
 #include "keys.h"
 #include "whack.h"
-#include "alg_info.h"
 #include "spdb.h"
 #include "ike_alg.h"
 #include "kernel_alg.h"
@@ -150,7 +149,7 @@ bool orient(struct connection *c)
 								c->interface->ip_dev->id_rname,
 								p->ip_dev->id_rname);
 							}
-						terminate_connection(c->name);
+						terminate_connection(c->name, FALSE);
 						c->interface = NULL; /* withdraw orientation */
 						return FALSE;
 					}
@@ -234,6 +233,7 @@ static int initiate_a_connection(struct connection *c, void *arg)
 					"cannot initiate connection without resolved dynamic peer IP address, will keep retrying (kind=%s)",
 					enum_show(&connection_kind_names,
 						 c->kind));
+				dbg("connection '%s' +POLICY_UP", c->name);
 				c->policy |= POLICY_UP;
 				reset_cur_connection();
 				return 1;
@@ -265,6 +265,7 @@ static int initiate_a_connection(struct connection *c, void *arg)
 				"cannot initiate connection without resolved dynamic peer IP address, will keep retrying (kind=%s, narrowing=%s)",
 				enum_show(&connection_kind_names, c->kind),
 					bool_str((c->policy & POLICY_IKEV2_ALLOW_NARROWING) != LEMPTY));
+			dbg("connection '%s' +POLICY_UP", c->name);
 			c->policy |= POLICY_UP;
 			reset_cur_connection();
 			return 1;
@@ -279,7 +280,7 @@ static int initiate_a_connection(struct connection *c, void *arg)
 		}
 	}
 
-	if (LIN(POLICY_IKEV2_PROPOSE | POLICY_IKEV2_ALLOW_NARROWING, c->policy) &&
+	if (LIN(POLICY_IKEV2_ALLOW | POLICY_IKEV2_ALLOW_NARROWING, c->policy) &&
 		c->kind == CK_TEMPLATE) {
 			c = instantiate(c, NULL, NULL);
 	}
@@ -287,15 +288,12 @@ static int initiate_a_connection(struct connection *c, void *arg)
 	/* We will only request an IPsec SA if policy isn't empty
 	 * (ignoring Main Mode items).
 	 * This is a fudge, but not yet important.
-	 * If we are to proceed asynchronously, whackfd will be NULL_FD.
 	 */
 
 	if (c->policy & (POLICY_ENCRYPT | POLICY_AUTHENTICATE)) {
-		struct alg_info_esp *alg = c->alg_info_esp;
-		struct db_sa *phase2_sa = kernel_alg_makedb(
-			c->policy, alg, TRUE);
-
-		if (alg != NULL && phase2_sa == NULL) {
+		struct db_sa *phase2_sa =
+			kernel_alg_makedb(c->policy, c->child_proposals, TRUE);
+		if (c->child_proposals.p != NULL && phase2_sa == NULL) {
 			whack_log(RC_LOG_SERIOUS,
 				  "cannot initiate: no acceptable kernel algorithms loaded");
 			reset_cur_connection();
@@ -305,6 +303,7 @@ static int initiate_a_connection(struct connection *c, void *arg)
 		free_sa(&phase2_sa);
 	}
 
+	dbg("connection '%s' +POLICY_UP", c->name);
 	c->policy |= POLICY_UP;
 	whackfd = dup_any(whackfd);
 	ipsecdoi_initiate(whackfd, c, c->policy, 1, SOS_NOBODY
@@ -397,7 +396,7 @@ void restart_connections_by_peer(struct connection *const c)
 		{
 			/* This might delete c if CK_INSTANCE */
 			/* ??? is there a chance hp becomes dangling? */
-			terminate_connection(d->name);
+			terminate_connection(d->name, FALSE);
 		}
 		d = next;
 	}
@@ -466,11 +465,10 @@ static void cannot_oppo(struct connection *c,
 			struct find_oppo_bundle *b,
 			err_t ughmsg)
 {
-	char pcb[ADDRTOT_BUF];
-	char ocb[ADDRTOT_BUF];
-
-	addrtot(&b->peer_client, 0, pcb, sizeof(pcb));
-	addrtot(&b->our_client, 0, ocb, sizeof(ocb));
+	ip_address_buf ocb_buf;
+	const char *ocb = ipstr(&b->our_client, &ocb_buf);
+	ip_address_buf pcb_buf;
+	const char *pcb = ipstr(&b->peer_client, &pcb_buf);
 
 	DBG(DBG_OPPO,
 	    libreswan_log("Cannot opportunistically initiate for %s to %s: %s",
@@ -582,8 +580,6 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b
 {
 	struct connection *c = NULL;
 	struct spd_route *sr;
-	char ours[ADDRTOT_BUF];
-	char his[ADDRTOT_BUF];
 	int ourport, hisport;
 	char demandbuf[256];
 	bool loggedit = FALSE;
@@ -592,8 +588,11 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b
 	 * First try for one that explicitly handles the clients.
 	 */
 
-	addrtot(&b->our_client, 0, ours, sizeof(ours));
-	addrtot(&b->peer_client, 0, his, sizeof(his));
+	ip_address_buf ourb;
+	const char *ours = ipstr(&b->our_client, &ourb);
+	ip_address_buf hisb;
+	const char *his = ipstr(&b->peer_client, &hisb);
+
 	ourport = ntohs(portof(&b->our_client));
 	hisport = ntohs(portof(&b->peer_client));
 
@@ -638,7 +637,6 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b
 		 */
 		if (!loggedit) {
 			libreswan_log("%s", demandbuf);
-			loggedit = TRUE;	/* loggedit not subsequently used */
 		}
 
 		cannot_oppo(NULL, b, "no routed template covers this pair");
@@ -648,7 +646,6 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b
 	}  else if (c->kind == CK_TEMPLATE && (c->policy & POLICY_OPPORTUNISTIC) == 0) {
 		if (!loggedit) {
 			libreswan_log("%s", demandbuf);
-			loggedit = TRUE;	/* loggedit not subsequently used */
 		}
 		loglog(RC_NOPEERIP,
 		       "cannot initiate connection for packet %s:%d -> %s:%d proto=%d - template conn",
@@ -715,7 +712,6 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b
 
 		if (!loggedit) {
 			libreswan_log("%s", demandbuf);
-			loggedit = TRUE;	/* loggedit not subsequently used */
 		}
 
 		ipsecdoi_initiate(b->whackfd, c, c->policy, 1,
@@ -743,6 +739,12 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b
 				    c->name,
 				    fmt_conn_instance(c, cib));
 		    });
+
+		if (sr->routing == RT_ROUTED_PROSPECTIVE && eclipsable(sr)) {
+			dbg("route is eclipsed");
+			sr->routing = RT_ROUTED_ECLIPSED;
+			eclipse_count++;
+		}
 
 		idtoa(&sr->this.id, mycredentialstr, sizeof(mycredentialstr));
 
@@ -1106,9 +1108,6 @@ void connection_check_ddns(void)
 	struct connection *c, *cnext;
 	realtime_t tv1 = realnow();
 
-	/* reschedule */
-	event_schedule_s(EVENT_PENDING_DDNS, PENDING_DDNS_INTERVAL, NULL);
-
 	for (c = connections; c != NULL; c = cnext) {
 		cnext = c->ac_next;
 		connection_check_ddns1(c);
@@ -1136,9 +1135,6 @@ void connection_check_ddns(void)
 void connection_check_phase2(void)
 {
 	struct connection *c, *cnext;
-
-	/* reschedule */
-	event_schedule_s(EVENT_PENDING_PHASE2, PENDING_PHASE2_INTERVAL, NULL);
 
 	for (c = connections; c != NULL; c = cnext) {
 		cnext = c->ac_next;
@@ -1206,6 +1202,8 @@ void connection_check_phase2(void)
 
 void init_connections(void)
 {
-	event_schedule_s(EVENT_PENDING_DDNS, PENDING_DDNS_INTERVAL, NULL);
-	event_schedule_s(EVENT_PENDING_PHASE2, PENDING_PHASE2_INTERVAL, NULL);
+	enable_periodic_timer(EVENT_PENDING_DDNS, connection_check_ddns,
+			      deltatime(PENDING_DDNS_INTERVAL));
+	enable_periodic_timer(EVENT_PENDING_PHASE2, connection_check_phase2,
+			      deltatime(PENDING_PHASE2_INTERVAL));
 }

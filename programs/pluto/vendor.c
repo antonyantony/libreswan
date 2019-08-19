@@ -1,9 +1,10 @@
 /* Libreswan ISAKMP VendorID Handling
  * Copyright (C) 2002-2003 Mathieu Lafon - Arkoon Network Security
  * Copyright (C) 2004 Xelerance Corporation
- * Copyright (C) 2012-2018 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2012-2019 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 Wolfgang Nothdurft <wolfgang@linogate.de>
- * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2013-2019 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * See also https://github.com/royhills/ike-scan/blob/master/ike-vendor-ids
  *
@@ -62,6 +63,7 @@
  *  cf49908791073fb46439790fdeb6aeed981101ab0000000500000300
  *
  * Cisco:
+ *  1f07f70eaa6514d3b0fa96542a500100 (Cisco VPN Concentrator)
  *  1f07f70eaa6514d3b0fa96542a500300 (VPN 3000 version 3.0.0)
  *  1f07f70eaa6514d3b0fa96542a500301 (VPN 3000 version 3.0.1)
  *  1f07f70eaa6514d3b0fa96542a500305 (VPN 3000 version 3.0.5)
@@ -378,8 +380,8 @@ static struct vid_struct vid_tab[] = {
 	  "\x3b\x90\x31\xdc\xe4\xfc\xf8\x8b\x48\x9a\x92\x39\x63\xdd\x0c\x49",
 	  16 },
 
-	/* Used by libreswan and openswan to detect bid-down attacks */
-	{ VID_MISC_IKEv2, VID_STRING | VID_KEEP, "IKEv2", "CAN-IKEv2", NULL,
+	/* Obsolete: Was used by libreswan and openswan to detect bid-down attacks */
+	{ VID_MISC_IKEv2, VID_STRING | VID_KEEP, "IKEv2", "CAN-IKEv2(obsolete)", NULL,
 	  0 },
 
 	/* VID is ASCII "HeartBeat_Notify" plus a few bytes (version?) */
@@ -612,8 +614,8 @@ void init_vendorid(void)
 			vid->vid = (char *)vidm;
 
 			/* TODO: This use must allowed even with USE_MD5=false */
-			struct crypt_hash *ctx = crypt_hash_init(&ike_alg_hash_md5,
-								 "vendor id", DBG_CRYPT);
+			struct crypt_hash *ctx = crypt_hash_init("vendor id",
+								 &ike_alg_hash_md5);
 			crypt_hash_digest_bytes(ctx, "data", d, strlen(vid->data));
 			crypt_hash_final_bytes(&ctx, vidm, MD5_DIGEST_SIZE);
 			vid->vid_len = MD5_DIGEST_SIZE;
@@ -622,12 +624,11 @@ void init_vendorid(void)
 #define FSWAN_VID_SIZE 12
 			unsigned char hash[MD5_DIGEST_SIZE];
 			char *vidm = alloc_bytes(FSWAN_VID_SIZE, "fswan VID (ignore)");
-			int i;
 
 			vid->vid = vidm;
 
-			struct crypt_hash *ctx = crypt_hash_init(&ike_alg_hash_md5,
-								 "vendor id", DBG_CRYPT);
+			struct crypt_hash *ctx = crypt_hash_init("vendor id",
+								 &ike_alg_hash_md5);
 			crypt_hash_digest_bytes(ctx, "data", vid->data, strlen(vid->data));
 			crypt_hash_final_bytes(&ctx, hash, MD5_DIGEST_SIZE);
 
@@ -640,7 +641,7 @@ void init_vendorid(void)
 			memset(vidm + 2 + MD5_DIGEST_SIZE, '\0',
 			       FSWAN_VID_SIZE - (2 + MD5_DIGEST_SIZE));	/* pad hash */
 #endif
-			for (i = 2; i < FSWAN_VID_SIZE; i++) {
+			for (int i = 2; i < FSWAN_VID_SIZE; i++) {
 				vidm[i] &= 0x7f;
 				vidm[i] |= 0x40;
 			}

@@ -5,6 +5,8 @@
  * Copyright (C) 2005-2007 Michael Richardson <mcr@xelerance.com>
  * Copyright (C) 2007-2010 Paul Wouters <paul@xelerance.com>
  * Copyright (C) 2013 Paul Wouters <paul@libreswan.org>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -61,11 +63,12 @@
 
 #include "lswlog.h"
 #include "lswtool.h"
-#include "alg_info.h"
+#include "proposals.h"
 #include "kernel_alg.h"
 #include "kernel_sadb.h"
 #include "pfkey_help.h"
 #include "ip_address.h"
+#include "ip_said.h"
 
 struct encap_msghdr *em;
 
@@ -539,7 +542,7 @@ int main(int argc, char *argv[])
 {
 	tool_init_log(argv[0]);
 	/* force pfkey logging */
-	pfkey_error_func = pfkey_debug_func = printf;
+	cur_debugging = DBG_BASE;
 
 	__u32 spi = 0;
 	int c;
@@ -605,7 +608,7 @@ int main(int argc, char *argv[])
 
 		case 'g':
 			debug = TRUE;
-			pfkey_lib_debug = PF_KEY_DEBUG_PARSE_MAX;
+			cur_debugging = DBG_BASE;
 			/* paul: this is a plutoism? cur_debugging = 0xffffffff; */
 			argcount--;
 			break;
@@ -1132,9 +1135,9 @@ int main(int argc, char *argv[])
 			progname);
 	}
 
-	if (stat("/proc/net/pfkey", &sts) == 0) {
+	if (stat("/proc/sys/net/core/xfrm_acq_expires", &sts) == 0) {
 		fprintf(stderr,
-			"%s: NETKEY does not use the ipsec spi command. Use 'ip xfrm' instead.\n",
+			"%s: XFRM does not use the ipsec spi command. Use 'ip xfrm' instead.\n",
 			progname);
 		exit(1);
 	}

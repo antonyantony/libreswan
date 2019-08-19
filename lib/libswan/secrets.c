@@ -8,9 +8,11 @@
  * Copyright (C) 2005 Michael Richardson <mcr@xelerance.com>
  * Copyright (C) 2009-2012 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2012-2015 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2016 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2016-2019 Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2017 Vukasin Karadzic <vukasin.karadzic@gmail.com>
  * Copyright (C) 2018 Sahana Prasad <sahana.prasad07@gmail.com>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2019 D. Hugh Redelmeier <hugh@mimosa.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -55,7 +57,7 @@
 #include <pk11pub.h>
 #include <prerror.h>
 #include <cert.h>
-#include <key.h>
+#include <keyhi.h>
 #include "lswconf.h"
 #include "lswnss.h"
 
@@ -467,11 +469,8 @@ struct secret *lsw_find_secret_by_id(struct secret *secrets,
 						same = TRUE;
 						break;
 					case PKK_PSK:
-						same = s->pks.u.preshared_secret.len ==
-						       best->pks.u.preshared_secret.len &&
-						       memeq(s->pks.u.preshared_secret.ptr,
-							     best->pks.u.preshared_secret.ptr,
-							     s->pks.u.preshared_secret.len);
+						same = chunk_eq(s->pks.u.preshared_secret,
+							best->pks.u.preshared_secret);
 						break;
 					case PKK_RSA:
 						/*
@@ -498,11 +497,8 @@ struct secret *lsw_find_secret_by_id(struct secret *secrets,
 						 */
 						break;
 					case PKK_PPK:
-						same = s->pks.ppk.len ==
-						       best->pks.ppk.len &&
-						       memeq(s->pks.ppk.ptr,
-							     best->pks.ppk.ptr,
-							     s->pks.ppk.len);
+						same = chunk_eq(s->pks.ppk,
+							best->pks.ppk);
 						break;
 					default:
 						bad_case(kind);
@@ -698,11 +694,17 @@ static err_t lsw_process_ppk_static_secret(chunk_t *ppk, chunk_t *ppk_id)
 		size_t len = flp->cur - flp->tok - 2;
 
 		clonetochunk(*ppk_id, flp->tok + 1, len, "PPK ID");
-		(void) shift();
 	} else {
 		ugh = "No quotation marks found. PPK ID should be in quotation marks";
 		return ugh;
 	}
+
+	if (!shift()) {
+		ugh = "No PPK found. PPK should be specified after PPK ID";
+		freeanychunk(*ppk_id);
+		return ugh;
+	}
+
 	if (*flp->tok == '"' || *flp->tok == '\'') {
 		size_t len = flp->cur - flp->tok - 2;
 
@@ -726,6 +728,7 @@ static err_t lsw_process_ppk_static_secret(chunk_t *ppk, chunk_t *ppk_id)
 			/* ttodata didn't like PPK data */
 			ugh = builddiag("PPK data malformed (%s): %s", ugh,
 					flp->tok);
+			freeanychunk(*ppk_id);
 		} else {
 			clonetochunk(*ppk, buf, sz, "PPK");
 			(void) shift();
@@ -744,7 +747,7 @@ struct secret *lsw_get_ppk_by_id(struct secret *s, chunk_t ppk_id)
 {
 	while (s != NULL) {
 		struct private_key_stuff pks = s->pks;
-		if (pks.kind == PKK_PPK && same_chunk(pks.ppk_id, ppk_id))
+		if (pks.kind == PKK_PPK && chunk_eq(pks.ppk_id, ppk_id))
 			return s;
 		s = s->next;
 	}
@@ -955,6 +958,16 @@ static void process_secret(struct secret **psecrets,
 	if (ugh != NULL) {
 		loglog(RC_LOG_SERIOUS, "\"%s\" line %d: %s",
 			flp->filename, flp->lino, ugh);
+		/* free id's that should have been allocated */
+		if (s->ids != NULL) {
+			struct id_list *i, *ni;
+			for (i = s->ids; i != NULL; i = ni) {
+				ni = i->next;	/* grab before freeing i */
+				free_id_content(&i->id);
+				pfree(i);
+			}
+		}
+		/* finally free s */
 		pfree(s);
 	} else if (flushline("expected record boundary in key")) {
 		/* gauntlet has been run: install new secret */
@@ -1033,7 +1046,7 @@ static void lsw_process_secret_records(struct secret **psecrets)
 
 			s->ids = NULL;
 			s->pks.kind = PKK_PSK;	/* default */
-			setchunk(s->pks.u.preshared_secret, NULL, 0);
+			s->pks.u.preshared_secret = EMPTY_CHUNK;
 			s->pks.line = flp->lino;
 			s->next = NULL;
 
@@ -1294,7 +1307,7 @@ bool same_RSA_public_key(const struct RSA_public_key *a,
 	 * difference.
 	 */
 	DBG(DBG_CRYPT,
-	    if (a->k != b->k && same_chunk(a->e, b->e)) {
+	    if (a->k != b->k && chunk_eq(a->e, b->e)) {
 		    DBG_log("XXX: different modulus k (%u vs %u) modulus (%zu vs %zu) caused a mismatch",
 			    a->k, b->k, a->n.len, b->n.len);
 	    });
@@ -1304,17 +1317,17 @@ bool same_RSA_public_key(const struct RSA_public_key *a,
 		);
 	DBG(DBG_CRYPT,
 	    DBG_log("n did %smatch",
-		    same_chunk(a->n, b->n) ? "" : "NOT ");
+		    chunk_eq(a->n, b->n) ? "" : "NOT ");
 		);
 	DBG(DBG_CRYPT,
 		DBG_log("e did %smatch",
-			same_chunk(a->e, b->e) ? "" : "NOT ");
+			chunk_eq(a->e, b->e) ? "" : "NOT ");
 		);
 
 	return a == b ||
 		(a->k == b->k &&
-		 same_chunk(a->n, b->n) &&
-		 same_chunk(a->e, b->e));
+		 chunk_eq(a->n, b->n) &&
+		 chunk_eq(a->e, b->e));
 }
 
 void install_public_key(struct pubkey *pk, struct pubkey_list **head)
@@ -1363,6 +1376,9 @@ struct pubkey *allocate_RSA_public_key_nss(CERTCertificate *cert)
 		SECItem *nss_ckaid = PK11_GetLowLevelKeyIDForCert(NULL, cert,
 								  lsw_return_nss_password_file_info());
 		if (nss_ckaid == NULL) {
+			/* someone deleted CERT from the NSS DB */
+			libreswan_log("NSS: could not extract CKAID from RSA certificate '%s'",
+				      cert->nickname);
 			return NULL;
 		}
 		err_t err = form_ckaid_nss(nss_ckaid, &ckaid);
@@ -1379,6 +1395,9 @@ struct pubkey *allocate_RSA_public_key_nss(CERTCertificate *cert)
 	{
 		SECKEYPublicKey *nsspk = SECKEY_ExtractPublicKey(&cert->subjectPublicKeyInfo);
 		if (nsspk == NULL) {
+			/* someone deleted CERT from the NSS DB */
+			libreswan_log("NSS: could not extract public key from RSA certificate '%s'",
+				      cert->nickname);
 			freeanyckaid(&ckaid);
 			return NULL;
 		}
@@ -1399,13 +1418,11 @@ struct pubkey *allocate_RSA_public_key_nss(CERTCertificate *cert)
 	 */
 	form_keyid(e, n, pk->u.rsa.keyid, &pk->u.rsa.k);
 
-	/*
-	DBG(DBG_PRIVATE, RSA_show_public_key(&pk->u.rsa));
-	*/
+	/* DBG(DBG_PRIVATE, RSA_show_public_key(&pk->u.rsa)); */
 
 	pk->alg = PUBKEY_ALG_RSA;
 	pk->id  = empty_id;
-	pk->issuer = empty_chunk;
+	pk->issuer = EMPTY_CHUNK;
 
 	return pk;
 }
@@ -1419,6 +1436,13 @@ struct pubkey *allocate_ECDSA_public_key_nss(CERTCertificate *cert)
 	char keyid[KEYID_BUF];
 	{
 		SECKEYPublicKey *nsspk = SECKEY_ExtractPublicKey(&cert->subjectPublicKeyInfo);
+		if (nsspk == NULL) {
+			/* someone deleted CERT from the NSS DB */
+			libreswan_log("NSS: could not extract public key from ECDSA certificate '%s'",
+				      cert->nickname);
+			freeanyckaid(&ckaid);
+			return NULL;
+		}
 
 		pub = clone_secitem_as_chunk(nsspk->u.ec.publicValue, "pub");
 		ecParams = clone_secitem_as_chunk(nsspk->u.ec.DEREncodedParams, "ecParams");
@@ -1461,7 +1485,7 @@ struct pubkey *allocate_ECDSA_public_key_nss(CERTCertificate *cert)
 
 	pk->alg = PUBKEY_ALG_ECDSA;
 	pk->id  = empty_id;
-	pk->issuer = empty_chunk;
+	pk->issuer = EMPTY_CHUNK;
 
 	return pk;
 }
@@ -1474,7 +1498,7 @@ static err_t add_ckaid_to_rsa_privkey(struct RSA_private_key *rsak,
 	if (pubk == NULL) {
 		loglog(RC_LOG_SERIOUS,
 		       "%s: should not happen: cert public key not found [%d]",
-		       __FUNCTION__, PR_GetError());
+		       __func__, PR_GetError());
 		return "NSS: cert public key not found";
 	}
 
@@ -1493,7 +1517,7 @@ static err_t add_ckaid_to_rsa_privkey(struct RSA_private_key *rsak,
 	if (certCKAID == NULL) {
 		loglog(RC_LOG_SERIOUS,
 		       "%s: no key ID - slot or DB error [%d]",
-		       __FUNCTION__, PR_GetError());
+		       __func__, PR_GetError());
 		ugh = "NSS: key ID not found";
 		goto out;
 	}
@@ -1545,7 +1569,7 @@ static err_t add_ckaid_to_ecdsa_privkey(struct ECDSA_private_key *ecdsak,
 	if (pubk == NULL) {
 		loglog(RC_LOG_SERIOUS,
 		       "%s: should not happen: cert public key not found [%d]",
-		       __FUNCTION__, PR_GetError());
+		       __func__, PR_GetError());
 		return "NSS: cert public key not found";
 	}
 
@@ -1564,7 +1588,7 @@ static err_t add_ckaid_to_ecdsa_privkey(struct ECDSA_private_key *ecdsak,
 	if (certCKAID == NULL) {
 		loglog(RC_LOG_SERIOUS,
 		       "%s: no key ID - slot or DB error [%d]",
-		       __FUNCTION__, PR_GetError());
+		       __func__, PR_GetError());
 		ugh = "NSS: key ID not found";
 		goto out;
 	}

@@ -2,6 +2,7 @@
  *
  * Copyright (C) 2016 Andrew Cagney <andrew.cagney@gmail.com>
  * Copyright (C) 2018 Sahana Prasad <sahana.prasad07@gmail.com>
+ * Copyright (C) 2019 D. Hugh Redelmeier <hugh@mimosa.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -19,8 +20,8 @@
 extern const struct hash_desc ike_alg_hash_sha1;
 #endif
 
+extern const struct hash_desc ike_alg_hash_sha2_256;	/* also used for cookies */
 #ifdef USE_SHA2
-extern const struct hash_desc ike_alg_hash_sha2_256;
 extern const struct hash_desc ike_alg_hash_sha2_384;
 extern const struct hash_desc ike_alg_hash_sha2_512;
 #endif

@@ -3,7 +3,8 @@
  * Copyright (C) 2005-2008 Michael Richardson <mcr@xelerance.com>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
- * Copyright (C) 2017 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2017-2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -47,4 +48,21 @@ extern void delete_state_event(struct state *st, struct pluto_event **ev);
 #define delete_dpd_event(ST) delete_state_event((ST), &(ST)->st_dpd_event)
 
 extern void timer_list(void);
+extern char *revive_conn;
+
+/*
+ * Since global timers (one-shot or periodic) rely on global state
+ * they don't need a context parameter.
+ *
+ * XXX: implementation can be found in server.c and not timer.c as it
+ * is just easier.
+ */
+typedef void (global_timer_cb)(void);
+void enable_periodic_timer(enum event_type type, global_timer_cb *cb,
+			   deltatime_t period);
+
+void init_oneshot_timer(enum event_type type, global_timer_cb *cb);
+void schedule_oneshot_timer(enum event_type type, deltatime_t delay);
+void deschedule_oneshot_timer(enum event_type type);
+
 #endif /* _TIMER_H */

@@ -7,7 +7,7 @@
  * Copyright (C) 2007 Ken Bantoft <ken@xelerance.com>
  * Copyright (C) 2011-2012 Paul Wouters <paul@xelerance.com>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2013-2014 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2013-2019 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2013-2014 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2016-2018 Andrew Cagney
  *
@@ -37,7 +37,7 @@
 #include "ike_alg.h"
 #include "ike_alg_integ.h"
 #include "ike_alg_encrypt.h"
-#include "alg_info.h"
+#include "proposals.h"
 #include "ike_alg_prf.h"
 #include "ike_alg_prf_hmac_ops.h"
 #include "ike_alg_prf_nss_ops.h"
@@ -589,7 +589,7 @@ static void integ_desc_check(const struct ike_alg *alg)
 static bool integ_desc_is_ike(const struct ike_alg *alg)
 {
 	const struct integ_desc *integ = integ_desc(alg);
-	return integ->prf != NULL;
+	return integ->prf != NULL || integ == &ike_alg_integ_none;
 }
 
 static struct algorithm_table integ_algorithms = ALGORITHM_TABLE(integ_descriptors);
@@ -819,17 +819,19 @@ static void dh_desc_check(const struct ike_alg *alg)
 	pexpect_ike_alg(alg, dh->common.id[IKEv1_OAKLEY_ID] == dh->group);
 	/* always implemented */
 	pexpect_ike_alg(alg, dh->dh_ops != NULL);
-	pexpect_ike_alg(alg, dh->dh_ops->check != NULL);
-	pexpect_ike_alg(alg, dh->dh_ops->calc_secret != NULL);
-	pexpect_ike_alg(alg, dh->dh_ops->calc_shared != NULL);
-	/* more? */
-	dh->dh_ops->check(dh);
-	/* IKEv1 supports MODP groups but not ECC. */
-	pexpect_ike_alg(alg, (dh->dh_ops == &ike_alg_dh_nss_modp_ops
-			      ? dh->common.id[IKEv1_ESP_ID] == dh->group
-			      : dh->dh_ops == &ike_alg_dh_nss_ecp_ops
-			      ? dh->common.id[IKEv1_ESP_ID] < 0
-			      : FALSE));
+	if (dh->dh_ops != NULL) {
+		pexpect_ike_alg(alg, dh->dh_ops->check != NULL);
+		pexpect_ike_alg(alg, dh->dh_ops->calc_secret != NULL);
+		pexpect_ike_alg(alg, dh->dh_ops->calc_shared != NULL);
+		/* more? */
+		dh->dh_ops->check(dh);
+		/* IKEv1 supports MODP groups but not ECC. */
+		pexpect_ike_alg(alg, (dh->dh_ops == &ike_alg_dh_nss_modp_ops
+				      ? dh->common.id[IKEv1_ESP_ID] == dh->group
+				      : dh->dh_ops == &ike_alg_dh_nss_ecp_ops
+				      ? dh->common.id[IKEv1_ESP_ID] < 0
+				      : FALSE));
+	}
 }
 
 static bool dh_desc_is_ike(const struct ike_alg *alg)

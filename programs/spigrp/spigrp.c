@@ -2,6 +2,8 @@
  * SA grouping
  * Copyright (C) 1996  John Ioannidis.
  * Copyright (C) 1997, 1998, 1999, 2000, 2001  Richard Guy Briggs.
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -48,6 +50,7 @@
 #include "libreswan/ipsec_ah.h"
 
 #include "ip_address.h"
+#include "ip_said.h"
 
 const char *progname;
 
@@ -111,7 +114,7 @@ int main(int argc, char **argv)
 			fprintf(stdout, "\"--debug\" option requested.\n");
 		argv += 1;
 		argc -= 1;
-		pfkey_lib_debug = PF_KEY_DEBUG_PARSE_MAX;
+		cur_debugging = DBG_BASE;
 	}
 
 	if (debug) {
@@ -148,9 +151,9 @@ int main(int argc, char **argv)
 	if (debug)
 		fprintf(stdout, "...After check for --label option.\n");
 
-	if (stat("/proc/net/pfkey", &sts) == 0) {
+	if (stat("/proc/sys/net/core/xfrm_acq_expires", &sts) == 0) {
 		fprintf(stderr,
-			"%s: NETKEY does not use the ipsec spigrp command. Use 'ip xfrm' instead.\n",
+			"%s: XFRM does not use the ipsec spigrp command. Use 'ip xfrm' instead.\n",
 			progname);
 		exit(1);
 	}

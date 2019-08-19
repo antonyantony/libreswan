@@ -11,10 +11,10 @@
  * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
  * Copyright (C) 2013 Tuomo Soini <tis@foobar.fi>
  * Copyright (C) 2014,2017 Antony Antony <antony@phenome.org>
- * Copyright (C) 2015-2018 Andrew Cagney
- * Copyright (C) 2015-2018 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2015-2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2015-2019 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2017 Vukasin Karadzic <vukasin.karadzic@gmail.com>
- * Copyright (C) 2015 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2015-2019 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -47,14 +47,11 @@
 #include "labeled_ipsec.h"	/* for struct xfrm_user_sec_ctx_ike and friends */
 #include "list_entry.h"
 #include "retransmit.h"
-
-/* msgid_t defined in defs.h */
-
-#define v1_MAINMODE_MSGID  ((msgid_t) 0)	/* network and host order */
-
-#define v2_INITIAL_MSGID  ((msgid_t) 0)	/* network and host order */
-
-#define v2_INVALID_MSGID  ((msgid_t) 0xffffffff)	/* network and host order */
+#include "ikev2_ts.h"		/* for struct traffic_selector */
+#include "ip_subnet.h"
+#include "ike_spi.h"
+#include "pluto_timing.h"	/* for statetime_t */
+#include "ikev2_msgid.h"
 
 struct ikev2_ipseckey_dns; /* forward declaration of tag */
 
@@ -240,19 +237,43 @@ struct msg_digest *unsuspend_md(struct state *st);
 		passert((ST)->st_suspended_md == NULL);			\
 		(ST)->st_suspended_md = *(MDP);				\
 		*(MDP) = NULL; /* take ownership */			\
-		(ST)->st_suspended_md_func = __FUNCTION__;		\
+		(ST)->st_suspended_md_func = __func__;		\
 		(ST)->st_suspended_md_line = __LINE__;			\
 		passert(state_is_busy(ST));				\
 	}
 
-/* IKEv2, this struct will be mapped into a ikev2_ts1 payload  */
-struct traffic_selector {
-	uint8_t ts_type;
-	uint8_t ipprotoid;
-	uint16_t startport;
-	uint16_t endport;
-	ip_range net;	/* for now, always happens to be a CIDR */
+/*
+ * For auditing, why an SA is being deleted.
+ */
+enum delete_reason {
+#define DELETE_REASON_FLOOR 0
+	REASON_UNKNOWN = DELETE_REASON_FLOOR, /* aka other */
+	REASON_CRYPTO_TIMEOUT,
+	REASON_EXCHANGE_TIMEOUT,
+	REASON_TOO_MANY_RETRANSMITS,
+	REASON_CRYPTO_FAILED,
+	REASON_AUTH_FAILED,
+	REASON_COMPLETED,
+#define DELETE_REASON_ROOF (REASON_COMPLETED + 1)
 };
+
+/*
+ * For auditing, different categories of a state.  Of most interest is
+ * half-open states which suggest libreswan being under attack.
+ *
+ * "half-open" is where only one packet was received.
+ */
+enum state_category {
+	CAT_UNKNOWN = 0,
+	CAT_HALF_OPEN_IKE_SA,
+	CAT_OPEN_IKE_SA,
+	CAT_ESTABLISHED_IKE_SA,
+	CAT_ESTABLISHED_CHILD_SA,
+	CAT_INFORMATIONAL,
+	CAT_IGNORE,
+};
+
+extern enum_names state_category_names;
 
 /*
  * Abstract state machine that drives the parent and child SA.
@@ -260,13 +281,15 @@ struct traffic_selector {
  * IKEv1 and IKEv2 construct states using this as a base.
  */
 struct finite_state {
-	enum state_kind fs_state;
+	enum state_kind fs_kind;
 	const char *fs_name;
 	const char *fs_short_name;
 	const char *fs_story;
 	lset_t fs_flags;
-	enum event_type fs_timeout_event;
-	const void *fs_microcode;	/* aka edge */
+	enum state_category fs_category;
+	const struct state_v1_microcode *fs_v1_transitions;
+	const struct state_v2_microcode *fs_v2_transitions;
+	size_t fs_nr_transitions;
 };
 
 void lswlog_finite_state(struct lswlog *buf, const struct finite_state *fs);
@@ -286,6 +309,8 @@ extern const struct finite_state *finite_states[STATE_IKE_ROOF];
  *   This prevents leaks.
  */
 struct state {
+	realtime_t st_inception;		/* time state is created, for logging */
+	struct timing st_timing;		/* accumulative cpu time */
 	so_serial_t st_serialno;                /* serial number (for seniority)*/
 	so_serial_t st_clonedfrom;              /* serial number of parent */
 	so_serial_t st_ike_pred;		/* IKEv2: replacing established IKE SA */
@@ -295,7 +320,8 @@ struct state {
 	struct xauth *st_xauth;			/* per state xauth/pam thread */
 #endif
 
-	bool st_ikev2;                          /* is this an IKEv2 state? */
+	enum ike_version st_ike_version;	/* IKEv1, IKEv2, ... */
+
 	bool st_ikev2_anon;                     /* is this an anonymous IKEv2 state? */
 	bool st_suppress_del_notify;            /* suppress sending DELETE - eg replaced conn */
 	bool st_rekeytov2;                      /* true if this IKEv1 is about
@@ -392,6 +418,8 @@ struct state {
 	enum original_role st_original_role;
 	enum sa_role st_sa_role;
 
+	struct v2_msgids st_v2_msgids;
+
 	/* message ID sequence for things we send (as initiator) */
 	msgid_t st_msgid_lastack;               /* last one peer acknowledged  - host order */
 	msgid_t st_msgid_nextuse;               /* next one to use - host order */
@@ -406,6 +434,8 @@ struct state {
 	struct p_dns_req *ipseckey_dnsr;    /* ipseckey of that end */
 	struct p_dns_req *ipseckey_fwd_dnsr;/* validate IDi that IP in forward A/AAAA */
 
+	char *st_active_redirect_gw;	/* needed for sending of REDIRECT in informational */
+
 	/** end of IKEv2-only things **/
 
 	char *st_seen_cfg_dns; /* obtained internal nameserver IP's */
@@ -414,14 +444,15 @@ struct state {
 
 	/* symmetric stuff */
 
+	ike_spis_t st_ike_spis;
+	ike_spis_t st_ike_rekey_spis;		/* what was exchanged */
+
 	/* initiator stuff */
 	chunk_t st_gi;                          /* Initiator public value */
-	uint8_t st_icookie[COOKIE_SIZE];       /* Initiator Cookie */
 	chunk_t st_ni;                          /* Ni nonce */
 
 	/* responder stuff */
 	chunk_t st_gr;                          /* Responder public value */
-	uint8_t st_rcookie[COOKIE_SIZE];       /* Responder Cookie */
 	chunk_t st_nr;                          /* Nr nonce */
 	chunk_t st_dcookie;                     /* DOS cookie of responder - v2 only */
 
@@ -452,7 +483,19 @@ struct state {
 	uint8_t st_peeridentity_protocol;
 	uint16_t st_peeridentity_port;
 
+	/*
+	 * Handle on all the certs extracted from the cert payload and
+	 * then verified using the CAs in the NSS Certificate DB.
+	 * When the state is deleted do they get released.  We suspect
+	 * that they need to lurk in the NSS DB so that the CRL code
+	 * can find them.  The first cert in the list is always the
+	 * end or EE cert.
+	 */
 	bool st_peer_alt_id;	/* scratchpad for writing we found alt peer id in CERT */
+	struct {
+		struct certs *verified;	/* list; first is EE */
+		struct pubkey_list *pubkey_db;
+	} st_remote_certs;
 
 	/*
 	 * Diffie-Hellman exchange values.
@@ -500,16 +543,51 @@ struct state {
 	/* In a Phase 1 state, preserve peer's public key after authentication */
 	struct pubkey *st_peer_pubkey;
 
-#define st_state st_finite_state->fs_state
+#define st_state st_state_kind /*compat*/
+#define st_state_kind st_finite_state->fs_kind
 #define st_state_name st_finite_state->fs_name
 #define st_state_story st_finite_state->fs_story
 	const struct finite_state *st_finite_state;	/* Current FSM state */
+
+	/*
+	 * Account for why an SA is is started, established, and
+	 * finished (deleted).
+	 *
+	 * SA_TYPE indicates the type of SA (IKE or CHILD) that will
+	 * eventually be established.  For instance, when re-keying an
+	 * IKE SA where the state is treated like a child until it is
+	 * emancipated (it has a parent), SA_TYPE=IKE_SA.  While it
+	 * might technically be possible to extract this information
+	 * from enum state_kind this is far more robust.
+	 *
+	 * DELETE_REASON, if the SA establishes it contains
+	 * REASON_COMPLETED, else it is explictly set to failure
+	 * indication (or defaults to REASON_UNKNOWN).  Note that the
+	 * information can't be reliably extracted from enum
+	 * state_kind in delete_state() because, by that point, state
+	 * may have further transitioned to STATE_IKESA_DEL etc.
+	 * Also, note that the information can't be reliably set in
+	 * complete*transition() as, at least in the case of IKEv2,
+	 * there can be two states involved where one success and one
+	 * fails.
+	 */
+	struct {
+		enum sa_type sa_type;
+		enum delete_reason delete_reason;
+	} st_pstats;
 
 	retransmit_t st_retransmit;	/* retransmit counters; opaque */
 	unsigned long st_try;		/* Number of times rekeying attempted.
 					 * 0 means the only time.
 					 */
-	deltatime_t st_margin;		/* life after EVENT_SA_REPLACE*/
+	/*
+	 * How much time to allow the replace attempt (i.e., re-key)
+	 * before the SA must be killed and then re-started from
+	 * scratch.
+	 */
+	deltatime_t st_replace_margin;
+	monotime_t st_replace_by;
+
 	unsigned long st_outbound_count;	/* traffic through eroute */
 	monotime_t st_outbound_time;	/* time of last change to
 					 * st_outbound_count
@@ -560,29 +638,33 @@ struct state {
 	const char        *st_suspended_md_func;
 	int st_suspended_md_line;
 
-	chunk_t st_p1isa;	/* Phase 1 initiator SA (Payload) for HASH */
+	chunk_t st_p1isa;	/* v1 Phase 1 initiator SA (Payload) for HASH */
 
-	/* IKEv1 only */
-	PK11SymKey *st_skeyid_nss;	/* Key material */
+	PK11SymKey *st_skeyid_nss;	/* v1 Key material */
 
 	/* v1 names are aliases for subset of v2 fields (#define) */
-#define st_skeyid_d_nss st_skey_d_nss
-	PK11SymKey *st_skey_d_nss;	/* KM for non-ISAKMP key derivation */
-#define st_skeyid_a_nss st_skey_ai_nss
-	PK11SymKey *st_skey_ai_nss;	/* KM for ISAKMP authentication */
-	PK11SymKey *st_skey_ar_nss;	/* KM for ISAKMP authentication */
-#define st_skeyid_e_nss st_skey_ei_nss
-	PK11SymKey *st_skey_ei_nss;	/* KM for ISAKMP encryption */
-	PK11SymKey *st_skey_er_nss;	/* KM for ISAKMP encryption */
-	PK11SymKey *st_skey_pi_nss;	/* KM for ISAKMP encryption */
-	PK11SymKey *st_skey_pr_nss;	/* KM for ISAKMP encryption */
-	chunk_t st_skey_initiator_salt;
-	chunk_t st_skey_responder_salt;
-	chunk_t st_skey_chunk_SK_pi;
-	chunk_t st_skey_chunk_SK_pr;
+
+#define st_skeyid_d_nss st_skey_d_nss	/* v1 KM for non-ISAKMP key derivation */
+	PK11SymKey *st_skey_d_nss;	/* v2 KM for non-ISAKMP key derivation */
+
+#define st_skeyid_a_nss st_skey_ai_nss	/* v1 IKE authentication KM */
+	PK11SymKey *st_skey_ai_nss;	/* v2 IKE authentication key for initiator */
+	PK11SymKey *st_skey_ar_nss;	/* v2 IKE authentication key for responder */
+
+#define st_skeyid_e_nss st_skey_ei_nss	/* v1 IKE encryption KM */
+	PK11SymKey *st_skey_ei_nss;	/* v2 IKE encryption key for initiator */
+	PK11SymKey *st_skey_er_nss;	/* v2 IKE encryption key for responder */
+
+	PK11SymKey *st_skey_pi_nss;	/* v2 PPK for initiator */
+	PK11SymKey *st_skey_pr_nss;	/* v2 PPK for responder */
+
+	chunk_t st_skey_initiator_salt;	/* v2 */
+	chunk_t st_skey_responder_salt;	/* v2 */
+	chunk_t st_skey_chunk_SK_pi;	/* v2 */
+	chunk_t st_skey_chunk_SK_pr;	/* v2 */
 
 	/*
-	 * Post-quantum preshared key variables
+	 * Post-quantum Preshared Key variables (v2)
 	 */
 	bool st_ppk_used;			/* both ends agreed on PPK ID and PPK */
 	bool st_seen_ppk;			/* does remote peer support PPK? */
@@ -592,7 +674,7 @@ struct state {
 	PK11SymKey *st_sk_pi_no_ppk;
 	PK11SymKey *st_sk_pr_no_ppk;
 
-	/* connection included in AUTH */
+	/* connection included in AUTH (v2) */
 	struct traffic_selector st_ts_this;
 	struct traffic_selector st_ts_that;
 
@@ -604,10 +686,10 @@ struct state {
 	struct list_entry st_serialno_list_entry;
 	/* SERIALNO hash table entry */
 	struct list_entry st_serialno_hash_entry;
-	/* ICOOKIE:RCOOKIE hash table entry */
-	struct list_entry st_cookies_hash_entry;
-	/* ICOOKIE hash table entry */
-	struct list_entry st_icookie_hash_entry;
+	/* IKE SPIi:SPIr hash table entry */
+	struct list_entry st_ike_spis_hash_entry;
+	/* IKE SPIi hash table entry */
+	struct list_entry st_ike_initiator_spi_hash_entry;
 
 	struct hidden_variables hidden_variables;
 
@@ -616,7 +698,7 @@ struct state {
 
 	monotime_t st_last_liveness;		/* Time of last v2 informational (0 means never?) */
 	bool st_pend_liveness;			/* Waiting on an informational response */
-	struct pluto_event *st_liveness_event;
+	struct pluto_event *st_liveness_event;	/* IKEv2 only event */
 	struct pluto_event *st_rel_whack_event;
 	struct pluto_event *st_send_xauth_event;
 	struct pluto_event *st_addr_change_event;
@@ -628,7 +710,7 @@ struct state {
 	uint32_t st_dpd_expectseqno;           /* Next R_U_THERE_ACK to receive */
 	uint32_t st_dpd_peerseqno;             /* global variables */
 	uint32_t st_dpd_rdupcount;		/* openbsd isakmpd bug workaround */
-	struct pluto_event *st_dpd_event;	/* backpointer for DPD events */
+	struct pluto_event *st_dpd_event;	/* backpointer for IKEv1 DPD events */
 
 	bool st_seen_nortel_vid;                /* To work around a nortel bug */
 	struct isakmp_quirks quirks;            /* work arounds for faults in other products */
@@ -638,10 +720,14 @@ struct state {
 	bool st_seen_fragments;                 /* did we receive ike fragments from peer, if so use them in return as well */
 	bool st_seen_no_tfc;			/* did we receive ESP_TFC_PADDING_NOT_SUPPORTED */
 	bool st_seen_use_transport;		/* did we receive USE_TRANSPORT_MODE */
+	bool st_seen_use_ipcomp;		/* did we receive request for IPCOMP */
 	bool st_seen_mobike;			/* did we receive MOBIKE */
 	bool st_sent_mobike;			/* sent MOBIKE notify */
 	bool st_seen_nonats;			/* did we receive NO_NATS_ALLOWED */
 	bool st_seen_initialc;			/* did we receive INITIAL_CONTACT */
+	bool st_seen_redirect_sup;		/* did we receive IKEv2_REDIRECT_SUPPORTED */
+	bool st_sent_redirect;			/* did we send IKEv2_REDIRECT in IKE_AUTH (response) */
+	bool st_redirected_in_auth;		/* were we redirected in IKE_AUTH */
 	generalName_t *st_requested_ca;		/* collected certificate requests */
 	uint8_t st_reply_xchg;
 	bool st_peer_wants_null;		/* We received IDr payload of type ID_NULL (and we allow POLICY_AUTH_NULL */
@@ -687,24 +773,26 @@ extern bool states_use_connection(const struct connection *c);
 
 /* state functions */
 
-extern struct state *new_state(void);
-extern struct state *new_rstate(struct msg_digest *md);
+so_serial_t next_so_serialno(void);
+struct state *new_v1_istate(void);
+struct state *new_v1_rstate(struct msg_digest *md);
+struct state *new_v2_state(enum state_kind kind, enum sa_role sa_role,
+			   ike_spi_t ike_initiator_spi,
+			   ike_spi_t ike_responder_spi);
 
 extern void init_states(void);
-extern void insert_state(struct state *st);
-extern void rehash_state(struct state *st, const u_char *icookie,
-		const u_char *rcookie);
+extern void rehash_state(struct state *st,
+			 const ike_spi_t *ike_responder_spi);
 extern void release_whack(struct state *st);
 extern void state_eroute_usage(const ip_subnet *ours, const ip_subnet *his,
 			       unsigned long count, monotime_t nw);
 extern void delete_state(struct state *st);
 extern void delete_states_by_connection(struct connection *c, bool relations);
-extern void delete_p2states_by_connection(struct connection *c);
 extern void rekey_p2states_by_connection(struct connection *c);
 extern void delete_my_family(struct state *pst, bool v2_responder_state);
 
 struct state *ikev1_duplicate_state(struct state *st);
-struct state *ikev2_duplicate_state(struct ike_sa *st, sa_t sa_type,
+struct state *ikev2_duplicate_state(struct ike_sa *st, enum sa_type sa_type,
 				    enum sa_role sa_role);
 
 extern struct state
@@ -714,38 +802,28 @@ extern struct state
 	*find_phase1_state(const struct connection *c, lset_t ok_states),
 	*find_likely_sender(size_t packet_len, u_char * packet);
 
-struct state *find_state_ikev1(const uint8_t *icookie, const uint8_t *rcookie,
-			       msgid_t msgid);
-struct state *find_state_ikev1_init(const uint8_t *icookie, msgid_t msgid);
+struct state *find_state_ikev1(const ike_spis_t *ike_spis, msgid_t msgid);
+struct state *find_state_ikev1_init(const ike_spi_t *ike_initiator_spi,
+				    msgid_t msgid);
 
 extern bool find_pending_phase2(const so_serial_t psn,
 					const struct connection *c,
 					lset_t ok_states);
 
-extern struct state *resp_state_with_msgid(so_serial_t psn, msgid_t st_msgid);
+extern struct state *find_v2_ike_sa(const ike_spis_t *ike_spis);
+extern struct state *find_v2_ike_sa_by_initiator_spi(const ike_spi_t *ike_initiator_spi);
 
-extern struct state *state_with_parent_msgid(so_serial_t psn, msgid_t st_msgid);
+struct state *find_v2_sa_by_request_msgid(const ike_spis_t *ike_spis, msgid_t msgid);
 
-extern struct state *find_state_ikev2_parent(const u_char *icookie,
-					     const u_char *rcookie);
+struct state *find_v2_child_sa_by_outbound_spi(const ike_spis_t *ike_spis,
+					       uint8_t protoid, ipsec_spi_t spi);
 
-extern struct state *ikev2_find_state_in_init(const u_char *icookie,
-						  enum state_kind expected_state);
+extern void find_states_and_redirect(const char *conn_name,
+				     ip_address remote_ip,
+				     char *redirect_gw);
 
-extern struct state *find_state_ikev2_child(const enum isakmp_xchg_types ix,
-					    const u_char *icookie,
-					    const u_char *rcookie,
-					    const msgid_t msgid);
-
-extern struct state *find_state_ikev2_child_to_delete(const u_char *icookie,
-						      const u_char *rcookie,
-						      uint8_t protoid,
-						      ipsec_spi_t spi);
-
-extern struct state *ikev1_find_info_state(const u_char *icookie,
-				     const u_char *rcookie,
-				     const ip_address *peer,
-				     msgid_t msgid);
+extern struct state *find_v1_info_state(const ike_spis_t *ike_spis,
+					msgid_t msgid);
 
 extern void initialize_new_state(struct state *st,
 				 struct connection *c,
@@ -754,17 +832,14 @@ extern void initialize_new_state(struct state *st,
 				 fd_t whack_sock);
 
 extern void show_traffic_status(const char *name);
-extern void show_states_status(void);
+extern void show_states_status(bool brief);
 
-extern void ikev2_repl_est_ipsec(struct state *st, void *data);
-extern void ikev2_inherit_ipsec_sa(so_serial_t osn, so_serial_t nsn,
-				const u_char *icookie,
-				const u_char *rcookie);
+void v2_migrate_children(struct ike_sa *from, struct child_sa *to);
 
 void for_each_state(void (*f)(struct state *, void *data), void *data);
 
 extern void find_my_cpi_gap(cpi_t *latest_cpi, cpi_t *first_busy_cpi);
-extern ipsec_spi_t uniquify_his_cpi(ipsec_spi_t cpi, const struct state *st);
+extern ipsec_spi_t uniquify_his_cpi(ipsec_spi_t cpi, const struct state *st, int tries);
 
 extern void fmt_list_traffic(struct state *st, char *state_buf,
 			     const size_t state_buf_len);
@@ -787,11 +862,10 @@ extern void delete_states_dead_interfaces(void);
 extern bool dpd_active_locally(const struct state *st);
 
 /*
- * use these to change state, this gives us a handle on all state changes
- * which is good for tracking bugs, logging and anything else you might like
+ * Use this to change state, this gives us a handle on all state
+ * changes which is good for tracking bugs, logging and anything else
+ * you might like.
  */
-#define refresh_state(st) log_state((st), (st)->st_state)
-#define fake_state(st, new_state) log_state((st), (new_state))
 extern void change_state(struct state *st, enum state_kind new_state);
 
 extern bool state_is_busy(const struct state *st);
@@ -802,9 +876,10 @@ extern void show_globalstate_status(void);
 extern void set_newest_ipsec_sa(const char *m, struct state *const st);
 extern void update_ike_endpoints(struct state *st, const struct msg_digest *md);
 extern bool update_mobike_endpoints(struct state *st, const struct msg_digest *md);
-extern void ikev2_expire_unused_parent(struct state *pst);
+extern void v2_expire_unused_ike_sa(struct ike_sa *ike);
 
 bool shared_phase1_connection(const struct connection *c);
+bool v2_child_connection_probably_shared(struct child_sa *child);
 
 extern void record_deladdr(ip_address *ip, char *a_type);
 extern void record_newaddr(ip_address *ip, char *a_type);
@@ -815,5 +890,8 @@ extern bool ikev2_viable_parent(const struct ike_sa *ike);
 
 extern bool uniqueIDs;  /* --uniqueids? */
 extern void ISAKMP_SA_established(const struct state *pst);
+extern void revive_conns(void);
+
+void list_state_events(monotime_t now);
 
 #endif /* _STATE_H */

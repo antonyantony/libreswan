@@ -2,6 +2,7 @@
  * Copyright (C) 1998-2001  D. Hugh Redelmeier.
  * Copyright (C) 2003  Herbert Xu
  * Copyright (C) 2017 Richard Guy Briggs <rgb@tricolour.ca>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -38,9 +39,6 @@ extern bool pfkey_get_sa(const struct kernel_sa *sa, uint64_t *bytes, uint64_t *
 extern bool pfkey_sag_eroute(const struct state *st, const struct spd_route *sr,
 			     unsigned op, const char *opname);
 extern bool pfkey_was_eroute_idle(struct state *st, deltatime_t idle_max);
-extern void pfkey_set_debug(int cur_debug,
-			    libreswan_keying_debug_func_t debug_func,
-			    libreswan_keying_debug_func_t error_func);
 extern void pfkey_remove_orphaned_holds(int transport_proto,
 					const ip_subnet *ours,
 					const ip_subnet *his);

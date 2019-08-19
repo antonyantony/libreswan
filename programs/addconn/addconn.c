@@ -4,6 +4,8 @@
  * Copyright (C) 2012-2014 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2014 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2012-2013 Kim B. Heino <b@bbbs.net>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -48,6 +50,18 @@
 const char *progname;
 static int verbose = 0;
 
+/*
+ * make options valid environment variables
+ */
+static char *environlize(const char *str)
+{
+	char *cpy = strndup(str, strlen(str));
+	char *cur = cpy;
+	while((cur = strchr(cur, '-')) != NULL) {
+		*cur++ = '_';
+	}
+	return cpy;
+}
 
 /*
  * See if conn's left or right is %defaultroute and resolve it.
@@ -620,6 +634,12 @@ int main(int argc, char *argv[])
 			if ((kd->validity & kv_config) == 0)
 				continue;
 
+			/* don't print backwards compatible aliases */
+			if ((kd->validity & kv_alias) != 0)
+				continue;
+
+			char *safe_kwname = environlize(kd->keyname);
+
 			switch (kd->type) {
 			case kt_string:
 			case kt_filename:
@@ -627,20 +647,20 @@ int main(int argc, char *argv[])
 			case kt_loose_enum:
 				if (cfg->setup.strings[kd->field]) {
 					printf("%s %s%s='%s'\n",
-						export, varprefix, kd->keyname,
+						export, varprefix, safe_kwname,
 						cfg->setup.strings[kd->field]);
 				}
 				break;
 
 			case kt_bool:
 				printf("%s %s%s='%s'\n", export, varprefix,
-					kd->keyname,
+					safe_kwname,
 					bool_str(cfg->setup.options[kd->field]));
 				break;
 
 			case kt_list:
 				printf("%s %s%s='",
-					export, varprefix, kd->keyname);
+					export, varprefix, safe_kwname);
 				confwrite_list(stdout, "",
 					cfg->setup.options[kd->field],
 					kd);
@@ -648,19 +668,18 @@ int main(int argc, char *argv[])
 				break;
 
 			case kt_obsolete:
-				printf("# obsolete option '%s%s' ignored\n",
-					varprefix, kd->keyname);
 				break;
 
 			default:
 				if (cfg->setup.options[kd->field] ||
 					cfg->setup.options_set[kd->field]) {
 					printf("%s %s%s='%d'\n",
-						export, varprefix, kd->keyname,
+						export, varprefix, safe_kwname,
 						cfg->setup.options[kd->field]);
 				}
 				break;
 			}
+			free(safe_kwname);
 		}
 		confread_free(cfg);
 		exit(0);

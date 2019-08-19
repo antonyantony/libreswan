@@ -7,7 +7,8 @@
  * Copyright (C) 2010 Tuomo Soini <tis@foobar.fi>
  * Copyright (C) 2011 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2013 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2013-2019 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -57,7 +58,6 @@
 #include "log.h"
 #include "keys.h"
 #include "whack.h"
-#include "alg_info.h"
 #include "spdb.h"
 #include "ike_alg.h"
 #include "kernel_alg.h"
@@ -65,6 +65,7 @@
 #include "ikev1_xauth.h"
 #include "nat_traversal.h"
 #include "ip_address.h"
+#include "af_info.h"
 
 #include "virtual.h"	/* needs connections.h */
 
@@ -182,7 +183,7 @@ struct host_pair *find_host_pair(const ip_address *myaddr,
 
 static void remove_host_pair(struct host_pair *hp)
 {
-	list_rm(struct host_pair, next, hp, host_pairs);
+	LIST_RM(next, hp, host_pairs, true/*expected*/);
 }
 
 /* find head of list of connections with this pair of hosts */
@@ -284,7 +285,7 @@ void release_dead_interfaces(void)
 					 */
 					passert(p == *pp);
 
-					terminate_connection(p->name);
+					terminate_connection(p->name, FALSE);
 					p->interface = NULL; /* withdraw orientation */
 
 					*pp = p->hp_next; /* advance *pp */
@@ -308,7 +309,7 @@ void delete_oriented_hp(struct connection *c)
 {
 	struct host_pair *hp = c->host_pair;
 
-	list_rm(struct connection, hp_next, c, hp->connections);
+	LIST_RM(hp_next, c, hp->connections, true/*expected*/);
 	c->host_pair = NULL; /* redundant, but safe */
 
 	/*

@@ -61,7 +61,7 @@ fixversion() {
 	stack=" (klips)"
 	kv="$(awk '{print $NF}' /proc/net/ipsec_version)"
     else
-	if [ -f /proc/net/pfkey ]; then
+	if [ -f /proc/sys/net/core/xfrm_acq_expires ]; then
 	    stack=" (netkey)"
 	    kv="${version}"
 	else
@@ -111,7 +111,7 @@ ipsec_help() {
     echo "where {command} is one of:"
     echo ""
     GOTTWO=""
-    for f in start stop restart status trafficstatus globalstatus shuntstatus import initnss checknss checknflog \
+    for f in start stop restart status trafficstatus traffic globalstatus shuntstatus briefstatus fips import initnss checknss checknflog \
 	$(ls "${IPSEC_EXECDIR}" | egrep -v -i "${DONTMENTION}"); do
 	if [ -z "${GOTTWO}" ]; then
 	    # first of two entries
@@ -425,9 +425,14 @@ while [ ${#} -gt 0 ]; do
 	    whackoption="--status"
 	    shift
 	    ;;
-	trafficstatus|--trafficstatus)
+	trafficstatus|--trafficstatus|traffic)
 	    cmd="whack"
 	    whackoption="--trafficstatus"
+	    shift
+	    ;;
+	fipsstatus|--fipsstatus|fips)
+	    cmd="whack"
+	    whackoption="--fipsstatus"
 	    shift
 	    ;;
 	globalstatus|--globalstatus)
@@ -438,6 +443,11 @@ while [ ${#} -gt 0 ]; do
 	shuntstatus|--shuntstatus)
 	    cmd="whack"
 	    whackoption="--shuntstatus"
+	    shift
+	    ;;
+	briefstatus|--briefstatus)
+	    cmd="whack"
+	    whackoption="--briefstatus"
 	    shift
 	    ;;
 	start|--start)
