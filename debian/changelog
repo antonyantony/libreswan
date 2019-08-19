@@ -1,3 +1,13 @@
+libreswan (3.29-2) unstable; urgency=medium
+
+  * Release to unstable
+  * fix up more upstream orthography
+  * standards-version: bump to 4.4.0 (no changes needed
+  * change lintian override of spelling-error-in-copyright to match new
+    reporting
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Mon, 19 Aug 2019 18:57:33 -0400
+
 libreswan (3.29-1) experimental; urgency=medium
 
   * New upstream release
