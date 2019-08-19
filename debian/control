@@ -7,7 +7,7 @@ Uploaders:
  Ondřej Surý <ondrej@debian.org>,
 Vcs-Browser: https://salsa.debian.org/debian/libreswan
 Vcs-Git: https://salsa.debian.org/debian/libreswan.git -b debian/experimental
-Standards-Version: 4.3.0
+Standards-Version: 4.4.0
 Rules-Requires-Root: no
 Build-Depends:
  bison,
