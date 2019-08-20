@@ -8,6 +8,7 @@ Content-Transfer-Encoding: 8bit
 therefor → therefore
 transfered → transferred
 acceptible → acceptable
+negotitation → negotiation
 
 This also involves some clean up of "allow to", the use of which
 typically presents some amount of confusion about who is doing the
@@ -17,24 +18,24 @@ as "accepting" anyway.
 
 Signed-off-by: Daniel Kahn Gillmor <dkg@fifthhorseman.net>
 ---
- linux/net/ipsec/des/Makefile.fs2_6                    | 2 +-
- programs/configs/d.ipsec.conf/aggressive.xml          | 2 +-
- programs/configs/d.ipsec.conf/phase2alg.xml           | 4 ++--
- programs/configs/d.ipsec.conf/redirect.xml            | 4 ++--
- programs/configs/d.ipsec.conf/reqid.xml               | 2 +-
- programs/configs/d.ipsec.conf/seedbits.xml            | 2 +-
- programs/pluto/ikev1.c                                | 2 +-
- programs/pluto/ikev2.c                                | 2 +-
- programs/pluto/ikev2_parent.c                         | 6 +++---
- programs/pluto/ikev2_redirect.c                       | 2 +-
- programs/pluto/ikev2_redirect.h                       | 2 +-
- programs/pluto/ipsec_pluto.8.xml                      | 6 +++---
- programs/pluto/state.c                                | 2 +-
- testing/pluto/bad-nexthop-01/description.txt          | 2 +-
- testing/pluto/basic-pluto-01-nokey/description.txt    | 2 +-
- testing/pluto/basic-pluto-01-wrongkey/description.txt | 2 +-
- testing/pluto/x509-pluto-frag-04/description.txt      | 2 +-
- 17 files changed, 23 insertions(+), 23 deletions(-)
+ linux/net/ipsec/des/Makefile.fs2_6                    |  2 +-
+ programs/configs/d.ipsec.conf/aggressive.xml          |  2 +-
+ programs/configs/d.ipsec.conf/phase2alg.xml           |  4 ++--
+ programs/configs/d.ipsec.conf/redirect.xml            |  4 ++--
+ programs/configs/d.ipsec.conf/reqid.xml               |  2 +-
+ programs/configs/d.ipsec.conf/seedbits.xml            |  2 +-
+ programs/pluto/ikev1.c                                |  2 +-
+ programs/pluto/ikev2.c                                |  2 +-
+ programs/pluto/ikev2_parent.c                         | 10 +++++-----
+ programs/pluto/ikev2_redirect.c                       |  2 +-
+ programs/pluto/ikev2_redirect.h                       |  2 +-
+ programs/pluto/ipsec_pluto.8.xml                      |  6 +++---
+ programs/pluto/state.c                                |  2 +-
+ testing/pluto/bad-nexthop-01/description.txt          |  2 +-
+ testing/pluto/basic-pluto-01-nokey/description.txt    |  2 +-
+ testing/pluto/basic-pluto-01-wrongkey/description.txt |  2 +-
+ testing/pluto/x509-pluto-frag-04/description.txt      |  2 +-
+ 17 files changed, 25 insertions(+), 25 deletions(-)
 
 diff --git a/linux/net/ipsec/des/Makefile.fs2_6 b/linux/net/ipsec/des/Makefile.fs2_6
 index 51471dc..d149fe1 100644
@@ -152,7 +153,7 @@ index d0d2852..c5f759a 100644
  			log_stf_suspend(st, result);
  		}
 diff --git a/programs/pluto/ikev2_parent.c b/programs/pluto/ikev2_parent.c
-index d84c84d..de40180 100644
+index d84c84d..747710c 100644
 --- a/programs/pluto/ikev2_parent.c
 +++ b/programs/pluto/ikev2_parent.c
 @@ -392,7 +392,7 @@ static bool v2_check_auth(enum ikev2_auth_method recv_auth,
@@ -182,6 +183,24 @@ index d84c84d..de40180 100644
  				break;
  			}
  
+@@ -5944,7 +5944,7 @@ static void ikev2_child_outI_continue(struct state *st,
+ 
+ /*
+  * if this connection has a newer Child SA than this state
+- * this negotitation is not relevant any more.
++ * this negotiation is not relevant any more.
+  * would this cover if there are multiple CREATE_CHILD_SA pending on
+  * this IKE negotiation ???
+  */
+@@ -5956,7 +5956,7 @@ bool need_this_intiator(struct state *st)
+ 		return FALSE; /* ignore STATE_V2_CREATE_I ??? */
+ 
+ 	if (c->newest_ipsec_sa > st->st_serialno) {
+-		libreswan_log("suppressing retransmit because superseded by #%lu try=%lu. Drop this negotitation",
++		libreswan_log("suppressing retransmit because superseded by #%lu try=%lu. Drop this negotiation",
+ 				c->newest_ipsec_sa, st->st_try);
+ 		return TRUE;
+ 	}
 diff --git a/programs/pluto/ikev2_redirect.c b/programs/pluto/ikev2_redirect.c
 index 8e92995..273e5b3 100644
 --- a/programs/pluto/ikev2_redirect.c
