@@ -111,7 +111,6 @@ enum keyword_numeric_config_field {
 	KBF_NFLOG_ALL,		/* Enable global nflog device */
 	KBF_DDOS_MODE,		/* set DDOS mode */
 	KBF_SECCOMP,		/* set SECCOMP mode */
-	KBF_CLONES,
 
 	KBF_ROOF
 };
@@ -268,6 +267,7 @@ enum keyword_numeric_conn_field {
 	KNCF_VTI_ROUTING,	/* let updown do routing into VTI device */
 	KNCF_VTI_SHARED,	/* VTI device is shared - enable checks and disable cleanup */
 	KNCF_NIC_OFFLOAD,	/* xfrm offload to network device */
+	KNCF_SA_CLONES,
 
 	KNCF_ROOF
 };

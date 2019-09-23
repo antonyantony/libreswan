@@ -549,7 +549,7 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	msg.sa_rekey_fuzz = conn->options[KNCF_REKEYFUZZ];
 	msg.sa_keying_tries = conn->options[KNCF_KEYINGTRIES];
 	msg.sa_replay_window = conn->options[KNCF_REPLAY_WINDOW];
-	msg.sa_clones = conn->options[KBF_CLONES];
+	msg.sa_clones = conn->options[KNCF_SA_CLONES];
 
 	msg.r_interval = deltatime_ms(conn->options[KNCF_RETRANSMIT_INTERVAL_MS]);
 	msg.r_timeout = deltatime(conn->options[KNCF_RETRANSMIT_TIMEOUT]);
@@ -557,7 +557,7 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	msg.policy = conn->policy;
 	msg.sighash_policy = conn->sighash_policy;
 
-	if (conn->options_set[KBF_CLONES])
+	if (conn->options_set[KNCF_SA_CLONES])
 		msg.policy |= POLICY_OVERLAPIP;
 
 	msg.connalias = conn->connalias;
@@ -908,12 +908,12 @@ int starter_whack_add_conn(struct starter_config *cfg,
 	}
 
 	/* clones= */
-	if (conn->options_set[KBF_CLONES]) {
+	if (conn->options_set[KNCF_SA_CLONES]) {
 		int clone_id = CLONE_SA_HEAD;
 		int num = 0;
 		char tmpconnname[256];
 
-		while (clone_id < conn->options[KBF_CLONES] + 1) {
+		while (clone_id < conn->options[KNCF_SA_CLONES] + 1) {
 			/* copy conn  - borrow pointers, since this is a temporary copy */
 			struct starter_conn cc = *conn;
 
