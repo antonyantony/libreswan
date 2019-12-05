@@ -419,6 +419,7 @@ struct state {
 	struct v2_incoming_fragments *st_v2_incoming[MESSAGE_ROLE_ROOF];
 
 	bool st_viable_parent;	/* can initiate new CERAET_CHILD_SA */
+	bool st_kernel_sa_expired;  /* received expire in one direction */
 	struct ikev2_proposal *st_accepted_ike_proposal;
 	struct ikev2_proposal *st_accepted_esp_or_ah_proposal;
 
@@ -772,7 +773,7 @@ struct ike_sa *new_v1_istate(struct connection *c, struct fd *whackfd);
 struct ike_sa *new_v1_rstate(struct connection *c, struct msg_digest *md);
 struct state *ikev1_duplicate_state(struct connection *c, struct state *st, struct fd *whackfd);
 
-struct ike_sa *new_v2_ike_state(struct connection *c, 
+struct ike_sa *new_v2_ike_state(struct connection *c,
 				const struct state_v2_microcode *transition,
 				enum sa_role sa_role,
 				const ike_spi_t ike_initiator_spi,
@@ -894,4 +895,6 @@ extern void IKE_SA_established(const struct ike_sa *ike);
 
 void list_state_events(struct show *s, monotime_t now);
 
+struct child_sa *find_v2_child_sa_by_spi(ipsec_spi_t spi, int8_t protoid,
+					 ip_address *dst);
 #endif /* _STATE_H */
