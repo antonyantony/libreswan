@@ -26,6 +26,7 @@
 #include <limits.h>
 #include <unistd.h>
 #include <errno.h>
+#include <inttypes.h>
 #define YYDEBUG 1
 
 #include "ipsecconf/keywords.h"
@@ -69,9 +70,13 @@ static struct starter_comments_list *parser_comments;
 %token <k>      TIMEWORD
 %token <k>      BOOLWORD
 %token <k>      PERCENTWORD
+%token <k>      BINARYWORD
+%token <k>      BYTEWORD
 %token <k>      COMMENT
 
 %type <num>	duration
+%type <num>	binary
+%type <num>	byte
 %%
 
 /*
@@ -182,6 +187,8 @@ statement_kw:
 		case kt_invertbool:
 		case kt_number:
 		case kt_time:
+		case kt_binary:
+		case kt_byte:
 		case kt_percent:
 			yyerror("keyword value is a keyword, but type not a string");
 			assert(kw.keydef->type != kt_bool);
@@ -246,6 +253,8 @@ statement_kw:
 		case kt_invertbool:
 		case kt_number:
 		case kt_time:
+		case kt_binary:
+		case kt_byte:
 		case kt_percent:
 			yyerror("valid keyword, but value is not a number");
 			assert(kw.keydef->type != kt_bool);
@@ -267,6 +276,12 @@ statement_kw:
 		new_parser_kw(&$1, NULL, $<num>3);
 	}
 	| TIMEWORD EQUAL duration {
+		new_parser_kw(&$1, NULL, $3);
+	}
+	| BINARYWORD EQUAL binary {
+		new_parser_kw(&$1, NULL, $3);
+	}
+	| BYTEWORD EQUAL byte {
 		new_parser_kw(&$1, NULL, $3);
 	}
 	| PERCENTWORD EQUAL STRING {
@@ -299,6 +314,129 @@ statement_kw:
 	}
 	| KEYWORD EQUAL { /* this is meaningless, we ignore it */ }
 	;
+binary:
+	INTEGER {
+		$$ = $1;
+	}
+	| STRING {
+		const char *const str = $1;
+		/*const*/ char *endptr;
+		char buf[80];
+
+		unsigned long val = (errno = 0, strtoul(str, &endptr, 10));
+		int strtoul_errno = errno;
+
+		if (endptr == str) {
+			snprintf(buf, sizeof(buf), "bad Binary prefix value \"%s\"", str);
+			yyerror(buf);
+		} else {
+			bool bad_suffix = false;
+			uint64_t scale;
+
+			if (*endptr == '\0') {
+				/* binary : no scaling */
+				scale = 1;
+			} else if (endptr[1] == 'i' && endptr[2] == '\0') {
+				/* Dual characters suffix ISO/IEC 8000 */
+				switch (*endptr) {
+					case 'K': scale = binary_per_kilo; break;
+					case 'M': scale = binary_per_mega; break;
+					case 'G': scale = binary_per_giga; break;
+					case 'T': scale = binary_per_tera; break;
+					case 'P': scale = binary_per_peta; break;
+					case 'E': scale = binary_per_exa; break;
+					default:
+						  bad_suffix = true;
+				}
+			} else if (endptr[1] == '\0') {
+				/* single character suffix */
+				switch (*endptr) {
+					case 'K': scale = binary_per_kilo; break;
+					case 'M': scale = binary_per_mega; break;
+					case 'G': scale = binary_per_giga; break;
+					case 'T': scale = binary_per_tera; break;
+					case 'P': scale = binary_per_peta; break;
+					case 'E': scale = binary_per_exa; break;
+					default:
+						bad_suffix = true;
+				}
+			} else {
+				bad_suffix = true;
+			}
+
+			if (bad_suffix) {
+				snprintf(buf, sizeof(buf),
+					"bad Binary prefix multiplier \"%s\" on %s",
+					endptr, str);
+				yyerror(buf);
+			} else if (strtoul_errno != 0 || UINT64_MAX / scale < val) {
+				snprintf(buf, sizeof(buf),
+					"Binary prefix too large: \"%s\" is more than %" PRIu64,
+					str, UINT64_MAX);
+				yyerror(buf);
+			} else {
+				$$ = val * scale;
+			}
+		}
+	};
+
+byte:
+	INTEGER {
+		$$ = $1;
+	}
+	| STRING {
+		const char *const str = $1;
+		/* const */ char *endptr;
+		char buf[80];
+
+		unsigned long val = (errno = 0, strtoul(str, &endptr, 10));
+		int strtoul_errno = errno;
+
+		if (endptr == str) {
+			snprintf(buf, sizeof(buf), "bad Bytes prefix value \"%s\"", str);
+			yyerror(buf);
+		} else {
+			bool bad_suffix = false;
+			uint64_t scale;
+
+			if (*endptr == '\0') {
+				/* bytes : no scaling */
+				scale = 1;
+			} else if (endptr[1] == 'i' && endptr[2] == 'B' &&
+				   endptr[3] == '\0') {
+				/* Tripple characters suffix ISO/IEC 8000 */
+				switch (*endptr) {
+					case 'K': scale = binary_per_kilo; break;
+					case 'M': scale = binary_per_mega; break;
+					case 'G': scale = binary_per_giga; break;
+					case 'T': scale = binary_per_tera; break;
+					case 'P': scale = binary_per_peta; break;
+					case 'E': scale = binary_per_exa; break;
+					default:
+						  bad_suffix = true;
+				}
+			} else if (endptr[0] == 'B' && endptr[1] == '\0' ) {
+				/* single character suffix */
+				scale = 1;
+			} else {
+				bad_suffix = true;
+			}
+
+			if (bad_suffix) {
+				snprintf(buf, sizeof(buf),
+					"bad Bytes prefix multiplier \"%s %" PRIu64 "on \"%s",
+					endptr, scale, str);
+				yyerror(buf);
+			} else if (strtoul_errno != 0 || UINT64_MAX / scale < val) {
+				snprintf(buf, sizeof(buf),
+					"Bytes prefix too large: \"%s\" is more than %" PRIu64,
+					str, UINT64_MAX);
+				yyerror(buf);
+			} else {
+				$$ = val * scale;
+			}
+		}
+	};
 
 duration:
 	INTEGER {
