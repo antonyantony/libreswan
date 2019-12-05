@@ -66,6 +66,8 @@ OBJS += sparse_names.o
 OBJS += ttoaddress.o
 OBJS += ttoaddress_list_num.o
 OBJS += ttoprotocol.o
+OBJS += ttobinary.o
+OBJS += binaryscale.o
 OBJS += alloc.o
 OBJS += alloc_printf.o
 
