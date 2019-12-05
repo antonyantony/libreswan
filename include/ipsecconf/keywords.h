@@ -368,6 +368,8 @@ enum keyword_type {
 	kt_number,              /* an integer */
 	kt_time,                /* a number representing time */
 	kt_percent,             /* a number representing percentage */
+	kt_binary,		/* a number representing Binary prefixes */
+	kt_byte,		/* a number representing Bytes may have Binary prefix too */
 	kt_range,               /* ip address range 1.2.3.4-1.2.3.10 */
 	kt_ipaddr,              /* an IP address */
 	kt_subnet,              /* an IP address subnet */
