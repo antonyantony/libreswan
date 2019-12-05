@@ -1763,11 +1763,14 @@ struct ike_sa *find_v2_ike_sa_by_initiator_spi(const ike_spi_t *ike_initiator_sp
 struct v2_spi_filter {
 	uint8_t protoid;
 	ipsec_spi_t outbound_spi;
+	ipsec_spi_t our_spi;
+	ip_address *dst;
 };
 
 static bool v2_spi_predicate(struct state *st, void *context)
 {
 	struct v2_spi_filter *filter = context;
+	bool ret = false;
 
 	struct ipsec_proto_info *pr;
 	switch (filter->protoid) {
@@ -1784,9 +1787,27 @@ static bool v2_spi_predicate(struct state *st, void *context)
 	if (pr->present) {
 		if (pr->attrs.spi == filter->outbound_spi) {
 			dbg("v2 CHILD SA #%lu found using their inbound (our outbound) SPI, in %s",
-			    st->st_serialno,
-			    st->st_state->name);
-			return true;
+					st->st_serialno,
+					st->st_state->name);
+			ret = true;
+			if (filter->dst != NULL) {
+				ret = false;
+				if (sameaddr(&st->st_connection->remote->host.addr,
+							filter->dst))
+					ret = true;
+			}
+		} else if (filter->our_spi > 0 &&
+				filter->our_spi == pr->our_spi) {
+			dbg("v2 CHILD SA #%lu found using their our SPI, in %s",
+					st->st_serialno,
+					st->st_state->name);
+			ret = true;
+			if (filter->dst != NULL) {
+				ret = false;
+				if (sameaddr(&st->st_connection->remote->host.addr,
+							filter->dst))
+					ret = true;
+			}
 		}
 #if 0
 		/* see function description above */
@@ -1798,7 +1819,25 @@ static bool v2_spi_predicate(struct state *st, void *context)
 		}
 #endif
 	}
-	return false;
+	return ret;
+}
+
+struct child_sa *find_v2_child_sa_by_spi(ipsec_spi_t spi, int8_t protoid,
+					 ip_address *dst)
+{
+	struct v2_spi_filter filter = {
+		.protoid = protoid,
+		.outbound_spi = spi,
+		.our_spi = spi,
+		.dst = dst,
+	};
+	struct state_filter sf = { .where = HERE, };
+	while (next_state_new2old(&sf)) {
+		struct state *st = sf.st;
+		if (v2_spi_predicate(st, &filter))
+			break;
+	};
+	return pexpect_child_sa(sf.st);
 }
 
 struct child_sa *find_v2_child_sa_by_outbound_spi(struct ike_sa *ike,
@@ -2011,6 +2050,12 @@ static void jam_state_traffic(struct jambuf *buf, struct state *st)
 				 st->st_ah.present ? st->st_ah.peer_bytes :
 				 st->st_ipcomp.present ? st->st_ipcomp.peer_bytes : 0);
 		jam(buf, ", outBytes=%u", outb);
+
+		if (c->sa_max_bytes != 0) {
+			char bytesbuf[strlen(" 18446744073709551616 ") + strlen(" Ki B ")];
+			readable_humber(c->sa_max_bytes, bytesbuf, bytesbuf + sizeof(bytesbuf), "", "B");
+			jam(buf, ", maxBytes=%s", bytesbuf);
+		}
 	}
 
 	if (st->st_xauth_username[0] == '\0') {
@@ -2249,6 +2294,7 @@ static void show_established_child_details(struct show *s, struct state *st)
 			}
 			jam(buf, " AHmax=");		/* TBD: "The ! is not printed." */
 			jam_readable_humber(buf, first_sa->attrs.life_kilobytes, true);
+			jam_readable_humber(buf, c->sa_max_bytes, true);
 		}
 		if (st->st_esp.present) {
 			if (in_info) {
@@ -2261,6 +2307,7 @@ static void show_established_child_details(struct show *s, struct state *st)
 			}
 			jam(buf, " ESPmax=");		/* TBD: "The ! is not printed." */
 			jam_readable_humber(buf, first_sa->attrs.life_kilobytes, true);
+			jam_readable_humber(buf, c->sa_max_bytes, true);
 		}
 		if (st->st_ipcomp.present) {
 			if (in_info) {
