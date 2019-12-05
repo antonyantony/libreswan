@@ -172,6 +172,8 @@ struct ipsec_proto_info {
 	uint8_t *peer_keymat;
 	uint64_t our_bytes;
 	uint64_t peer_bytes;
+	enum sa_expire_kind our_kernel_sa_expired;  /* received expire out */
+	enum sa_expire_kind peer_kernel_sa_expired;  /* received expire in */
 	monotime_t our_lastused;
 	monotime_t peer_lastused;
 	uint64_t add_time;
@@ -895,6 +897,8 @@ void suppress_delete_notify(const struct ike_sa *ike,
 			    const char *what, so_serial_t so);
 
 void list_state_events(struct show *s, monotime_t now);
+struct child_sa *find_v2_child_sa_by_spi(ipsec_spi_t spi, int8_t protoid,
+					 ip_address *dst);
 
 void check_state(struct state *st, where_t where);
 
