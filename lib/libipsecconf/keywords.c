@@ -525,6 +525,8 @@ const struct keyword_def ipsec_conf_keywords[] = {
   { "keylife",  kv_conn | kv_alias,  kt_time,  KNCF_SALIFETIME, NULL, NULL, },
   { "lifetime",  kv_conn | kv_alias,  kt_time,  KNCF_SALIFETIME, NULL, NULL, },
   { "salifetime",  kv_conn,  kt_time,  KNCF_SALIFETIME, NULL, NULL, },
+  { "samaxbytes",  kv_conn,  kt_byte,  KNCF_SAMAXBYTES, NULL, NULL, },
+  { "samaxpackets",  kv_conn,  kt_binary,  KNCF_SAMAXPACKETS, NULL, NULL, },
 
   { "retransmit-timeout",  kv_conn,  kt_time,  KNCF_RETRANSMIT_TIMEOUT, NULL, NULL, },
   { "retransmit-interval",  kv_conn,  kt_number,  KNCF_RETRANSMIT_INTERVAL_MS, NULL, NULL, },
