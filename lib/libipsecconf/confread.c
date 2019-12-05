@@ -351,6 +351,7 @@ static bool load_setup(struct starter_config *cfg,
 		case kt_enum:
 		case kt_number:
 		case kt_time:
+		case kt_bytes:
 		case kt_percent:
 			/* all treated as a number for now */
 			assert(f < elemsof(cfg->setup.options));
@@ -949,6 +950,7 @@ static bool translate_conn(struct starter_conn *conn,
 		case kt_enum:
 		case kt_number:
 		case kt_time:
+		case kt_bytes:
 		case kt_percent:
 			/* all treated as a number for now */
 			assert(opt_floor <= field && field < opt_roof);
