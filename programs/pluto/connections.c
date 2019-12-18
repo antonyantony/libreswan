@@ -1551,6 +1551,7 @@ static bool extract_connection(struct fd *whackfd,
 			};
 		}
 
+		c->desired_state = wm->desired_state;
 		c->nic_offload = wm->nic_offload;
 		c->sa_ike_life_seconds = wm->sa_ike_life_seconds;
 		c->sa_ipsec_life_seconds = wm->sa_ipsec_life_seconds;
