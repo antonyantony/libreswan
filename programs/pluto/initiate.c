@@ -354,6 +354,13 @@ bool initiate_connection(struct connection *c, const char *remote_host,
 	return 1;
 }
 
+static int initiate_a_connection(struct connection *c, struct fd *whackfd, void *arg)
+{
+	const struct initiate_stuff *is = arg;
+	return initiate_connection(c, is->remote_host,
+		whackfd, is->background) ? 1 : 0;
+}
+
 static int initiate_clones(const char *name,  struct fd *whackfd, void *arg)
 {
 	char tmpconnname[256];
@@ -364,7 +371,7 @@ static int initiate_clones(const char *name,  struct fd *whackfd, void *arg)
 	c = conn_by_name(tmpconnname, TRUE);
 	if (c != NULL && c->sa_clones > 0) {
 		uint32_t i = 0;
-		count += initiate_a_connection(c, arg);
+		count += initiate_a_connection(c, whackfd, arg);
 		for (i = 1; i <= c->sa_clones; i++) {
 			snprintf(tmpconnname, sizeof(tmpconnname), "%s-%u", name, i);
 			c = conn_by_name(tmpconnname, TRUE);
@@ -374,13 +381,6 @@ static int initiate_clones(const char *name,  struct fd *whackfd, void *arg)
 	}
 
 	return count;
-}
-
-static int initiate_a_connection(struct connection *c, struct fd *whackfd, void *arg)
-{
-	const struct initiate_stuff *is = arg;
-	return initiate_connection(c, is->remote_host,
-				   whackfd, is->background) ? 1 : 0;
 }
 
 void initiate_connections_by_name(const char *name, const char *remote_host,
@@ -403,7 +403,7 @@ void initiate_connections_by_name(const char *name, const char *remote_host,
 		.remote_host = remote_host,
 	};
 
-	inf count = initiate_clones(name, whackfd, &is); /* try as clones */
+	int count = initiate_clones(name, whackfd, &is); /* try as clones */
 	if (count == 0) {
 		/* try as simple alias */
 		loglog(RC_COMMENT, "try initiating all conns with alias='%s'", name);
@@ -734,6 +734,13 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b,
 		    (c->policy & POLICY_AUTH_NULL) ? "AUTH_NULL" : "RSASIG",
 		    str_address(&b->our_client, &b1),
 		    str_address(&b->peer_client, &b2));
+
+		if (c->sa_clones > 0 &&  c->desired_state == STARTUP_ONDEMAND) {
+			ipsecdoi_clone_initiate(b->whackfd,
+					b->clone_cpu_id, c,
+					&inception, uctx);
+		}
+
 		return;
 	}
 
