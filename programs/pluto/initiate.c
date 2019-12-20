@@ -360,6 +360,12 @@ bool initiate_connection(struct connection *c, const char *remote_host,
 	return 1;
 }
 
+static int initiate_a_connection(struct connection *c, void *arg)
+{
+	const struct initiate_stuff *is = arg;
+	return initiate_connection(c, is->whackfd, is->remote_host) ? 1 : 0;
+}
+
 static int initiate_clones(const char *name, void *arg)
 {
 	char tmpconnname[256];
@@ -783,6 +789,12 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b,
 		ipsecdoi_initiate(b->background ? null_fd : b->whackfd,
 				  c, c->policy, 1,
 				  SOS_NOBODY, &inception, uctx);
+		if (c->sa_clones > 0 &&  c->desired_state == STARTUP_ONDEMAND) {
+			ipsecdoi_clone_initiate(b->whackfd,
+					b->clone_cpu_id, c,
+					&inception, uctx);
+		}
+
 	} else {
 		/* We are handling an opportunistic situation.
 		 * This involves several DNS lookup steps that require suspension.
