@@ -363,7 +363,8 @@ bool initiate_connection(struct connection *c, const char *remote_host,
 static int initiate_a_connection(struct connection *c, void *arg)
 {
 	const struct initiate_stuff *is = arg;
-	return initiate_connection(c, is->whackfd, is->remote_host) ? 1 : 0;
+	return initiate_connection(c, is->remote_host,
+		is->whackfd, is->background) ? 1 : 0;
 }
 
 static int initiate_clones(const char *name, void *arg)
@@ -386,13 +387,6 @@ static int initiate_clones(const char *name, void *arg)
 	}
 
 	return count;
-}
-
-static int initiate_a_connection(struct connection *c, void *arg)
-{
-	const struct initiate_stuff *is = arg;
-	return initiate_connection(c, is->remote_host,
-				   is->whackfd, is->background) ? 1 : 0;
 }
 
 void initiate_connections_by_name(const char *name, const char *remote_host,
