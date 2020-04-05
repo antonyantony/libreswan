@@ -3853,8 +3853,15 @@ static bool ikev2_rekey_child_req(struct child_sa *child,
 		 *
 		 * The older child should have discarded this state.
 		 */
-		plog_state(&child->sa, "CHILD SA to rekey #%lu vanished abort this exchange",
-			   child->sa.st_ipsec_pred);
+
+		struct connection *c = child->sa.st_connection;
+
+		plog_state(&child->sa, "CHILD SA to rekey #%lu vanished abort this exchange. c->rekeymargin=%lus rekeymargin installed=%lu salifetime=%lus rekeyfuzz=%lu",
+			   child->sa.st_ipsec_pred,
+			   deltasecs(c->sa_rekey_margin),
+			   deltasecs(child->sa.st_replace_margin),
+			   deltasecs(c->sa_ipsec_life_seconds),
+			   c->sa_rekey_fuzz);
 		return false;
 	}
 
@@ -5720,6 +5727,7 @@ void ikev2_initiate_child_sa(struct pending *p)
 			if (IS_CHILD_SA_ESTABLISHED(rst)) {
 				new_state = STATE_V2_REKEY_CHILD_I0;
 				st->st_ipsec_pred = rst->st_serialno;
+				st->st_replace_margin = rst->st_replace_margin;
 				passert(st->st_connection == rst->st_connection);
 				if (HAS_IPSEC_POLICY(rst->st_policy))
 					st->st_policy = rst->st_policy;
