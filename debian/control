@@ -47,7 +47,6 @@ Depends:
  iproute2 | iproute (>= 20071016),
  iptables,
  libnss3-tools,
- systemd,
  ${misc:Depends},
  ${shlibs:Depends},
 Recommends:
