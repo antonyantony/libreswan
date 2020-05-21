@@ -7,7 +7,7 @@ Subject: update README.nss to match debian defaults for IPSEC_NSSDIR
  1 file changed, 7 insertions(+), 7 deletions(-)
 
 diff --git a/README.nss b/README.nss
-index d3fc620..f68540d 100644
+index 7d2863b..172c0b2 100644
 --- a/README.nss
 +++ b/README.nss
 @@ -64,7 +64,7 @@ using:
