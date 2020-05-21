@@ -1,3 +1,27 @@
+libreswan (3.32-1) unstable; urgency=medium
+
+  [ Stephen Kitt ]
+  * Remove the systemd dependency (Closes: #931858)
+
+  [ Daniel Kahn Gillmor ]
+  * New upstream version, fixing CVE-2020-1763 (Closes: #960458)
+  * refresh patches, dropping those already applied upstream
+  * Standards-Version: bump to 4.5.0 (no changes needed)
+  * move to dh 13
+  * drop unneeded lintian-override
+  * d/copyright: drop annotations for removed source
+  * move subcommand executables from /usr/lib/ipsec to /usr/libexec/ipsec
+  * fix upstream spelling errors
+  * added buildtime and runtime checks that the crypto works as expected
+  * include upstream patch to address subtle NSS API variance
+  * autopkgtest: add CAVP/ACVP tests
+  * use dh_auto_build instead of $(MAKE) when building
+  * enable cross-building (Closes: #958355)
+  * d/tests/opportunistic: avoid dropping into a pager if run from a
+    terminal
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Fri, 22 May 2020 18:33:46 -0400
+
 libreswan (3.29-2) unstable; urgency=medium
 
   * Release to unstable
