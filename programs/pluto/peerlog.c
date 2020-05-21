@@ -29,7 +29,6 @@
 #include <syslog.h>
 #include <sys/stat.h>
 
-#include <libreswan.h>
 
 #include "sysdep.h"
 #include "connections.h"
@@ -179,20 +178,20 @@ static void unlocked_open_peerlog(struct connection *c)
 		/* slight over allocate - NNNN vs N */
 		size_t lf_len = (strlen(peerlog_basedir) +
 				 1 /* '/' */ +
-				 sizeof(ip_address_buf) /* peer path */ +
+				 sizeof(address_buf) /* peer path */ +
 				 1 /* '/' */ +
-				 sizeof(ip_address_buf) /* peer name */ +
+				 sizeof(address_buf) /* peer name */ +
 				 strlen(suffix) +
 				 1 /* '\0' */ +
 				 1 /* cookie */ +
 				 1 /* deliberately over allocate */);
 		c->log_file_name = alloc_bytes(lf_len, "per-peer log file name");
-		fmtbuf_t buf = array_as_fmtbuf(c->log_file_name, lf_len);
+		jambuf_t buf = array_as_jambuf(c->log_file_name, lf_len);
 		lswlogs(&buf, peerlog_basedir);
 		lswlogs(&buf, "/");
-		fmt_address_raw(&buf, &c->spd.that.host_addr, '/');
+		jam_address_raw(&buf, &c->spd.that.host_addr, '/');
 		lswlogs(&buf, "/");
-		fmt_address_raw(&buf, &c->spd.that.host_addr,
+		jam_address_raw(&buf, &c->spd.that.host_addr,
 				0/*':' or '.'*/);
 		lswlogs(&buf, suffix);
 		/* remember, it was over allocated */
@@ -231,7 +230,7 @@ static void unlocked_open_peerlog(struct connection *c)
 
 /* log a line to cur_connection's log */
 static void unlocked_peerlog(struct connection *cur_connection,
-			     const char *m)
+			     const char *prefix, const char *message)
 {
 	if (cur_connection == NULL) {
 		/* we cannot log it in this case. Oh well. */
@@ -247,8 +246,8 @@ static void unlocked_peerlog(struct connection *cur_connection,
 
 		struct realtm now = local_realtime(realnow());
 		strftime(datebuf, sizeof(datebuf), "%Y-%m-%d %T", &now.tm);
-		fprintf(cur_connection->log_file, "%s %s\n",
-			datebuf, m);
+		fprintf(cur_connection->log_file, "%s %s%s\n",
+			datebuf, prefix, message);
 
 		/* now move it to the front of the list */
 		CIRCLEQ_REMOVE(&perpeer_list, cur_connection, log_link);
@@ -257,9 +256,9 @@ static void unlocked_peerlog(struct connection *cur_connection,
 }
 
 /* log a line to cur_connection's log */
-void peerlog(struct connection *cur_connection, const char *m)
+void peerlog(struct connection *cur_connection, const char *prefix, const char *message)
 {
 	pthread_mutex_lock(&peerlog_mutex);
-	unlocked_peerlog(cur_connection, m);
+	unlocked_peerlog(cur_connection, prefix, message);
 	pthread_mutex_unlock(&peerlog_mutex);
 }

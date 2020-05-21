@@ -16,6 +16,7 @@
 struct pending;
 struct pluto_crypto_req;
 struct spd_route;
+struct crypt_mac;
 
 typedef stf_status crypto_transition_fn(struct state *st, struct msg_digest *md,
 					struct pluto_crypto_req *r);
@@ -25,14 +26,13 @@ void ikev2_process_state_packet(struct ike_sa *ike, struct state *st,
 				struct msg_digest **mdp);
 
 /* extern initiator_function ikev2_parent_outI1; */
-extern void ikev2_parent_outI1(fd_t whack_sock,
+extern void ikev2_parent_outI1(struct fd *whack_sock,
 			      struct connection *c,
 			      struct state *predecessor,
 			      lset_t policy,
-			      unsigned long try
-#ifdef HAVE_LABELED_IPSEC
-			      , struct xfrm_user_sec_ctx_ike *uctx
-#endif
+			      unsigned long try,
+			      const threadtime_t *inception,
+			      struct xfrm_user_sec_ctx_ike *uctx
 			      );
 
 extern void log_ipsec_sa_established(const char *m, const struct state *st);
@@ -43,7 +43,9 @@ extern void complete_v2_state_transition(struct state *st,
 
 extern stf_status ikev2_send_livenss_probe(struct state *st);
 
-typedef stf_status ikev2_state_transition_fn(struct state *st, struct msg_digest *md);
+typedef stf_status ikev2_state_transition_fn(struct ike_sa *ike,
+					     struct child_sa *child, /* could be NULL */
+					     struct msg_digest *md);
 
 extern ikev2_state_transition_fn process_encrypted_informational_ikev2;
 
@@ -63,10 +65,9 @@ extern ikev2_state_transition_fn ikev2_parent_inR2;
 
 extern void ikev2_initiate_child_sa(struct pending *p);
 
-void ikev2_rekey_ike_start(struct state *st);
+void ikev2_rekey_ike_start(struct ike_sa *ike);
 
 extern void ikev2_child_outI(struct state *st);
-extern void ikev2_child_send_next(struct state *st);
 
 extern v2_notification_t accept_v2_nonce(struct msg_digest *md, chunk_t *dest,
 		const char *name);
@@ -79,9 +80,9 @@ extern stf_status ikev2_parent_inI2outR2_id_tail(struct msg_digest * md);
 /* ??? why are there so many copies of this routine (ikev2.h, ikev1_continuations.h, ipsec_doi.c).
  * Sometimes more than one copy is defined!
  */
-#define RETURN_STF_FAILURE(f) { \
-	notification_t res = (f); \
-	if (res != NOTHING_WRONG) { \
+#define v2RETURN_STF_FAILURE(f) { \
+	v2_notification_t res = (f); \
+	if (res != v2N_NOTHING_WRONG) { \
 		  return STF_FAIL + res; \
 	} \
 }
@@ -122,7 +123,7 @@ void free_ikev2_proposals(struct ikev2_proposals **proposals);
 struct ikev2_proposals *get_v2_ike_proposals(struct connection *c, const char *why);
 struct ikev2_proposals *get_v2_ike_auth_child_proposals(struct connection *c, const char *why);
 struct ikev2_proposals *get_v2_create_child_proposals(struct connection *c, const char *why,
-						      const struct oakley_group_desc *default_dh);
+						      const struct dh_desc *default_dh);
 
 bool ikev2_emit_sa_proposal(pb_stream *pbs,
 			    const struct ikev2_proposal *proposal,
@@ -132,7 +133,7 @@ bool ikev2_emit_sa_proposals(pb_stream *outs,
 			     const struct ikev2_proposals *proposals,
 			     const chunk_t *local_spi);
 
-const struct oakley_group_desc *ikev2_proposals_first_dh(const struct ikev2_proposals *proposals);
+const struct dh_desc *ikev2_proposals_first_dh(const struct ikev2_proposals *proposals);
 
 bool ikev2_proposals_include_modp(const struct ikev2_proposals *proposals,
 				  oakley_group_t modp);
@@ -152,7 +153,7 @@ bool ikev2_proposal_to_proto_info(const struct ikev2_proposal *proposal,
 bool ikev2_proposal_to_trans_attrs(const struct ikev2_proposal *chosen,
 				   struct trans_attrs *ta_out);
 
-struct ipsec_proto_info *ikev2_child_sa_proto_info(struct state *st, lset_t policy);
+struct ipsec_proto_info *ikev2_child_sa_proto_info(struct child_sa *child, lset_t policy);
 
 ipsec_spi_t ikev2_child_sa_spi(const struct spd_route *spd_route, lset_t policy);
 
@@ -162,53 +163,56 @@ extern void ikev2_log_parentSA(const struct state *st);
 
 extern bool ikev2_calculate_rsa_hash(struct state *st,
 				     enum original_role role,
-				     const unsigned char *idhash,
+				     const struct crypt_mac *idhash,
 				     pb_stream *a_pbs,
 				     chunk_t *no_ppk_auth /* optional output */,
 				     enum notify_payload_hash_algorithms hash_algo);
 
 extern bool ikev2_calculate_ecdsa_hash(struct state *st,
-					enum original_role role,
-					const unsigned char *idhash,
-					pb_stream *a_pbs,
-					chunk_t *no_ppk_auth /* optional output */,
-					enum notify_payload_hash_algorithms hash_algo);
+				       enum original_role role,
+				       const struct crypt_mac *idhash,
+				       pb_stream *a_pbs,
+				       chunk_t *no_ppk_auth /* optional output */,
+				       enum notify_payload_hash_algorithms hash_algo);
 
 extern bool ikev2_emit_psk_auth(enum keyword_authby authby,
-				  const struct state *st,
-				  const unsigned char *idhash,
-				  pb_stream *a_pbs);
+				const struct state *st,
+				const struct crypt_mac *idhash,
+				pb_stream *a_pbs);
 
 extern bool ikev2_create_psk_auth(enum keyword_authby authby,
 				  const struct state *st,
-				  const unsigned char *idhash,
+				  const struct crypt_mac *idhash,
 				  chunk_t *additional_auth /* output */);
 
 extern stf_status ikev2_verify_rsa_hash(struct state *st,
 					enum original_role role,
-					const unsigned char *idhash,
+					const struct crypt_mac *idhash,
 					pb_stream *sig_pbs,
 					enum notify_payload_hash_algorithms hash_algo);
 
 extern stf_status ikev2_verify_ecdsa_hash(struct state *st,
 					enum original_role role,
-					const unsigned char *idhash,
+					const struct crypt_mac *idhash,
 					pb_stream *sig_pbs,
 					enum notify_payload_hash_algorithms hash_algo);
 
 extern bool ikev2_verify_psk_auth(enum keyword_authby authby,
 					const struct state *st,
-					const unsigned char *idhash,
+					const struct crypt_mac *idhash,
 					pb_stream *sig_pbs);
 
 extern void ikev2_derive_child_keys(struct child_sa *child);
 
-extern stf_status ikev2_child_sa_respond(struct msg_digest *md,
-					 pb_stream *outpbs,
-					 enum isakmp_xchg_types isa_xchg);
 
-void v2_msgid_restart_init_request(struct state *st);
-void v2_msgid_update_counters(struct state *st, struct msg_digest *md);
+stf_status ikev2_auth_child_responder(struct ike_sa *ike,
+				      struct child_sa **child, /* OUT */
+				      struct msg_digest *md);
+stf_status ikev2_child_sa_respond(struct ike_sa *ike,
+				  struct child_sa *child,
+				  struct msg_digest *md,
+				  pb_stream *outpbs,
+				  enum isakmp_xchg_types isa_xchg);
 
 void v2_schedule_replace_event(struct state *st);
 
@@ -289,11 +293,7 @@ struct ikev2_ipseckey_dns;
 extern stf_status ikev2_process_child_sa_pl(struct msg_digest *md,
 					    bool expect_accepted);
 
-extern bool emit_v2KE(chunk_t *g, const struct oakley_group_desc *group, pb_stream *outs);
-
-extern bool is_msg_response(const struct msg_digest *md);
-
-extern bool need_this_intiator(struct state *st);
+extern bool emit_v2KE(chunk_t *g, const struct dh_desc *group, pb_stream *outs);
 
 extern void init_ikev2(void);
 
@@ -302,9 +302,6 @@ extern void ikev2_record_deladdr(struct state *st, void *arg_ip);
 extern void ikev2_addr_change(struct state *st);
 
 void lswlog_v2_stf_status(struct lswlog *buf, unsigned ret);
-
-struct state *v2_child_sa_responder_with_msgid(struct ike_sa *ike, msgid_t st_msgid);
-struct state *v2_child_sa_initiator_with_msgid(struct ike_sa *ike, msgid_t st_msgid);
 
 void v2_event_sa_rekey(struct state *st);
 void v2_event_sa_replace(struct state *st);

@@ -49,19 +49,17 @@ extern bool pfkey_raw_eroute(const ip_address *this_host,
 			     const ip_subnet *that_client,
 			     ipsec_spi_t cur_spi,
 			     ipsec_spi_t new_spi,
-			     int sa_proto UNUSED,
+			     const struct ip_protocol *sa_proto,
 			     unsigned int transport_proto,
 			     enum eroute_type esatype,
 			     const struct pfkey_proto_info *proto_info UNUSED,
 			     deltatime_t use_lifetime UNUSED,
 			     uint32_t sa_priority,
 			     const struct sa_marks *sa_marks UNUSED,
+			     const uint32_t xfrm_if_id UNUSED,
 			     enum pluto_sadb_operations op,
-			     const char *text_said
-#ifdef HAVE_LABELED_IPSEC
-			     , const char *policy_label
-#endif
-			     );
+			     const char *text_said,
+			     const char *policy_label);
 
 extern bool pfkey_shunt_eroute(const struct connection *c,
 			       const struct spd_route *sr,

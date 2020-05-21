@@ -337,6 +337,11 @@
 
 #define COOKIE_SIZE 			IKE_SA_SPI_SIZE
 
+#define INTERNAL_IP6_ADDRESS_SIZE 	17
+#define INTERNL_IP6_PREFIX_LEN_SIZE	1
+#define INTERNL_IP6_PREFIX_LEN		128
+#define INTERNL_IP4_PREFIX_LEN		32
+
 /*
  * XXX:
  *
@@ -474,15 +479,6 @@
 #define MAX_CBC_BLOCK_SIZE BYTES_FOR_BITS(128)
 
 #define DSS_QBITS 160 /* bits in DSS's "q" (FIPS 186-1) */
-
-/*
- * hand-computed max of
- * MD5_DIGEST_SIZE, SHA1_DIGEST_SIZE, DES_CBC_BLOCK_SIZE, and
- * SHA2_*_DIGEST_SIZE.
- * Needs to be a compile-time constant for array allocation.
- * To avoid combinatorial explosion, we cheat.
- */
-#define MAX_DIGEST_LEN SHA2_512_DIGEST_SIZE	/* bytes */
 
 /* RFC 2404 "HMAC-SHA-1-96" section 3 */
 #define HMAC_SHA1_KEY_LEN SHA1_DIGEST_SIZE	/* bytes */
@@ -1461,7 +1457,6 @@ typedef enum {
 	 * internal ip
 	 */
 	NETSCREEN_NHTB_INFORM = 40001,
-
 } notification_t;
 
 /*
@@ -1715,7 +1710,7 @@ enum ipsec_authentication_algo {
 	/* IKEv2 1024 - 65535 Reserved for private use */
 	AH_AES_CMAC_96 = 250,      /* IKEv2=8 */
 	AH_NULL = 251,		/* comes from kame? */
-	AH_SHA2_256_TRUNC = 252,	/* our own stolen value */
+	AH_SHA2_256_TRUNCBUG = 252,	/* our own stolen value */
 };
 
 /*
@@ -1858,7 +1853,19 @@ enum notify_payload_hash_algorithms {
 	0x02, 0x01, 0x40
 
 #define LEN_RSA_PSS_SHA2_BLOB ASN1_SHA2_RSA_PSS_SIZE
-#define RSA_SHA1_SIGNED_OCTETS 16
+
+/* RFC 7427 Appendix A.1 */
+
+#define ASN1_SHA2_RSA_v15_SIZE 16 /* including one length byte prefix */
+/* sha256WithRSAEncryption */
+#define RSA_v15_SHA256_BLOB \
+	0x0f, 0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b, 0x05, 0x00
+/* sha384WithRSAEncryption */
+#define RSA_v15_SHA384_BLOB \
+	0x0f, 0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0c, 0x05, 0x00
+/* sha512WithRSAEncryption */
+#define RSA_v15_SHA512_BLOB \
+	0x0f, 0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0d, 0x05, 0x00
 
 /* ECDSA */
 #define ASN1_SHA1_ECDSA_SIZE 11

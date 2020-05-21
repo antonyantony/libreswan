@@ -22,7 +22,7 @@
 <cmdsynopsis>
   <command>ipsec</command>
     <arg choice='plain'><replaceable>barf</replaceable></arg>
-    <arg choice='opt'><arg choice='plain'>--short </arg></arg>
+    <arg choice='opt'><arg choice='plain'>--short</arg></arg>
 </cmdsynopsis>
 </refsynopsisdiv>
 
@@ -44,11 +44,6 @@ the log portion of
 <emphasis remap='I'>barf</emphasis>'s
 output, which can otherwise be extremely voluminous
 if debug logging is turned on.</para>
-
-<para><option>--maxlines &lt;100&gt;</option>
-option sets the length of some bits of information,
-currently netstat -rn.  Useful on boxes where the routing
-table is thousands of lines long.  Default is 100.</para>
 
 <para>On systems with systemd, ipsec barf will look for logs
 using the journalctl command. If the logfile= option is used,

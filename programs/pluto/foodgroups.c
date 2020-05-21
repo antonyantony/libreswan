@@ -24,7 +24,6 @@
 #include <stdlib.h>
 #include <limits.h> /* PATH_MAX */
 
-#include <libreswan.h>
 
 #include "sysdep.h"
 #include "constants.h"
@@ -39,7 +38,7 @@
 #include "lex.h"
 #include "log.h"
 #include "whack.h"
-#include "af_info.h"
+#include "ip_info.h"
 
 #include <errno.h>
 
@@ -89,13 +88,12 @@ static struct fg_targets *new_targets;
  */
 static int subnetcmp(const ip_subnet *a, const ip_subnet *b)
 {
-	ip_address neta, maska, netb, maskb;
 	int r;
 
-	networkof(a, &neta);
-	maskof(a, &maska);
-	networkof(b, &netb);
-	maskof(b, &maskb);
+	ip_address neta = subnet_prefix(a);
+	ip_address maska = subnet_mask(a);
+	ip_address netb = subnet_prefix(b);
+	ip_address maskb = subnet_mask(b);
 	r = addrcmp(&neta, &netb);
 	if (r == 0)
 		r = addrcmp(&maska, &maskb);
@@ -129,9 +127,9 @@ static void read_foodgroup(struct fg_groups *g)
 			switch (flp->bdry) {
 			case B_none:
 			{
-				const struct af_info *afi =
+				const struct ip_info *afi =
 					strchr(flp->tok, ':') == NULL ?
-					&af_inet4_info : &af_inet6_info;
+					&ipv4_info : &ipv6_info;
 				ip_subnet sn;
 				err_t ugh;
 
@@ -145,14 +143,15 @@ static void read_foodgroup(struct fg_groups *g)
 						ugh = addrtosubnet(&t, &sn);
 				} else {
 					ugh = ttosubnet(flp->tok, 0, afi->af,
-							&sn);
+							'x', &sn);
 				}
 
 				if (ugh != NULL) {
 					loglog(RC_LOG_SERIOUS,
-					       "\"%s\" line %d: %s \"%s\"",
+					       "\"%s\" line %d ignored: %s \"%s\"",
 					       flp->filename, flp->lino, ugh,
 					       flp->tok);
+						flushline(NULL);
 				} else if ((afi->af != AF_INET) && (afi->af != AF_INET6)) {
 					loglog(RC_LOG_SERIOUS,
 					       "\"%s\" line %d: unsupported Address Family \"%s\"",
@@ -205,6 +204,7 @@ static void read_foodgroup(struct fg_groups *g)
 									loglog(RC_LOG_SERIOUS,
 										"\"%s\" line %d: wrong number of arguments: either only specify CIDR, or specify CIDR proto source_port dest_port",
 										flp->filename, errl);
+									break;
 								}
 							} else {
 								loglog(RC_LOG_SERIOUS,
@@ -247,18 +247,15 @@ static void read_foodgroup(struct fg_groups *g)
 					}
 
 					if (r == 0) {
-						char source[SUBNETTOT_BUF];
-						char dest[SUBNETTOT_BUF];
-
-						subnettot(lsn, 0, source, sizeof(source));
-						subnettot(&sn, 0, dest, sizeof(dest));
+						subnet_buf source;
+						subnet_buf dest;
 						loglog(RC_LOG_SERIOUS,
 						       "\"%s\" line %d: subnet \"%s\", proto %d, sport %d dport %d, source %s, already \"%s\"",
 						       flp->filename,
 						       flp->lino,
-						       dest,
+						       str_subnet(&sn, &dest),
 						       proto, sport, dport,
-						       source,
+						       str_subnet(lsn, &source),
 						       (*pp)->group->connection->name);
 					} else {
 						struct fg_targets *f =
@@ -318,23 +315,17 @@ void load_groups(void)
 	}
 
 	/* dump new_targets */
-	DBG(DBG_CONTROL,
-	    {
-		    struct fg_targets *t;
-
-		    for (t = new_targets; t != NULL; t = t->next) {
-			    char asource[SUBNETTOT_BUF];
-			    char atarget[SUBNETTOT_BUF];
-
-			    subnettot(&t->group->connection->spd.this.client,
-				      0, asource, sizeof(asource));
-			    subnettot(&t->subnet, 0, atarget, sizeof(atarget));
-			    DBG_log("%s->%s %d sport %d dport %d %s",
-				    asource, atarget,
-					t->proto, t->sport, t->dport,
-				    t->group->connection->name);
-		    }
-	    });
+	if (DBG_BASE) {
+		for (struct fg_targets *t = new_targets; t != NULL; t = t->next) {
+			subnet_buf asource;
+			subnet_buf atarget;
+			DBG_log("%s->%s %d sport %d dport %d %s",
+				str_subnet_port(&t->group->connection->spd.this.client, &asource),
+				str_subnet_port(&t->subnet, &atarget),
+				t->proto, t->sport, t->dport,
+				t->group->connection->name);
+		}
+	    }
 
 	/* determine and deal with differences between targets and new_targets.
 	 * structured like a merge.
@@ -419,8 +410,8 @@ void route_group(struct connection *c)
 {
 	/* it makes no sense to route a connection that is ISAKMP-only */
 	if (!NEVER_NEGOTIATE(c->policy) && !HAS_IPSEC_POLICY(c->policy)) {
-		loglog(RC_ROUTE,
-		       "cannot route an ISAKMP-only group connection");
+		log_connection(RC_ROUTE, c,
+			       "cannot route an ISAKMP-only group connection");
 	} else {
 		struct fg_groups *g = find_group(c);
 		struct fg_targets *t;
@@ -429,15 +420,19 @@ void route_group(struct connection *c)
 		g->connection->policy |= POLICY_GROUTED;
 		for (t = targets; t != NULL; t = t->next) {
 			if (t->group == g) {
-				struct connection *ci = conn_by_name(t->name,
-								    FALSE, FALSE);
+				struct connection *ci = conn_by_name(t->name, false/*!strict*/);
 
 				if (ci != NULL) {
-					set_cur_connection(ci);
+					/*
+					 * XXX: why whack only?
+					 * Shouldn't this leave a
+					 * breadcrumb in the log file?
+					 */
+					struct connection *old = push_cur_connection(ci); /* for trap_connection() */
 					if (!trap_connection(ci))
-						whack_log(RC_ROUTE,
-							  "could not route");
-					set_cur_connection(c);
+						log_connection(WHACK_STREAM|RC_ROUTE, c,
+							       "could not route");
+					pop_cur_connection(old);
 				}
 			}
 		}
@@ -453,7 +448,7 @@ void unroute_group(struct connection *c)
 	g->connection->policy &= ~POLICY_GROUTED;
 	for (t = targets; t != NULL; t = t->next) {
 		if (t->group == g) {
-			struct connection *ci = conn_by_name(t->name, FALSE, FALSE);
+			struct connection *ci = conn_by_name(t->name, false/*!strict*/);
 
 			if (ci != NULL) {
 				set_cur_connection(ci);

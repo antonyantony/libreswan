@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 west #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
@@ -58,7 +58,6 @@ west #
 west #
  ipsec whack --trafficstatus
 006 #4: "west-east-auto", type=ESP, add_time=1234567890, inBytes=336, outBytes=336, id='@east'
-west #
 west #
  ../bin/check-for-core.sh
 west #

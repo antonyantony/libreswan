@@ -23,12 +23,11 @@ extern const enum_names impair_names;
 extern const enum_names impair_help;
 extern const struct lmod_info impair_lmod_info;
 
-extern enum_names state_names;
-extern enum_names state_stories;
 extern enum_names connection_kind_names;
 extern enum_names routing_story;
 extern enum_names certpolicy_type_names;
 extern const char *const sa_policy_bit_names[];
+extern const char *const sighash_policy_bit_names[];
 extern enum_names oakley_attr_names;
 extern const char *const oakley_attr_bit_names[];
 extern enum_names *const oakley_attr_val_descs[];
@@ -43,6 +42,9 @@ extern enum_names oakley_lifetime_names;
 
 extern enum_names ike_version_names;
 extern enum_names ike_version_liveness_names;
+extern enum_names ike_version_ike_names;
+extern enum_names ike_version_child_names;
+
 extern enum_names version_names;
 extern enum_names doi_names;
 extern enum_names ikev1_payload_names;
@@ -67,6 +69,7 @@ extern enum_names isakmp_transformid_names;
 extern enum_names ah_transformid_names;
 extern enum_names esp_transformid_names;
 extern enum_names ipcomp_transformid_names;
+extern enum_names notify_hash_algo_names;
 extern enum_names ike_idtype_names_extended0;
 extern enum_names ike_idtype_names_extended;
 extern enum_names ike_idtype_names;
@@ -98,11 +101,9 @@ extern enum_names allow_global_redirect_names;
 
 extern enum_names dns_auth_level_names;
 
-#ifdef HAVE_LABELED_IPSEC
 /*
  * Attribute Type "constant" for Security Context
  *
- * ??? NOT A CONSTANT!
  * Originally, we assigned the value 10, but that properly belongs to ECN_TUNNEL.
  * We then assigned 32001 which is in the private range RFC 2407.
  * Unfortunately, we feel we have to support 10 as an option for backward
@@ -111,7 +112,6 @@ extern enum_names dns_auth_level_names;
  * ??? surely that makes migration to 32001 all or nothing.
  */
 extern uint16_t secctx_attr_type;
-#endif
 
 extern const char *const natt_bit_names[];
 extern enum_names natt_method_names;

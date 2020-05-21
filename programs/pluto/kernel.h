@@ -33,7 +33,6 @@ struct sa_marks;
 struct spd_route;
 
 extern bool can_do_IPcomp;  /* can system actually perform IPCOMP? */
-extern reqid_t global_reqids;
 
 /*
  * Declare eroute things early enough for uses.
@@ -77,14 +76,20 @@ extern const struct pfkey_proto_info null_proto_info[2];
 
 struct sadb_msg;
 
-/* replaces SADB_X_SATYPE_* for non-KLIPS code. Assumes normal SADB_SATYPE values */
+/*
+ * replaces SADB_X_SATYPE_* for non-KLIPS code. Assumes normal SADB_SATYPE values
+ *
+ * XXX: Seems largely redundant.  Only place that eroute and
+ * ip_protocol have different "values" is when netkey is inserting a
+ * shunt - and that looks like a bug.
+ */
 enum eroute_type {
 	ET_UNSPEC = 0,
-	ET_AH    = SA_AH,       /* (51)  authentication */
-	ET_ESP   = SA_ESP,      /* (50)  encryption/auth */
-	ET_IPCOMP= SA_COMP,     /* (108) compression */
-	ET_INT   = SA_INT,      /* (61)  internal type */
-	ET_IPIP  = SA_IPIP,     /* (4)   turn on tunnel type */
+	ET_AH    = 51,	/* SA_AH,      (51)  authentication */
+	ET_ESP   = 50,	/* SA_ESP,     (50)  encryption/auth */
+	ET_IPCOMP= 108,	/* SA_COMP,    (108) compression */
+	ET_INT   = 61,	/* SA_INT,     (61)  internal type */
+	ET_IPIP  = 4,	/* SA_IPIP,    (4)   turn on tunnel type */
 };
 #define esatype2proto(X) ((int)(X))
 #define proto2esatype(X) ((enum eroute_type)(X))
@@ -107,7 +112,7 @@ struct kernel_sa {
 	bool nopmtudisc;
 	uint32_t tfcpad;
 	ipsec_spi_t spi;
-	unsigned proto;
+	const struct ip_protocol *proto;
 	unsigned int transport_proto;
 	enum eroute_type esatype;
 	unsigned replay_window;
@@ -141,10 +146,9 @@ struct kernel_sa {
 	uint8_t natt_type;
 	ip_address *natt_oa;
 	const char *text_said;
-#ifdef HAVE_LABELED_IPSEC
 	struct xfrm_user_sec_ctx_ike *sec_ctx;
-#endif
 	const char *nic_offload_dev;
+	uint32_t xfrm_if_id;
 
 	deltatime_t sa_lifetime; /* number of seconds until SA expires */
 	/*
@@ -197,19 +201,17 @@ struct kernel_ops {
 			   const ip_subnet *that_client,
 			   ipsec_spi_t cur_spi,
 			   ipsec_spi_t new_spi,
-			   int sa_proto,
+			   const struct ip_protocol *sa_proto,
 			   unsigned int transport_proto,
 			   enum eroute_type satype,
 			   const struct pfkey_proto_info *proto_info,
 			   deltatime_t use_lifetime,
 			   uint32_t sa_priority,
 			   const struct sa_marks *sa_marks,
+			   const uint32_t xfrm_if_id,
 			   enum pluto_sadb_operations op,
-			   const char *text_said
-#ifdef HAVE_LABELED_IPSEC
-			   , const char *policy_label
-#endif
-			   );
+			   const char *text_said,
+			   const char *policy_label);
 	bool (*shunt_eroute)(const struct connection *c,
 			     const struct spd_route *sr,
 			     enum routing_t rt_kind,
@@ -229,7 +231,7 @@ struct kernel_ops {
 		       uint64_t *add_time);
 	ipsec_spi_t (*get_spi)(const ip_address *src,
 			       const ip_address *dst,
-			       int proto,
+			       const struct ip_protocol *proto,
 			       bool tunnel_mode,
 			       reqid_t reqid,
 			       ipsec_spi_t min,
@@ -245,10 +247,10 @@ struct kernel_ops {
 	err_t (*migrate_sa_check)(void);
 	bool (*migrate_sa)(struct state *st);
 	bool (*v6holes)();
-	bool (*poke_ipsec_policy_hole)(struct raw_iface *ifp, int fd);
+	bool (*poke_ipsec_policy_hole)(const struct raw_iface *ifp, int fd);
 };
 
-extern int create_socket(struct raw_iface *ifp, const char *v_name, int port);
+extern int create_socket(const struct raw_iface *ifp, const char *v_name, int port);
 
 #ifndef IPSECDEVPREFIX
 # define IPSECDEVPREFIX "ipsec"
@@ -264,8 +266,10 @@ extern struct raw_iface *find_raw_ifaces4(void);
 extern struct raw_iface *find_raw_ifaces6(void);
 
 /* helper for invoking call outs */
-extern int fmt_common_shell_out(char *buf, int blen, const struct connection *c,
-				const struct spd_route *sr, struct state *st);
+extern bool fmt_common_shell_out(char *buf, size_t blen,
+				 const struct connection *c,
+				 const struct spd_route *sr,
+				 struct state *st);
 
 /* many bits reach in to use this, but maybe shouldn't */
 extern bool do_command(const struct connection *c, const struct spd_route *sr,
@@ -322,11 +326,13 @@ struct bare_shunt {
 	 * Simple rule: use a string literal.
 	 */
 	const char *why;
+	/* the conncetion from where it came - used to re-load /32 conns */
+	char *from_cn;
 
 	struct bare_shunt *next;
 };
 
-extern void show_shunt_status(void);
+extern void show_shunt_status(struct fd *whackfd);
 extern unsigned show_shunt_count(void);
 
 struct bare_shunt **bare_shunt_ptr(const ip_subnet *ours,
@@ -345,15 +351,11 @@ struct bare_shunt **bare_shunt_ptr(const ip_subnet *ours,
  * because we use it indefinitely without copying or pfreeing.
  * Simple rule: use a string literal.
  */
-#ifdef HAVE_LABELED_IPSEC
 struct xfrm_user_sec_ctx_ike; /* forward declaration of tag */
-#endif
 extern void record_and_initiate_opportunistic(const ip_subnet *,
 					      const ip_subnet *,
 					      int transport_proto,
-#ifdef HAVE_LABELED_IPSEC
 					      struct xfrm_user_sec_ctx_ike *,
-#endif
 					      const char *why);
 extern void init_kernel(void);
 
@@ -390,7 +392,7 @@ extern ipsec_spi_t shunt_policy_spi(const struct connection *c, bool prospective
 
 struct state;   /* forward declaration of tag */
 extern ipsec_spi_t get_ipsec_spi(ipsec_spi_t avoid,
-				 int proto,
+				 const struct ip_protocol *proto,
 				 const struct spd_route *sr,
 				 bool tunnel_mode);
 extern ipsec_spi_t get_my_cpi(const struct spd_route *sr, bool tunnel_mode);
@@ -406,7 +408,7 @@ extern bool was_eroute_idle(struct state *st, deltatime_t idle_max);
 extern bool get_sa_info(struct state *st, bool inbound, deltatime_t *ago /* OUTPUT */);
 extern bool migrate_ipsec_sa(struct state *st);
 extern bool del_spi(ipsec_spi_t spi,
-		    int proto,
+		    const struct ip_protocol *proto,
 		    const ip_address *src,
 		    const ip_address *dest);
 
@@ -414,16 +416,14 @@ extern bool del_spi(ipsec_spi_t spi,
 extern bool eroute_connection(const struct spd_route *sr,
 			      ipsec_spi_t cur_spi,
 			      ipsec_spi_t new_spi,
-			      int proto, enum eroute_type esatype,
+			      const struct ip_protocol *proto,
+			      enum eroute_type esatype,
 			      const struct pfkey_proto_info *proto_info,
 			      uint32_t sa_priority,
 			      const struct sa_marks *sa_marks,
-			      unsigned int op, const char *opname
-#ifdef HAVE_LABELED_IPSEC
-			      , const char *policy_label
-#endif
-			      );
-
+			      const uint32_t xfrm_if_id,
+			      unsigned int op, const char *opname,
+			      const char *policy_label);
 static inline bool compatible_overlapping_connections(const struct connection *a,
 						      const struct connection *b)
 {
@@ -437,7 +437,7 @@ static inline bool compatible_overlapping_connections(const struct connection *a
 extern const struct kernel_ops klips_kernel_ops;
 #endif
 
-extern void show_kernel_interface(void);
+extern void show_kernel_interface(struct fd *whackfd);
 extern void free_kernelfd(void);
 extern void expire_bare_shunts(void);
 
@@ -458,22 +458,20 @@ extern bool raw_eroute(const ip_address *this_host,
 		       const ip_subnet *that_client,
 		       ipsec_spi_t cur_spi,
 		       ipsec_spi_t new_spi,
-		       int sa_proto,
+		       const struct ip_protocol *sa_proto,
 		       unsigned int transport_proto,
 		       enum eroute_type esatype,
 		       const struct pfkey_proto_info *proto_info,
 		       deltatime_t use_lifetime,
 		       uint32_t sa_priority,
 		       const struct sa_marks *sa_marks,
+		       const uint32_t xfrm_if_id,
 		       enum pluto_sadb_operations op,
-		       const char *opname
-#ifdef HAVE_LABELED_IPSEC
-		       , const char *policy_label
-#endif
-		       );
+		       const char *opname,
+		       const char *policy_label);
 
 extern deltatime_t bare_shunt_interval;
 extern void set_text_said(char *text_said, const ip_address *dst,
-			  ipsec_spi_t spi, int sa_proto);
+			  ipsec_spi_t spi, const struct ip_protocol *sa_proto);
 #define _KERNEL_H_
 #endif /* _KERNEL_H_ */

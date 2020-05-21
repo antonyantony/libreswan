@@ -7,7 +7,7 @@ Uploaders:
 Vcs-Browser: https://github.com/libreswan/libreswan
 Vcs-Git: https://github.com/libreswan/libreswan
 Standards-Version: 4.1.0
-Rules-Requires-Root: no
+# Rules-Requires-Root: no # breaks jessie
 # libunbound-dev (>= 1.6.5~)  # this is not yet
 Build-Depends:
  bison,
@@ -44,18 +44,17 @@ Pre-Depends:
 Depends:
  bsdmainutils,
  dns-root-data,
- host,
- iproute2 | iproute (>= 20071016),
+ bind9-host,
+ iproute2,
  iptables,
  libnspr4,
  libnss3 (>= 3.16),
  libnss3-tools,
- libunbound2,
  systemd,
  ${misc:Depends},
  ${shlibs:Depends},
 Recommends:
- python,
+ python3,
 Provides:
  ike-server,
 Conflicts:
@@ -70,7 +69,7 @@ Description: Internet Key Exchange daemon
  IKEv2, X.509 Digital Certificates, NAT Traversal, and many others.
  .
  Libreswan has been forked from Openswan 2.6.38, which was forked from
- FreeS/WAN 1.99.
+ FreeS/WAN 2.04.
  .
  The Libreswan IKE daemon is named pluto. It was inherited from the FreeS/WAN
  project, but provides improved X.509 certificate support and other features.
@@ -78,7 +77,7 @@ Description: Internet Key Exchange daemon
 Package: libreswan-dbg
 Architecture: any
 Section: debug
-Priority: extra
+Priority: optional
 Depends: libreswan (= ${binary:Version}), ${misc:Depends}
 Description: Internet Key Exchange daemon - debugging symbols
  Libreswan is an IPsec based VPN solution for the Linux kernel. Both

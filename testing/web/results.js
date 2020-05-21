@@ -1,5 +1,4 @@
 function lsw_summary_graph_click_test_run(table_id, summary_test_run) {
-    console.log("click-test_run", table_id, summary_test_run)
     window.location = "../" + summary_test_run.directory
 }
 
@@ -10,7 +9,7 @@ function results(div_id, json_file) {
 	    return console.warn(error)
 	}
 
-	var columns = [
+	let columns = [
 	    {
 		title: "Test",
 		value: function(result) {
@@ -51,7 +50,7 @@ function results(div_id, json_file) {
 		    if (!result || result.result == "untested") {
 			return ""
 		    }
-		    var test_host_names = (result.test_host_names !== undefined
+		    let test_host_names = (result.test_host_names !== undefined
 					   ? result.test_host_names
 					   : result.host_names !== undefined
 					   ? result.host_names
@@ -59,9 +58,9 @@ function results(div_id, json_file) {
 		    if (!test_host_names) {
 			return ""
 		    }
-		    var br = false
-		    var html = ""
-		    test_host_names.forEach(function(host) {
+		    let br = false
+		    let html = ""
+		    for (const host of test_host_names) {
 			if (br) {
 			    html += "<br/>"
 			}
@@ -70,58 +69,62 @@ function results(div_id, json_file) {
 			if (result.errors[host] === undefined
 			    || result.errors[host].length == 0) {
 			    html += "passed"
-			    return
+			} else {
+			    let sep = ""
+			    for (const error of result.errors[host]) {
+				html += sep
+				sep = ", "
+				let href = null
+				let value = ""
+				if (error == "passed") {
+				    value = "passed"
+				} else if (error == "baseline-missing") {
+				    // Probably a new test.
+				    value = "previous-missing"
+				} else if (error == "output-different"
+					   || error == "output-whitespace") {
+				    href = result.output_directory + "/" + host + ".console.diff"
+				    value = error
+				} else if (error == "output-unchecked") {
+				    href = result.output_directory + "/" + host + ".console.txt"
+				    value = error
+				} else if (error == "output-truncated") {
+				    href = result.output_directory + "/" + host + ".console.verbose.txt"
+				    value = error
+				} else if (error == "baseline-passed") {
+				    // The current test failed, but the
+				    // previous test passed.
+				    value = "previous-passed"
+				} else if (error == "baseline-failed") {
+				    // The current test passed, but the
+				    // previous test failed.
+				    href = result.baseline_output_directory + "/" + host + ".console.diff"
+				    value = "previous-failed"
+				} else if (error == "baseline-different"
+					   || error == "baseline-whitespace") {
+				    // The current and previous tests
+				    // fail, but in different ways.  Ideal
+				    // would be to show the diff between
+				    // this and the old test.  Showing the
+				    // old diff might be helpful.
+				    href = result.baseline_output_directory + "/" + host + ".console.diff"
+				    value = "previous-different"
+				} else if (error == "EXPECTATION"
+					   || error == "ASSERTION") {
+				    href = result.output_directory + "/" + host + ".pluto.log.gz"
+				    value = error
+				} else {
+				    href = result.output_directory
+				    value = error
+				}
+				if (href) {
+				    html += "<a href=\"" + href + "\">" + value + "</a>"
+				} else {
+				    html += value
+				}
+			    }
 			}
-			sep = ""
-			result.errors[host].forEach(function(error) {
-			    html += sep
-			    sep = ", "
-			    var href = null
-			    var value = ""
-			    if (error == "passed") {
-				value = "passed"
-			    } else if (error == "baseline-missing") {
-				// Probably a new test.
-				value = "previous-missing"
-			    } else if (error == "output-different"
-				       || error == "output-whitespace") {
-				href = result.output_directory + "/" + host + ".console.diff"
-				value = error
-			    } else if (error == "output-unchecked") {
-				href = result.output_directory + "/" + host + ".console.txt"
-				value = error
-			    } else if (error == "output-truncated") {
-				href = result.output_directory + "/" + host + ".console.verbose.txt"
-				value = error
-			    } else if (error == "baseline-passed") {
-				// The current test failed, but the
-				// previous test passed.
-				value = "previous-passed"
-			    } else if (error == "baseline-failed") {
-				// The current test passed, but the
-				// previous test failed.
-				href = result.baseline_output_directory + "/" + host + ".console.diff"
-				value = "previous-failed"
-			    } else if (error == "baseline-different"
-				       || error == "baseline-whitespace") {
-				// The current and previous tests
-				// fail, but in different ways.  Ideal
-				// would be to show the diff between
-				// this and the old test.  Showing the
-				// old diff might be helpful.
-				href = result.baseline_output_directory + "/" + host + ".console.diff"
-				value = "previous-different"
-			    } else {
-				href = result.output_directory
-				value = error
-			    }
-			    if (href) {
-				html += "<a href=\"" + href + "\">" + value + "</a>"
-			    } else {
-				html += value
-			    }
-			})
-		    })
+		    }
 		    return html
 		},
 	    },

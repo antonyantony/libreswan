@@ -18,6 +18,8 @@
 #include "chunk.h"
 #include "lswalloc.h"
 #include "lswlog.h"	/* for DBG_dump() */
+#include "ctype.h"		/* for isxdigit() */
+#include <stdlib.h>		/* for strtoul() */
 
 /*
  * Compiler note: some older versions of GCC claim that EMPTY_CHUNK
@@ -36,23 +38,10 @@ chunk_t alloc_chunk(size_t count, const char *name)
 	return chunk(ptr, count);
 }
 
-void free_chunk_contents(chunk_t *chunk)
+void free_chunk_content(chunk_t *chunk)
 {
 	pfreeany(chunk->ptr);
 	*chunk = EMPTY_CHUNK;
-}
-
-chunk_t clone_chunk(chunk_t chunk, const char *name)
-{
-	if (chunk.ptr == NULL) {
-		return EMPTY_CHUNK;
-	} else {
-		chunk_t clone = {
-			.ptr = clone_bytes(chunk.ptr, chunk.len, name),
-			.len = chunk.len,
-		};
-		return clone;
-	}
 }
 
 chunk_t clone_chunk_chunk(chunk_t lhs, chunk_t rhs, const char *name)
@@ -80,9 +69,13 @@ char *clone_chunk_as_string(chunk_t chunk, const char *name)
 	}
 }
 
-chunk_t clone_bytes_as_chunk(void *bytes, size_t sizeof_bytes, const char *name)
+chunk_t clone_bytes_as_chunk(const void *bytes, size_t sizeof_bytes, const char *name)
 {
-	return chunk(clone_bytes(bytes, sizeof_bytes, name), sizeof_bytes);
+	if (bytes == NULL) {
+		return empty_chunk;
+	} else {
+		return chunk(clone_bytes(bytes, sizeof_bytes, name), sizeof_bytes);
+	}
 }
 
 bool chunk_eq(chunk_t a, chunk_t b)
@@ -90,7 +83,46 @@ bool chunk_eq(chunk_t a, chunk_t b)
 	return a.len == b.len && memeq(a.ptr, b.ptr, b.len);
 }
 
-void DBG_dump_chunk(const char *prefix, chunk_t chunk)
+/*
+ * Given a HEX encoded string (there is no leading 0x prefix, but
+ * there may be embedded spaces), decode it into a freshly allocated
+ * chunk.
+ *
+ * If this function fails, crash and burn - it is fed static data so
+ * should never ever have a problem.
+ *
+ * The caller must free the chunk.
+ */
+chunk_t chunk_from_hex(const char *hex, const char *name)
 {
-	DBG_dump(prefix, chunk.ptr, chunk.len);
+	/*
+	 * The decoded buffer (consiting of can't be bigger than half the encoded
+	 * string.
+	 */
+	chunk_t chunk = alloc_chunk((strlen(hex)+1)/2, name);
+	chunk.len = 0;
+	const char *pos = hex;
+	for (;;) {
+		/* skip leading/trailing space */
+		while (*pos == ' ') {
+			pos++;
+		}
+		if (*pos == '\0') {
+			break;
+		}
+		/* Expecting <HEX><HEX> */
+		if (!isxdigit(pos[0]) || !isxdigit(pos[1])) {
+			/* friendly barf for debugging */
+			PASSERT_FAIL("expected hex digit at offset %tu in hex buffer \"%s\" but found \"%.1s\"",
+				     pos - hex, hex, pos);
+		}
+
+		char buf[3] = { pos[0], pos[1], '\0' };
+		char *end;
+		chunk.ptr[chunk.len] = strtoul(buf, &end, 16);
+		passert(*end == '\0');
+		chunk.len++;
+		pos += 2;
+	}
+	return chunk;
 }

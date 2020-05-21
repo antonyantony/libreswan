@@ -15,11 +15,10 @@ west #
  # confirm clear text does not get through
 west #
  ../../pluto/bin/ping-once.sh --down -I 192.0.1.254 192.0.2.254
-[ 00.00] IN=eth1 OUT= MAC=12:00:00:64:64:45:12:00:00:64:64:23:08:00 SRC=192.0.2.254 DST=192.0.1.254 LEN=XXXX TOS=0x00 PREC=0x00 TTL=64 ID=XXXXX PROTO=ICMP TYPE=0 CODE=0 ID=XXXX SEQ=1 
 down
 west #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
@@ -30,13 +29,12 @@ west #
 initdone
 west #
  ipsec auto --up  westnet-eastnet-ikev2
-002 "westnet-eastnet-ikev2" #1: initiating v2 parent SA
-1v2 "westnet-eastnet-ikev2" #1: initiate
+1v2 "westnet-eastnet-ikev2" #1: initiating IKEv2 IKE SA
 1v2 "westnet-eastnet-ikev2" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
 1v2 "westnet-eastnet-ikev2" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_256 group=MODP2048}
 002 "westnet-eastnet-ikev2" #2: certificate verified OK: E=user-east@testing.libreswan.org,CN=east.testing.libreswan.org,OU=Test Department,O=Libreswan,L=Toronto,ST=Ontario,C=CA
 002 "westnet-eastnet-ikev2" #2: IKEv2 mode peer ID is ID_DER_ASN1_DN: 'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=east.testing.libreswan.org, E=user-east@testing.libreswan.org'
-003 "westnet-eastnet-ikev2" #2: Authenticated using RSA
+003 "westnet-eastnet-ikev2" #2: Authenticated using RSA with IKEv2_AUTH_HASH_SHA2_256
 002 "westnet-eastnet-ikev2" #2: negotiated connection [192.0.1.0-192.0.1.255:0-65535 0] -> [192.0.2.0-192.0.2.255:0-65535 0]
 004 "westnet-eastnet-ikev2" #2: STATE_V2_IPSEC_I: IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_256-HMAC_SHA2_256_128 NATOA=none NATD=none DPD=passive}
 west #
@@ -65,15 +63,15 @@ src 192.1.2.45 dst 192.1.2.23
 	enc cbc(aes) 0xENCKEY
 XFRM policy:
 src 192.0.1.0/24 dst 192.0.2.0/24
-	dir out priority 1042407 ptype main
+	dir out priority 2084814 ptype main
 	tmpl src 192.1.2.45 dst 192.1.2.23
 		proto esp reqid REQID mode tunnel
 src 192.0.2.0/24 dst 192.0.1.0/24
-	dir fwd priority 1042407 ptype main
+	dir fwd priority 2084814 ptype main
 	tmpl src 192.1.2.23 dst 192.1.2.45
 		proto esp reqid REQID mode tunnel
 src 192.0.2.0/24 dst 192.0.1.0/24
-	dir in priority 1042407 ptype main
+	dir in priority 2084814 ptype main
 	tmpl src 192.1.2.23 dst 192.1.2.45
 		proto esp reqid REQID mode tunnel
 XFRM done
@@ -84,7 +82,6 @@ default via 192.1.2.254 dev eth1
 192.0.1.0/24 dev eth0 proto kernel scope link src 192.0.1.254
 192.0.2.0/24 dev eth1 scope link src 192.0.1.254
 192.1.2.0/24 dev eth1 proto kernel scope link src 192.1.2.45
-192.9.4.0/24 dev eth2 proto kernel scope link src 192.9.4.45
 NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
@@ -98,14 +95,14 @@ road                                                         P,,
 west                                                         u,u,u
 west #
  grep "fragment number" /tmp/pluto.log
-|    fragment number: 1 (0x1)
-|    fragment number: 2 (0x2)
-|    fragment number: 3 (0x3)
-|    fragment number: 4 (0x4)
-|    fragment number: 5 (0x5)
-|    fragment number: 1 (0x1)
+|    fragment number: 1 (00 01)
+|    fragment number: 2 (00 02)
+|    fragment number: 3 (00 03)
+|    fragment number: 4 (00 04)
+|    fragment number: 5 (00 05)
+|    fragment number: 1 (00 01)
 | received IKE encrypted fragment number '1', total number '2', next payload '36'
-|    fragment number: 2 (0x2)
+|    fragment number: 2 (00 02)
 | received IKE encrypted fragment number '2', total number '2', next payload '0'
 west #
  echo done
@@ -126,15 +123,15 @@ src 192.1.2.45 dst 192.1.2.23
 	enc cbc(aes) 0xENCKEY
 XFRM policy:
 src 192.0.1.0/24 dst 192.0.2.0/24
-	dir out priority 1042407 ptype main
+	dir out priority 2084814 ptype main
 	tmpl src 192.1.2.45 dst 192.1.2.23
 		proto esp reqid REQID mode tunnel
 src 192.0.2.0/24 dst 192.0.1.0/24
-	dir fwd priority 1042407 ptype main
+	dir fwd priority 2084814 ptype main
 	tmpl src 192.1.2.23 dst 192.1.2.45
 		proto esp reqid REQID mode tunnel
 src 192.0.2.0/24 dst 192.0.1.0/24
-	dir in priority 1042407 ptype main
+	dir in priority 2084814 ptype main
 	tmpl src 192.1.2.23 dst 192.1.2.45
 		proto esp reqid REQID mode tunnel
 XFRM done
@@ -145,7 +142,6 @@ default via 192.1.2.254 dev eth1
 192.0.1.0/24 dev eth0 proto kernel scope link src 192.0.1.254
 192.0.2.0/24 dev eth1 scope link src 192.0.1.254
 192.1.2.0/24 dev eth1 proto kernel scope link src 192.1.2.45
-192.9.4.0/24 dev eth2 proto kernel scope link src 192.9.4.45
 NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
@@ -158,8 +154,7 @@ north                                                        P,,
 road                                                         P,,  
 west                                                         u,u,u
 west #
- if [ -f /var/run/charon.pid ]; then strongswan status ; fi
-west #
+ if [ -f /var/run/charon.pid -o -f /var/run/strongswan/charon.pid ]; then strongswan status ; fi
 west #
  ../bin/check-for-core.sh
 west #

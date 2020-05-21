@@ -4,7 +4,7 @@ east #
  certutil -d sql:/etc/ipsec.d -D -n "Libreswan test CA for mainca - Libreswan"
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -17,7 +17,6 @@ east #
 000 "westnet-eastnet-x509":   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "westnet-eastnet-x509":   our auth:rsasig, their auth:rsasig
 000 "westnet-eastnet-x509":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:unset;
-000 "westnet-eastnet-x509":   labeled_ipsec:no;
 000 "westnet-eastnet-x509":   policy_label:unset;
 000 "westnet-eastnet-x509":   CAs: 'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=Libreswan test CA for mainca, E=testing@libreswan.org'...'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=Libreswan test CA for mainca, E=testing@libreswan.org'
 000 "westnet-eastnet-x509":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
@@ -48,15 +47,15 @@ src 192.1.2.23 dst 192.1.2.45
 	enc cbc(aes) 0xENCKEY
 XFRM policy:
 src 192.0.1.0/24 dst 192.0.2.0/24
-	dir fwd priority 1042407 ptype main
+	dir fwd priority 2084814 ptype main
 	tmpl src 192.1.2.45 dst 192.1.2.23
 		proto esp reqid REQID mode tunnel
 src 192.0.1.0/24 dst 192.0.2.0/24
-	dir in priority 1042407 ptype main
+	dir in priority 2084814 ptype main
 	tmpl src 192.1.2.45 dst 192.1.2.23
 		proto esp reqid REQID mode tunnel
 src 192.0.2.0/24 dst 192.0.1.0/24
-	dir out priority 1042407 ptype main
+	dir out priority 2084814 ptype main
 	tmpl src 192.1.2.23 dst 192.1.2.45
 		proto esp reqid REQID mode tunnel
 XFRM done
@@ -67,7 +66,6 @@ default via 192.1.2.254 dev eth1
 192.0.1.0/24 via 192.1.2.45 dev eth1
 192.0.2.0/24 dev eth0 proto kernel scope link src 192.0.2.254
 192.1.2.0/24 dev eth1 proto kernel scope link src 192.1.2.23
-192.9.2.0/24 dev eth2 proto kernel scope link src 192.9.2.23
 NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
@@ -78,7 +76,6 @@ north                                                        P,,
 road                                                         P,,  
 west                                                         P,,  
 west-ec                                                      P,,  
-east #
 east #
  ../bin/check-for-core.sh
 east #

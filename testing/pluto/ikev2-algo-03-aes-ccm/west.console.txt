@@ -16,11 +16,10 @@ west #
  # confirm clear text does not get through
 west #
  ../../pluto/bin/ping-once.sh --down -I 192.0.1.254 192.0.2.254
-[ 00.00] IN=eth1 OUT= MAC=12:00:00:64:64:45:12:00:00:64:64:23:08:00 SRC=192.0.2.254 DST=192.0.1.254 LEN=XXXX TOS=0x00 PREC=0x00 TTL=64 ID=XXXXX PROTO=ICMP TYPE=0 CODE=0 ID=XXXX SEQ=1 
 down
 west #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
@@ -34,14 +33,12 @@ west #
 west #
  ipsec auto --status
 000 using kernel interface: netkey
-000 interface lo/lo 127.0.0.1@4500
-000 interface lo/lo 127.0.0.1@500
-000 interface eth0/eth0 192.0.1.254@4500
-000 interface eth0/eth0 192.0.1.254@500
-000 interface eth1/eth1 192.1.2.45@4500
-000 interface eth1/eth1 192.1.2.45@500
-000 interface eth2/eth2 192.9.4.45@4500
-000 interface eth2/eth2 192.9.4.45@500
+000 interface lo/lo 127.0.0.1:4500
+000 interface lo/lo 127.0.0.1:500
+000 interface eth0/eth0 192.0.1.254:4500
+000 interface eth0/eth0 192.0.1.254:500
+000 interface eth1/eth1 192.1.2.45:4500
+000 interface eth1/eth1 192.1.2.45:500
 000  
 000  
 000 fips mode=disabled;
@@ -113,7 +110,6 @@ west #
 000 algorithm IKE PRF: name=HMAC_SHA2_384, hashlen=48
 000 algorithm IKE PRF: name=HMAC_SHA2_512, hashlen=64
 000 algorithm IKE PRF: name=AES_XCBC, hashlen=16
-000 algorithm IKE DH Key Exchange: name=MODP1024, bits=1024
 000 algorithm IKE DH Key Exchange: name=MODP1536, bits=1536
 000 algorithm IKE DH Key Exchange: name=MODP2048, bits=2048
 000 algorithm IKE DH Key Exchange: name=MODP3072, bits=3072
@@ -134,12 +130,12 @@ west #
 000 "westnet-eastnet-ipv4-psk-ikev2-ccm-a":   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "westnet-eastnet-ipv4-psk-ikev2-ccm-a":   our auth:secret, their auth:secret
 000 "westnet-eastnet-ipv4-psk-ikev2-ccm-a":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:unset;
-000 "westnet-eastnet-ipv4-psk-ikev2-ccm-a":   labeled_ipsec:no;
 000 "westnet-eastnet-ipv4-psk-ikev2-ccm-a":   policy_label:unset;
 000 "westnet-eastnet-ipv4-psk-ikev2-ccm-a":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "westnet-eastnet-ipv4-psk-ikev2-ccm-a":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
 000 "westnet-eastnet-ipv4-psk-ikev2-ccm-a":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "westnet-eastnet-ipv4-psk-ikev2-ccm-a":   policy: PSK+ENCRYPT+TUNNEL+PFS+IKEV2_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
+000 "westnet-eastnet-ipv4-psk-ikev2-ccm-a":   v2-auth-hash-policy: none;
 000 "westnet-eastnet-ipv4-psk-ikev2-ccm-a":   conn_prio: 24,24; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "westnet-eastnet-ipv4-psk-ikev2-ccm-a":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
 000 "westnet-eastnet-ipv4-psk-ikev2-ccm-a":   our idtype: ID_FQDN; our id=@west; their idtype: ID_FQDN; their id=@east
@@ -162,8 +158,7 @@ west #
 initdone
 west #
  ipsec auto --up  westnet-eastnet-ipv4-psk-ikev2-ccm-a
-002 "westnet-eastnet-ipv4-psk-ikev2-ccm-a" #1: initiating v2 parent SA
-1v2 "westnet-eastnet-ipv4-psk-ikev2-ccm-a" #1: initiate
+1v2 "westnet-eastnet-ipv4-psk-ikev2-ccm-a" #1: initiating IKEv2 IKE SA
 1v2 "westnet-eastnet-ipv4-psk-ikev2-ccm-a" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
 1v2 "westnet-eastnet-ipv4-psk-ikev2-ccm-a" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
 002 "westnet-eastnet-ipv4-psk-ikev2-ccm-a" #2: IKEv2 mode peer ID is ID_FQDN: '@east'
@@ -192,15 +187,15 @@ src 192.1.2.45 dst 192.1.2.23
 	aead rfc4309(ccm(aes)) 0xENCAUTHKEY 64
 XFRM policy:
 src 192.0.1.0/24 dst 192.0.2.0/24
-	dir out priority 1042407 ptype main
+	dir out priority 2084814 ptype main
 	tmpl src 192.1.2.45 dst 192.1.2.23
 		proto esp reqid REQID mode tunnel
 src 192.0.2.0/24 dst 192.0.1.0/24
-	dir fwd priority 1042407 ptype main
+	dir fwd priority 2084814 ptype main
 	tmpl src 192.1.2.23 dst 192.1.2.45
 		proto esp reqid REQID mode tunnel
 src 192.0.2.0/24 dst 192.0.1.0/24
-	dir in priority 1042407 ptype main
+	dir in priority 2084814 ptype main
 	tmpl src 192.1.2.23 dst 192.1.2.45
 		proto esp reqid REQID mode tunnel
 XFRM done
@@ -211,7 +206,6 @@ default via 192.1.2.254 dev eth1
 192.0.1.0/24 dev eth0 proto kernel scope link src 192.0.1.254
 192.0.2.0/24 via 192.1.2.23 dev eth1
 192.1.2.0/24 dev eth1 proto kernel scope link src 192.1.2.45
-192.9.4.0/24 dev eth2 proto kernel scope link src 192.9.4.45
 NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
@@ -232,15 +226,15 @@ src 192.1.2.45 dst 192.1.2.23
 	aead rfc4309(ccm(aes)) 0xENCAUTHKEY 64
 XFRM policy:
 src 192.0.1.0/24 dst 192.0.2.0/24
-	dir out priority 1042407 ptype main
+	dir out priority 2084814 ptype main
 	tmpl src 192.1.2.45 dst 192.1.2.23
 		proto esp reqid REQID mode tunnel
 src 192.0.2.0/24 dst 192.0.1.0/24
-	dir fwd priority 1042407 ptype main
+	dir fwd priority 2084814 ptype main
 	tmpl src 192.1.2.23 dst 192.1.2.45
 		proto esp reqid REQID mode tunnel
 src 192.0.2.0/24 dst 192.0.1.0/24
-	dir in priority 1042407 ptype main
+	dir in priority 2084814 ptype main
 	tmpl src 192.1.2.23 dst 192.1.2.45
 		proto esp reqid REQID mode tunnel
 XFRM done
@@ -251,11 +245,9 @@ default via 192.1.2.254 dev eth1
 192.0.1.0/24 dev eth0 proto kernel scope link src 192.0.1.254
 192.0.2.0/24 via 192.1.2.23 dev eth1
 192.1.2.0/24 dev eth1 proto kernel scope link src 192.1.2.45
-192.9.4.0/24 dev eth2 proto kernel scope link src 192.9.4.45
 NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
-west #
 west #
  ../bin/check-for-core.sh
 west #

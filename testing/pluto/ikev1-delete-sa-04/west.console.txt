@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 west #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
@@ -46,7 +46,6 @@ west #
  # east howvever, should be attempting to connect to west because it has auto=start
 west #
  ipsec status |grep EVENT_RETRANSMIT | sed "s/EVENT_RETRANSMIT in .*$/EVENT_RETRANSMIT in .../"
-west #
 west #
  ../bin/check-for-core.sh
 west #

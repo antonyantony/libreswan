@@ -10,13 +10,14 @@
 # $ ./OBJ.linux.x86_64/testing/enumcheck/enumcheck > testing/enumcheck/OUTPUT.enumcheck.txt
 # $ git diff
 
-ipsec enumcheck | cmp ../../enumcheck/OUTPUT.enumcheck.txt - || echo "Does the file OUTPUT.enumcheck.txt need updating?"
+ipsec enumcheck | cmp ../../check/enum/OUTPUT.enumcheck.txt - || echo "Does the file OUTPUT.enumcheck.txt need updating?"
 
 # other checks
 
-ipsec fmtcheck > /dev/null || echo failed
+ipsec jambufcheck > /dev/null || echo failed
 ipsec timecheck > /dev/null || echo failed
+ipsec shunkcheck > /dev/null || echo failed
+ipsec dncheck > /dev/null || echo failed
 
-# XXX: Don't enable for now as ipcheck tries to talk to DNS :-(
-
-#ipsec ipcheck > /dev/null || echo failed
+# Need to disable DNS tests
+ipsec ipcheck --nodns > /dev/null || echo failed

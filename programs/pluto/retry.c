@@ -123,6 +123,10 @@ void retransmit_v1_msg(struct state *st)
 
 	set_cur_state(st);  /* ipsecdoi_replace would reset cur_state, set it again */
 	pstat_sa_failed(st, REASON_TOO_MANY_RETRANSMITS);
+
+	/* placed here because IKEv1 doesn't do a proper state change to STF_FAIL/STF_FATAL */
+	linux_audit_conn(st, IS_IKE_SA(st) ? LAK_PARENT_FAIL : LAK_CHILD_FAIL);
+
 	delete_state(st);
 	/* note: no md->st to clear */
 }
@@ -158,7 +162,21 @@ void retransmit_v2_msg(struct state *st)
 			retransmit_count(pst) + 1);
 		});
 
-	if (need_this_intiator(st)) {
+	/*
+	 * if this connection has a newer Child SA than this state
+	 * this negotiation is not relevant any more.  would this
+	 * cover if there are multiple CREATE_CHILD_SA pending on this
+	 * IKE negotiation ???
+	 *
+	 * XXX: this is testing for an IKE SA that's been superseed by
+	 * a newer IKE SA (not child).  Suspect this is to handle a
+	 * race where the other end brings up the IKE SA first?  For
+	 * that case, shouldn't this state have been deleted?
+	 */
+	if (st->st_state->kind != STATE_PARENT_I1 &&
+	    c->newest_ipsec_sa > st->st_serialno) {
+		libreswan_log("suppressing retransmit because superseded by #%lu try=%lu. Drop this negotiation",
+				c->newest_ipsec_sa, st->st_try);
 		pstat_sa_failed(st, REASON_TOO_MANY_RETRANSMITS);
 		delete_state(st);
 		return;
@@ -218,7 +236,7 @@ void retransmit_v2_msg(struct state *st)
 
 	if (pst != st) {
 		set_cur_state(pst);  /* now we are on pst */
-		if (pst->st_state == STATE_PARENT_I2) {
+		if (pst->st_state->kind == STATE_PARENT_I2) {
 			pstat_sa_failed(pst, REASON_TOO_MANY_RETRANSMITS);
 			delete_state(pst);
 		} else {

@@ -22,8 +22,10 @@
 #include "ike_alg.h"
 #include "test_buffer.h"
 #include "ike_alg_test_cbc.h"
+#include "ike_alg_encrypt_ops.h"	/* XXX: oops */
 
 #include "nss.h"
+#include "lswfips.h"
 #include "pk11pub.h"
 #include "crypt_symkey.h"
 
@@ -144,12 +146,12 @@ static bool test_cbc_op(const struct encrypt_desc *encrypt_desc,
 	encrypt_desc->encrypt_ops->do_crypt(encrypt_desc, tmp.ptr, tmp.len,
 					    sym_key, iv.ptr, encrypt);
 
-	if (!verify_chunk(op, expected, tmp)) {
+	if (!verify_hunk(op, expected, tmp)) {
 		DBG(DBG_CRYPT, DBG_log("test_cbc_op: %s: %s: output does not match", description, op));
 		ok = FALSE;
 	}
-	if (!verify_chunk_data("updated CBC IV", iv,
-			   expected_iv.ptr + expected_iv.len - iv.len)) {
+	if (!verify_bytes("updated CBC IV", iv.ptr, iv.len,
+			  expected_iv.ptr + expected_iv.len - iv.len, iv.len)) {
 		DBG(DBG_CRYPT, DBG_log("test_cbc_op: %s: %s: IV does not match", description, op));
 		ok = FALSE;
 	}
@@ -170,8 +172,8 @@ static bool test_cbc_op(const struct encrypt_desc *encrypt_desc,
 static bool test_cbc_vector(const struct encrypt_desc *encrypt_desc,
 			    const struct cbc_test_vector *test)
 {
+	libreswan_log("  %s", test->description);
 	bool ok = TRUE;
-	DBG(DBG_CRYPT, DBG_log("test_cbc_vector: %s", test->description));
 
 	PK11SymKey *sym_key = decode_to_key(encrypt_desc, test->key);
 	if (!test_cbc_op(encrypt_desc, test->description, 1,
@@ -195,13 +197,13 @@ static bool test_cbc_vector(const struct encrypt_desc *encrypt_desc,
 	return ok;
 }
 
-bool test_cbc_vectors(const struct encrypt_desc *encrypt_desc,
+bool test_cbc_vectors(const struct encrypt_desc *desc,
 		      const struct cbc_test_vector *tests)
 {
 	bool ok = TRUE;
 	const struct cbc_test_vector *test;
 	for (test = tests; test->description != NULL; test++) {
-		if (!test_cbc_vector(encrypt_desc, test)) {
+		if (!test_cbc_vector(desc, test)) {
 			ok = FALSE;
 		}
 	}

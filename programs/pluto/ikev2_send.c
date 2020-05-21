@@ -57,7 +57,6 @@ bool send_recorded_v2_ike_msg(struct state *st, const char *where)
 				return false;
 			}
 			nr_frags++;
-
 		}
 		dbg("sent %u fragments", nr_frags);
 		return true;
@@ -190,16 +189,20 @@ bool emit_v2Npl(v2_notification_t ntype,
 	return emit_v2Nsa_pl(ntype, PROTO_v2_RESERVED, NULL, outs, payload_pbs);
 }
 
-/* emit a v2 Notification payload, with optional chunk as sub-payload */
-bool emit_v2Nchunk(v2_notification_t ntype,
-		const chunk_t *ndata, /* optional */
-		pb_stream *outs)
+/* emit a v2 Notification payload, with bytes as sub-payload */
+bool emit_v2N_bytes(v2_notification_t ntype,
+		    const void *bytes, size_t size, /* optional */
+		    pb_stream *outs)
 {
 	pb_stream pl;
-
-	if (!emit_v2Npl(ntype, outs, &pl) ||
-	    (ndata != NULL && !out_chunk(*ndata, &pl, "Notify data")))
+	if (!emit_v2Npl(ntype, outs, &pl)) {
 		return false;
+	}
+
+	/* for some reason out_raw() doesn't like size==0 */
+	if (size > 0 && !out_raw(bytes, size, &pl, "Notify data")) {
+		return false;
+	}
 
 	close_output_pbs(&pl);
 	return true;
@@ -282,12 +285,16 @@ void send_v2N_spi_response_from_state(struct ike_sa *ike,
 	enum isakmp_xchg_types exchange_type = md->hdr.isa_xchg;
 	const char *const exchange_name = enum_short_name(&ikev2_exchange_names, exchange_type);
 
-	ipstr_buf b;
-	libreswan_log("responding to %s message (ID %u) from %s:%u with encrypted notification %s",
-		      exchange_name, md->hdr.isa_msgid,
-		      sensitive_ipstr(&ike->sa.st_remoteaddr, &b),
-		      ike->sa.st_remoteport,
-		      notify_name);
+	/*
+	 * XXX: this will prefix with cur_state.  For this code path
+	 * is it ever different to the IKE SA?
+	 */
+	endpoint_buf b;
+	loglog(RC_NOTIFICATION+ntype,
+	       "responding to %s message (ID %u) from %s with encrypted notification %s",
+	       exchange_name, md->hdr.isa_msgid,
+	       str_sensitive_endpoint(&ike->sa.st_remote_endpoint, &b),
+	       notify_name);
 
 	/*
 	 * For encrypted messages, the EXCHANGE TYPE can't be SA_INIT.
@@ -414,12 +421,11 @@ void send_v2N_response_from_md(struct msg_digest *md,
 		    exchange_type);
 	}
 
-	ipstr_buf b;
-	libreswan_log("responding to %s (%d) message (Message ID %u) from %s:%u with unencrypted notification %s",
+	endpoint_buf b;
+	libreswan_log("responding to %s (%d) message (Message ID %u) from %s with unencrypted notification %s",
 		      exchange_name, exchange_type,
 		      md->hdr.isa_msgid,
-		      sensitive_ipstr(&md->sender, &b),
-		      hportof(&md->sender),
+		      str_sensitive_endpoint(&md->sender, &b),
 		      notify_name);
 
 	/*
@@ -450,7 +456,8 @@ void send_v2N_response_from_md(struct msg_digest *md,
 	}
 
 	/* build and add v2N payload to the packet */
-	if (!emit_v2Nchunk(ntype, ndata, &rbody)) {
+	chunk_t nhunk = ndata == NULL ? empty_chunk : *ndata;
+	if (!emit_v2N_hunk(ntype, nhunk, &rbody)) {
 		PEXPECT_LOG("error building unencrypted %s %s notification with message ID %u",
 			    exchange_name, notify_name, md->hdr.isa_msgid);
 		return;
@@ -562,6 +569,8 @@ void record_v2_delete(struct state *const st)
  * XXX: This and record_v2_delete() should be merged.  However, there
  * are annoying differences.  For instance, record_v2_delete() updates
  * st->st_msgid but the below doesn't.
+ *
+ * XXX: but st_msgid isn't used so have things changed?
  */
 stf_status record_v2_informational_request(const char *name,
 					   struct ike_sa *ike,
@@ -599,37 +608,6 @@ stf_status record_v2_informational_request(const char *name,
 	if (ret != STF_OK) {
 		return ret;
 	}
-
-	/*
-	 * cannot use ikev2_update_msgid_counters - no md here
-	 *
-	 * XXX: Record the outbound message in the CHILD SA.  There's
-	 * code in record_outbound_ike_msg() that updates
-	 * .st_last_liveness and if that's IKE then the IKE SA never
-	 * times out - any message updates the IKE timer making the
-	 * logic conclude that all is well!  Surely this is wrong!  Or
-	 * perhaps this some sort of variable abuse where for CHILD SA
-	 * it is last outgoing, and for IKE it is last incomming?
-	 *
-	 * XXX: If this is the IKE SA responder sending out a request
-	 * (so Message ID is 0) things get really screwed up.  The
-	 * first response (Message ID is 0) will be dropped because
-	 * the message routing code will find the CHILD SA (it has a
-	 * default msgid==0) and then discover that there's no
-	 * handler.  The second and further responses will make it
-	 * through, but only because there's fall back logic to route
-	 * the message to the IKE SA when there's no child.
-	 * Hopefully, by the time you read this, these bugs will have
-	 * been fixed.
-	 */
-	msgid_t new_msgid = ike->sa.st_msgid_nextuse;
-	msgid_t new_nextuse = ike->sa.st_msgid_nextuse + 1;
-	dbg("Message ID: IKE #%lu sender #%lu in %s record 'n' send notify request so forcing IKE nextuse="PRI_MSGID"->"PRI_MSGID" and IKE msgid="PRI_MSGID"->"PRI_MSGID,
-	    ike->sa.st_serialno, sender->st_serialno, __func__,
-	    ike->sa.st_msgid_nextuse, new_nextuse,
-	    ike->sa.st_msgid, new_msgid);
-	ike->sa.st_msgid_nextuse = new_nextuse;
-	ike->sa.st_msgid = new_msgid;
 
 	ike->sa.st_pend_liveness = TRUE; /* we should only do this when dpd/liveness is active? */
 	record_outbound_ike_msg(sender, &packet, name);

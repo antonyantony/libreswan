@@ -24,10 +24,11 @@
 #include "packet.h"
 #include "quirks.h"
 #include "chunk.h"
+#include "ip_address.h"
+#include "pluto_timing.h"
 
 struct state;   /* forward declaration of tag */
 
-extern void init_demux(void);
 extern event_callback_routine comm_handle_cb;
 
 /* State transition function infrastructure
@@ -77,19 +78,18 @@ struct payload_summary {
  */
 
 struct msg_digest {
-	struct msg_digest *next;		/* for free list */
 	chunk_t raw_packet;			/* (v1) if encrypted, received packet before decryption */
 	const struct iface_port *iface;		/* interface on which message arrived */
-	ip_address sender;			/* where message came from (network order) */
+	ip_endpoint sender;			/* address:port where message came from */
 	struct isakmp_hdr hdr;			/* message's header */
 	bool encrypted;				/* (v1) was it encrypted? */
-	enum state_kind from_state;		/* state we started in */
+	enum state_kind v1_from_state;		/* (v1) state we started in */
 	const struct state_v1_microcode *smc;	/* (v1) microcode for initial state */
 	const struct state_v2_microcode *svm;	/* (v2) microcode for initial state */
 	bool new_iv_set;			/* (v1) */
 	struct state *st;			/* current state object */
 
-	realtime_t md_inception;		/* when was this started */
+	threadtime_t md_inception;		/* when was this started */
 
 	notification_t v1_note;			/* reason for failure */
 	bool dpd;				/* (v1) Peer supports RFC 3706 DPD */
@@ -145,16 +145,16 @@ struct msg_digest {
 	struct isakmp_quirks quirks;
 };
 
-enum ike_version msg_ike_version(const struct msg_digest *md);
+enum ike_version hdr_ike_version(const struct isakmp_hdr *hdr);
 enum message_role v2_msg_role(const struct msg_digest *md);
 
 extern struct msg_digest *alloc_md(const char *mdname);
-struct msg_digest *clone_md(struct msg_digest *md, const char *name);
-extern void release_md(struct msg_digest *md);
 extern void release_any_md(struct msg_digest **mdp);
-void schedule_md_event(const char *name, struct msg_digest *md);
 
-extern void free_md_pool(void);
+/* only the buffer */
+struct msg_digest *clone_raw_md(struct msg_digest *md, const char *name);
+
+void schedule_md_event(const char *name, struct msg_digest *md);
 
 extern void process_packet(struct msg_digest **mdp);
 

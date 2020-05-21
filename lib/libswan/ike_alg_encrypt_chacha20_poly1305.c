@@ -17,7 +17,7 @@
 
 #include "ike_alg.h"
 #include "ike_alg_encrypt.h"
-#include "ike_alg_encrypt_nss_aead_ops.h"
+#include "ike_alg_encrypt_ops.h"
 
 /*
  * See: https://tools.ietf.org/html/rfc7634#section-2
@@ -27,7 +27,7 @@ const struct encrypt_desc ike_alg_encrypt_chacha20_poly1305 = {
 	.common = {
 		.name = "chacha20_poly1305",
 		.fqn = "CHACHA20_POLY1305",
-		.names = { "chacha20_poly1305", "chacha20poly1305", },
+		.names = "chacha20_poly1305,chacha20poly1305",
 		.algo_type =   IKE_ALG_ENCRYPT,
 		.id = {
 			[IKEv1_OAKLEY_ID] = -1,

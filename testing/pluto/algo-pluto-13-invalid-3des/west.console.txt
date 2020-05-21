@@ -6,7 +6,7 @@ west #
 destination -I 192.0.1.254 192.0.2.254 is alive
 west #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
@@ -31,7 +31,6 @@ west #
  # should not match anything
 west #
  grep ID_UNASSIGNED_ID4 /tmp/pluto.log
-west #
 west #
  ../bin/check-for-core.sh
 west #

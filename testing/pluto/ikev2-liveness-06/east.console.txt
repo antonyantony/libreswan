@@ -2,7 +2,7 @@
 Preparing X.509 files
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -15,7 +15,6 @@ east #
  # should show there are no tunnels up
 east #
  ipsec whack --trafficstatus
-east #
 east #
  ../bin/check-for-core.sh
 east #

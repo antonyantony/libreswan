@@ -28,11 +28,11 @@
 #ifdef NETKEY_SUPPORT
 #include "linux/xfrm.h" /* local (if configured) or system copy */
 #endif
-#include <libreswan.h>
 #include <libreswan/passert.h>
 
 #include "constants.h"
 #include "enum_names.h"
+#include "defs.h"
 
 /*
  * To obsolete or convert to runtime options:
@@ -129,6 +129,10 @@ static const char *const timer_event_name[] = {
 	E(EVENT_CHECK_CRLS),
 	E(EVENT_REVIVE_CONNS),
 	E(EVENT_FREE_ROOT_CERTS),
+	E(EVENT_RESET_LOG_RATE_LIMIT),
+	E(EVENT_PROCESS_KERNEL_QUEUE),
+
+	E(GLOBAL_TIMERS_ROOF),
 
 	E(EVENT_SO_DISCARD),
 	E(EVENT_RETRANSMIT),
@@ -148,7 +152,6 @@ static const char *const timer_event_name[] = {
 	E(EVENT_v2_LIVENESS),
 	E(EVENT_v2_RELEASE_WHACK),
 	E(EVENT_v2_INITIATE_CHILD),
-	E(EVENT_v2_SEND_NEXT_IKE),
 	E(EVENT_v2_ADDR_CHANGE),
 	E(EVENT_v2_REDIRECT),
 	E(EVENT_RETAIN),
@@ -159,158 +162,6 @@ static const char *const timer_event_name[] = {
 enum_names timer_event_names = {
 	EVENT_NULL, EVENT_RETAIN,
 	ARRAY_REF(timer_event_name),
-	NULL, /* prefix */
-	NULL
-};
-
-/* State of exchanges */
-#define S(STATE) [STATE] = #STATE
-static const char *const state_name[] = {
-	S(STATE_UNDEFINED),
-	S(STATE_UNUSED_1),
-	S(STATE_UNUSED_2),
-	S(STATE_MAIN_R0),
-	S(STATE_MAIN_I1),
-	S(STATE_MAIN_R1),
-	S(STATE_MAIN_I2),
-	S(STATE_MAIN_R2),
-	S(STATE_MAIN_I3),
-	S(STATE_MAIN_R3),
-	S(STATE_MAIN_I4),
-
-	S(STATE_AGGR_R0),
-	S(STATE_AGGR_I1),
-	S(STATE_AGGR_R1),
-	S(STATE_AGGR_I2),
-	S(STATE_AGGR_R2),
-
-	S(STATE_QUICK_R0),
-	S(STATE_QUICK_I1),
-	S(STATE_QUICK_R1),
-	S(STATE_QUICK_I2),
-	S(STATE_QUICK_R2),
-
-	S(STATE_INFO),
-	S(STATE_INFO_PROTECTED),
-
-	S(STATE_XAUTH_R0),
-	S(STATE_XAUTH_R1),
-	S(STATE_MODE_CFG_R0),
-	S(STATE_MODE_CFG_R1),
-	S(STATE_MODE_CFG_R2),
-
-	S(STATE_MODE_CFG_I1),
-
-	S(STATE_XAUTH_I0),
-	S(STATE_XAUTH_I1),
-
-	S(STATE_IKEv1_ROOF),
-
-	/* v2 */
-	S(STATE_PARENT_I0),
-	S(STATE_PARENT_I1),
-	S(STATE_PARENT_I2),
-	S(STATE_PARENT_I3),
-	S(STATE_PARENT_R0),
-	S(STATE_PARENT_R1),
-	S(STATE_PARENT_R2),
-	S(STATE_V2_CREATE_I0),
-	S(STATE_V2_CREATE_I),
-	S(STATE_V2_REKEY_IKE_I0),
-	S(STATE_V2_REKEY_IKE_I),
-	S(STATE_V2_REKEY_CHILD_I0),
-	S(STATE_V2_REKEY_CHILD_I),
-	S(STATE_V2_CREATE_R),
-	S(STATE_V2_REKEY_IKE_R),
-	S(STATE_V2_REKEY_CHILD_R),
-	S(STATE_V2_IPSEC_I),
-	S(STATE_V2_IPSEC_R),
-	S(STATE_IKESA_DEL),
-	S(STATE_CHILDSA_DEL),
-
-	S(STATE_IKEv2_ROOF),
-};
-#undef S
-
-enum_names state_names = {
-	STATE_UNDEFINED, STATE_IKEv2_ROOF,
-	ARRAY_REF(state_name),
-	"STATE_", /* prefix */
-	NULL
-};
-
-/* story for state */
-
-static const char *const state_story[] = {
-	[STATE_UNDEFINED] = "not defined and probably dead (internal)",
-	[STATE_UNUSED_1] = "STATE_UNUSED_1",
-	[STATE_UNUSED_2] = "STATE_UNUSED_2",
-	[STATE_MAIN_R0] = "expecting MI1",
-	[STATE_MAIN_I1] = "sent MI1, expecting MR1",
-	[STATE_MAIN_R1] = "sent MR1, expecting MI2",
-	[STATE_MAIN_I2] = "sent MI2, expecting MR2",
-	[STATE_MAIN_R2] = "sent MR2, expecting MI3",
-	[STATE_MAIN_I3] = "sent MI3, expecting MR3",
-	[STATE_MAIN_R3] = "sent MR3, ISAKMP SA established",
-	[STATE_MAIN_I4] = "ISAKMP SA established",
-
-	[STATE_AGGR_R0] = "expecting AI1",
-	[STATE_AGGR_I1] = "sent AI1, expecting AR1",
-	[STATE_AGGR_R1] = "sent AR1, expecting AI2",
-	[STATE_AGGR_I2] = "sent AI2, ISAKMP SA established",
-	[STATE_AGGR_R2] = "ISAKMP SA established",
-
-	[STATE_QUICK_R0] = "expecting QI1",
-	[STATE_QUICK_I1] = "sent QI1, expecting QR1",
-	[STATE_QUICK_R1] = "sent QR1, inbound IPsec SA installed, expecting QI2",
-	[STATE_QUICK_I2] = "sent QI2, IPsec SA established",
-	[STATE_QUICK_R2] = "IPsec SA established",
-
-	[STATE_INFO] = "got Informational Message in clear",
-	[STATE_INFO_PROTECTED] = "got encrypted Informational Message",
-
-	[STATE_XAUTH_R0] = "XAUTH responder - optional CFG exchange",
-	[STATE_XAUTH_R1] = "XAUTH status sent, expecting Ack",
-	[STATE_MODE_CFG_R0] = "ModeCfg Reply sent",
-	[STATE_MODE_CFG_R1] = "ModeCfg Set sent, expecting Ack",
-	[STATE_MODE_CFG_R2] = "ModeCfg R2",
-
-	[STATE_MODE_CFG_I1] = "ModeCfg inititator - awaiting CFG_reply",
-
-	[STATE_XAUTH_I0] = "XAUTH client - possibly awaiting CFG_request",
-	[STATE_XAUTH_I1] = "XAUTH client - possibly awaiting CFG_set",
-
-	[STATE_IKEv1_ROOF] = "invalid state - IKE roof",
-
-	[STATE_PARENT_I0] = "waiting for KE to finish",
-	[STATE_PARENT_I1] = "sent v2I1, expected v2R1",
-	[STATE_PARENT_I2] = "sent v2I2, expected v2R2",
-	[STATE_PARENT_I3] = "PARENT SA established",
-	[STATE_PARENT_R0] = "processing SA_INIT request",
-	[STATE_PARENT_R1] = "received v2I1, sent v2R1",
-	[STATE_PARENT_R2] = "received v2I2, PARENT SA established",
-	[STATE_V2_CREATE_I0] = "STATE_V2_CREATE_I0",
-	[STATE_V2_CREATE_I] = "sent IPsec Child req wait response",
-	[STATE_V2_REKEY_IKE_I0] = "STATE_V2_REKEY_IKE_I0",
-	[STATE_V2_REKEY_IKE_I] = "STATE_V2_REKEY_IKE_I",
-	[STATE_V2_REKEY_CHILD_I0] = "STATE_V2_REKEY_CHILD_I0",
-	[STATE_V2_REKEY_CHILD_I] = "STATE_V2_REKEY_CHILD_I",
-	[STATE_V2_CREATE_R] = "STATE_V2_CREATE_R",
-	[STATE_V2_REKEY_IKE_R] = "STATE_V2_REKEY_IKE_R",
-	[STATE_V2_REKEY_CHILD_R] = "STATE_V2_REKEY_CHILD_R",
-	[STATE_V2_IPSEC_I] = "IPsec SA established",
-	[STATE_V2_IPSEC_R] = "IPsec SA established",
-
-	/* ??? better story needed for these */
-	[STATE_IKESA_DEL] = "STATE_IKESA_DEL",
-	[STATE_CHILDSA_DEL] = "STATE_CHILDSA_DEL",
-
-	[STATE_IKEv2_ROOF] = "invalid state - IKEv2 roof",
-};
-
-enum_names state_stories = {
-	STATE_UNDEFINED, STATE_IKEv2_ROOF,
-	ARRAY_REF(state_story),
 	NULL, /* prefix */
 	NULL
 };
@@ -357,23 +208,26 @@ enum_names routing_story = {
 	NULL };
 
 static const char *const stf_status_strings[] = {
-	"STF_IGNORE",
-	"STF_SUSPEND",
-	"STF_OK",
-	"STF_INTERNAL_ERROR",
-	"STF_FATAL",
-	"STF_DROP",
-	"STF_FAIL"
+#define A(S) [S] = #S
+	A(STF_SKIP_COMPLETE_STATE_TRANSITION),
+	A(STF_IGNORE),
+	A(STF_SUSPEND),
+	A(STF_OK),
+	A(STF_INTERNAL_ERROR),
+	A(STF_FATAL),
+	A(STF_FAIL),
+#undef A
 };
 
 enum_names stf_status_names = {
-	STF_IGNORE, STF_FAIL,
+	0, elemsof(stf_status_strings)-1,
 	ARRAY_REF(stf_status_strings),
 	NULL, /* prefix */
 	NULL
 };
 
-/* Names for sa_policy_bits.
+/*
+ * Names for sa_policy_bits.
  * Note: we drop the POLICY_ prefix so that logs are more concise.
  */
 const char *const sa_policy_bit_names[] = {
@@ -391,6 +245,7 @@ const char *const sa_policy_bit_names[] = {
 	"DECAP_DSCP",
 	"NOPMTUDISC",
 	"MSDH_DOWNGRADE",
+	"ALLOW_NO_SAN",
 	"DNS_MATCH_ID",
 	"SHA2_TRUNCBUG",
 	"SHUNT0",
@@ -426,6 +281,17 @@ const char *const sa_policy_bit_names[] = {
 	"PPK_INSIST",
 	"ESN_NO",
 	"ESN_YES",
+	"RSASIG_v1_5",
+	NULL	/* end for bitnamesof() */
+};
+
+/*
+ * Names for RFC 7427 IKEv2 AUTH signature hash algo sighash_policy_bits
+ */
+const char *const sighash_policy_bit_names[] = {
+	"SHA2_256",
+	"SHA2_384",
+	"SHA2_512",
 	NULL	/* end for bitnamesof() */
 };
 
@@ -486,6 +352,44 @@ enum_names dns_auth_level_names = {
 	NULL
 };
 
+/*
+ * enum sa_type
+ */
+
+static const char *const v1_sa_type_name[] = {
+	[IKE_SA] = "ISAKMP SA",
+	[IPSEC_SA] = "IPsec SA"
+};
+
+enum_names v1_sa_type_names = {
+	SA_TYPE_FLOOR, SA_TYPE_ROOF-1,
+	ARRAY_REF(v1_sa_type_name),
+	NULL, /* prefix */
+	NULL,
+};
+
+static const char *const v2_sa_type_name[] = {
+	[IKE_SA] = "IKE SA",
+	[IPSEC_SA] = "CHILD SA"
+};
+
+enum_names v2_sa_type_names = {
+	SA_TYPE_FLOOR, SA_TYPE_ROOF-1,
+	ARRAY_REF(v2_sa_type_name),
+	NULL, /* prefix */
+	NULL,
+};
+
+static enum_names *sa_type_name[] = {
+	[IKEv1 - IKEv1] = &v1_sa_type_names,
+	[IKEv2 - IKEv1] = &v2_sa_type_names,
+};
+
+enum_enum_names sa_type_names = {
+	IKEv1, IKEv2,
+	ARRAY_REF(sa_type_name),
+};
+
 /* print a policy: like bitnamesof, but it also does the non-bitfields.
  * Suppress the shunt and fail fields if 0.
  */
@@ -516,14 +420,14 @@ static const enum_names *pluto_enum_names_checklist[] = {
 	&dpd_action_names,
 	&sd_action_names,
 	&timer_event_names,
-	&state_names,
-	&state_stories,
 	&natt_method_names,
 	&routing_story,
 	&stf_status_names,
 #ifdef NETKEY_SUPPORT
 	&netkey_sa_dir_names,
 #endif
+	&v1_sa_type_names,
+	&v2_sa_type_names,
 };
 
 void init_pluto_constants(void) {

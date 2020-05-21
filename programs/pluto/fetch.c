@@ -30,7 +30,6 @@
 #include <cert.h>
 #include <certdb.h>
 
-#include <libreswan.h>
 
 #include "constants.h"
 #include "defs.h"
@@ -63,7 +62,7 @@ struct fetch_req {
 /* chained list of crl fetch requests */
 static fetch_req_t *crl_fetch_reqs = NULL;
 
-static pthread_t thread;
+static pthread_t fetch_thread_id;
 static pthread_mutex_t crl_fetch_list_mutex = PTHREAD_MUTEX_INITIALIZER;
 static const char *crl_fetch_list_mutex_who;
 
@@ -166,7 +165,7 @@ static err_t fetch_curl(chunk_t url,
 
 		if (res == CURLE_OK) {
 			/* clone from realloc(3)ed memory to pluto-allocated memory */
-			*blob = clone_chunk(response, "curl blob");
+			*blob = clone_hunk(response, "curl blob");
 		} else {
 			libreswan_log("fetching uri (%s) with libcurl failed: %s", uri,
 			     errorbuffer);
@@ -525,9 +524,13 @@ static void *fetch_thread(void *arg UNUSED)
 {
 	dbg("fetch thread started");
 
-	while (!exiting_pluto) {
+	while (true) {
 		dbg("fetching crl requests (may block)");
 		struct crl_fetch_request *requests = get_crl_fetch_requests();
+		if (requests == NULL) {
+			pexpect(exiting_pluto);
+			break;
+		}
 
 		/*
 		 * Merge in the next batch of newest-to-oldest ordered
@@ -537,7 +540,6 @@ static void *fetch_thread(void *arg UNUSED)
 		 * prepended, and since the oldest request is
 		 * processed last, it is put right at the front.
 		 */
-
 		dbg("merging new fetch requests");
 		for (struct crl_fetch_request *r = requests; r != NULL; r = r->next) {
 			merge_crl_fetch_request(r);
@@ -562,7 +564,7 @@ static void *fetch_thread(void *arg UNUSED)
 /*
  * initializes curl and starts the fetching thread
  */
-void init_fetch(void)
+void start_crl_fetch_helper(void)
 {
 	/*
 	 * XXX: CRT checking is probably really a periodic timer,
@@ -581,12 +583,31 @@ void init_fetch(void)
 			libreswan_log("libcurl could not be initialized, status = %d",
 			     status);
 #endif
-		status = pthread_create(&thread, NULL, fetch_thread, NULL);
+		status = pthread_create(&fetch_thread_id, NULL, fetch_thread, NULL);
 		if (status != 0)
 			libreswan_log(
 				"could not start thread for fetching certificate, status = %d",
 				status);
 		schedule_oneshot_timer(EVENT_CHECK_CRLS, deltatime(5));
+	}
+}
+
+void stop_crl_fetch_helper(void)
+{
+	if (deltasecs(crl_check_interval) > 0) {
+		/*
+		 * Log before blocking.  If the CRL fetch helper is
+		 * currently fetching a CRL, this could take a bit.
+		 */
+		plog_global("shutting down the CRL fetch helper thread");
+		pexpect(exiting_pluto);
+		/* wake the sleeping dragon from its slumber */
+		add_crl_fetch_requests(NULL);
+		/* use a timer? */
+		int status = pthread_join(fetch_thread_id, NULL);
+		if (status != 0) {
+			LOG_ERRNO(status, "problem waiting for crl fetch thread to exit");
+		}
 	}
 }
 
@@ -625,7 +646,7 @@ static void add_distribution_points(const generalName_t *newPoints,
 				 * Clone additional distribution point.
 				 */
 				generalName_t *ngn = clone_const_thing(*newPoints, "generalName");
-				ngn->name = clone_chunk(newPoints->name,
+				ngn->name = clone_hunk(newPoints->name,
 							"add_distribution_points: general name name");
 				/* insert additional CRL distribution point */
 				ngn->next = *distributionPoints;
@@ -671,7 +692,7 @@ static void merge_crl_fetch_request(struct crl_fetch_request *request)
 				.trials = 0,
 
 				/* clone issuer (again) */
-				.issuer = clone_chunk(idn, "issuer dn"),
+				.issuer = clone_hunk(idn, "issuer dn"),
 
 				.distributionPoints = NULL,
 			};
@@ -701,10 +722,11 @@ static void merge_crl_fetch_request(struct crl_fetch_request *request)
 /*
  * list all distribution points
  */
-static void list_distribution_points(const generalName_t *first_gn)
+static void list_distribution_points(struct fd *whackfd,
+				     const generalName_t *first_gn)
 {
 	for (const generalName_t *gn = first_gn; gn != NULL; gn = gn->next) {
-		whack_log(RC_COMMENT, "       %s '%.*s'",
+		whack_comment(whackfd, "       %s '%.*s'",
 			gn == first_gn ? "distPts:" : "        ",
 			(int)gn->name.len,
 			gn->name.ptr);
@@ -714,27 +736,27 @@ static void list_distribution_points(const generalName_t *first_gn)
 /*
  *  list all fetch requests in the chained list
  */
-void list_crl_fetch_requests(bool utc)
+void list_crl_fetch_requests(struct fd *whackfd, bool utc)
 {
 	lock_crl_fetch_list("list_crl_fetch_requests");
 
 	fetch_req_t *req = crl_fetch_reqs;
 
 	if (req != NULL) {
-		whack_log(RC_COMMENT, " ");
-		whack_log(RC_COMMENT, "List of CRL fetch requests:");
-		whack_log(RC_COMMENT, " ");
+		whack_comment(whackfd, " ");
+		whack_comment(whackfd, "List of CRL fetch requests:");
+		whack_comment(whackfd, " ");
 	}
 
 	for (; req != NULL; req = req->next) {
-		char buf[ASN1_BUF_LEN];
 		LSWLOG_WHACK(RC_COMMENT, buf) {
 			lswlog_realtime(buf, req->installed, utc);
 			lswlogf(buf, ", trials: %d", req->trials);
 		}
-		dntoa(buf, ASN1_BUF_LEN, req->issuer);
-		whack_log(RC_COMMENT, "       issuer:  '%s'", buf);
-		list_distribution_points(req->distributionPoints);
+		dn_buf buf;
+		whack_comment(whackfd, "       issuer:  '%s'",
+			  str_dn(req->issuer, &buf));
+		list_distribution_points(whackfd, req->distributionPoints);
 	}
 
 	unlock_crl_fetch_list("list_crl_fetch_requests");

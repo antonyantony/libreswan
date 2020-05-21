@@ -61,9 +61,12 @@
 #include "state_db.h"	/* for init_state_db() */
 #include "nat_traversal.h"
 #include "ike_alg.h"
-#include "af_info.h"		/* for init_af_info() */
 #include "ikev2_redirect.h"
 #include "root_certs.h"		/* for init_root_certs() */
+#include "hostpair.h"		/* for init_host_pair() */
+#include "ikev1.h"		/* for init_ikev1() */
+#include "ikev2.h"		/* for init_ikev2() */
+#include "crl_queue.h"		/* for free_crl_queue() */
 
 #ifndef IPSECDIR
 #define IPSECDIR "/etc/ipsec.d"
@@ -105,6 +108,7 @@ static const char *fips_package_files[] = { IPSEC_EXECDIR "/pluto", NULL };
 /* pulled from main for show_setup_plutomain() */
 static const struct lsw_conf_options *oco;
 static char *coredir;
+static char *conffile;
 static int pluto_nss_seedbits;
 static int nhelpers = -1;
 static bool do_dnssec = FALSE;
@@ -123,6 +127,7 @@ static void free_pluto_main(void)
 {
 	/* Some values can be NULL if not specified as pluto argument */
 	pfree(coredir);
+	pfree(conffile);
 	pfreeany(pluto_stats_binary);
 	pfreeany(pluto_listen);
 	pfree(pluto_vendorid);
@@ -158,12 +163,13 @@ static const char compile_time_interop_options[] = ""
 #ifdef NETKEY_SUPPORT
 	" XFRM(netkey)"
 #endif
+#ifdef USE_XFRM_INTERFACE
+	" XFRMI"
+#endif
 #ifdef KLIPS
 	" KLIPS"
 #endif
-#ifdef USE_NIC_OFFLOAD
 	" esp-hw-offload"
-#endif
 #if USE_FORK
 	" FORK"
 #endif
@@ -189,6 +195,11 @@ static const char compile_time_interop_options[] = ""
 #ifdef NSS_IPSEC_PROFILE
 	" (IPsec profile)"
 #endif
+#ifdef USE_NSS_PRF
+        " (NSS-PRF)"
+#else
+        " (native-PRF)"
+#endif
 #ifdef USE_DNSSEC
 	" DNSSEC"
 #endif
@@ -196,7 +207,7 @@ static const char compile_time_interop_options[] = ""
 	" SYSTEMD_WATCHDOG"
 #endif
 #ifdef FIPS_CHECK
-	" FIPS_CHECK"
+	" FIPS_BINCHECK"
 #endif
 #ifdef HAVE_LABELED_IPSEC
 	" LABELED_IPSEC"
@@ -221,6 +232,9 @@ static const char compile_time_interop_options[] = ""
 #endif
 #ifdef LIBLDAP
 	" LDAP(non-NSS)"
+#endif
+#ifdef USE_EFENCE
+	" EFENCE"
 #endif
 ;
 
@@ -399,7 +413,7 @@ static void get_bsi_random(size_t nbytes, unsigned char *buf)
 		nbytes));
 }
 
-static bool pluto_init_nss(char *nssdir)
+static void pluto_init_nss(char *nssdir)
 {
 	SECStatus rv;
 
@@ -409,10 +423,9 @@ static bool pluto_init_nss(char *nssdir)
 	lsw_nss_buf_t err;
 	if (!lsw_nss_setup(nssdir, LSW_NSS_READONLY, lsw_nss_get_password, err)) {
 		loglog(RC_LOG_SERIOUS, "%s", err);
-		return FALSE;
+		loglog(RC_LOG_SERIOUS, "FATAL: NSS initialization failure");
+		exit_pluto(PLUTO_EXIT_NSS_FAIL);
 	}
-
-	libreswan_log("NSS initialized");
 
 	/*
 	 * This exists purely to make the BSI happy.
@@ -429,27 +442,23 @@ static bool pluto_init_nss(char *nssdir)
 		messupn(buf, seedbytes);
 		pfree(buf);
 	}
-
-	return TRUE;
+	libreswan_log("NSS crypto library initialized");
 }
 
 /* 0 is special and default: do not check crls dynamically */
 deltatime_t crl_check_interval = DELTATIME_INIT(0);
 
-#ifdef HAVE_LABELED_IPSEC
 /*
  * Attribute Type "constant" for Security Context
  *
- * ??? NOT A CONSTANT!
  * Originally, we assigned the value 10, but that properly belongs to ECN_TUNNEL.
  * We then assigned 32001 which is in the private range RFC 2407.
  * Unfortunately, we feel we have to support 10 as an option for backward
  * compatibility.
  * This variable specifies (globally!!) which we support: 10 or 32001.
- * ??? surely that makes migration to 32001 all or nothing.
+ * That makes migration to 32001 all or nothing.
  */
 uint16_t secctx_attr_type = SECCTX;
-#endif
 
 /*
  * Table of Pluto command-line options.
@@ -474,6 +483,7 @@ uint16_t secctx_attr_type = SECCTX;
 
 enum {
 	OPT_OFFSET = 256, /* larger than largest char */
+	OPT_EFENCE_PROTECT,
 	OPT_DEBUG,
 	OPT_IMPAIR,
 	OPT_DNSSEC_ROOTKEY_FILE,
@@ -497,6 +507,7 @@ static const struct option long_opts[] = {
 	{ "log-no-time\0", no_argument, NULL, 't' }, /* was --plutostderrlogtime */
 	{ "log-no-append\0", no_argument, NULL, '7' },
 	{ "log-no-ip\0", no_argument, NULL, '<' },
+	{ "log-no-audit\0", no_argument, NULL, 'a' },
 	{ "force_busy\0_", no_argument, NULL, 'D' },	/* _ */
 	{ "force-busy\0", no_argument, NULL, 'D' },
 	{ "force-unlimited\0", no_argument, NULL, 'U' },
@@ -566,12 +577,10 @@ static const struct option long_opts[] = {
 	{ "nhelpers\0<number>", required_argument, NULL, 'j' },
 	{ "expire-shunt-interval\0<secs>", required_argument, NULL, '9' },
 	{ "seedbits\0<number>", required_argument, NULL, 'c' },
-#ifdef HAVE_LABELED_IPSEC
-	/* ??? really an attribute type, not a value */
+	/* really an attribute type, not a value */
 	{ "secctx_attr_value\0_", required_argument, NULL, 'w' },	/* obsolete name; _ */
 	{ "secctx-attr-value\0<number>", required_argument, NULL, 'w' },	/* obsolete name */
 	{ "secctx-attr-type\0<number>", required_argument, NULL, 'w' },
-#endif
 #ifdef HAVE_SECCOMP
 	{ "seccomp-enabled\0", no_argument, NULL, '3' },
 	{ "seccomp-tolerant\0", no_argument, NULL, '4' },
@@ -581,6 +590,7 @@ static const struct option long_opts[] = {
 	{ "selftest\0", no_argument, NULL, '5' },
 
 	{ "leak-detective\0", no_argument, NULL, 'X' },
+	{ "efence-protect\0", required_argument, NULL, OPT_EFENCE_PROTECT, },
 	{ "debug-none\0^", no_argument, NULL, 'N' },
 	{ "debug-all\0", no_argument, NULL, 'A' },
 	{ "debug\0", required_argument, NULL, OPT_DEBUG, },
@@ -663,8 +673,34 @@ static void set_dnssec_file_names (struct starter_config *cfg)
 }
 #endif
 
+#ifdef USE_EFENCE
+extern int EF_PROTECT_BELOW;
+extern int EF_PROTECT_FREE;
+#endif
+
 int main(int argc, char **argv)
 {
+	/*
+	 * Some options should to be processed before the first
+	 * malloc() call, so scan for them here.
+	 *
+	 * - leak-detective is immutable, it must come before the
+         *   first malloc()
+	 *
+	 * - efence-protect seems to be less strict, but enabling it
+	 *   early must be a good thing (TM) right
+	 */
+	for (int i = 1; i < argc; ++i) {
+		if (streq(argv[i], "--leak-detective"))
+			leak_detective = TRUE;
+#ifdef USE_EFENCE
+		else if (streq(argv[i], "--efence-protect")) {
+			EF_PROTECT_BELOW = 1;
+			EF_PROTECT_FREE = 1;
+		}
+#endif
+	}
+
 	/*
 	 * Identify the main thread.
 	 *
@@ -685,18 +721,9 @@ int main(int argc, char **argv)
 	bool log_to_stderr_desired = FALSE;
 	bool log_to_file_desired = FALSE;
 
-	{
-		int i;
-
-		/* MUST BE BEFORE ANY allocs */
-		for (i = 1; i < argc; ++i) {
-			if (streq(argv[i], "--leak-detective"))
-				leak_detective = TRUE;
-		}
-	}
-
 	pluto_name = argv[0];
 
+	conffile = clone_str(IPSEC_CONF, "conffile in main()");
 	coredir = clone_str(DEFAULT_RUNDIR, "coredir in main()");
 	rundir = clone_str(DEFAULT_RUNDIR, "rundir");
 	pluto_vendorid = clone_str(ipsec_version_vendorid(), "vendorid in main()");
@@ -868,11 +895,15 @@ int main(int argc, char **argv)
 			log_ip = FALSE;
 			continue;
 
+		case 'a':	/* --log-no-audit */
+			log_to_audit = FALSE;
+			continue;
+
 		case '8':	/* --drop-oppo-null */
 			pluto_drop_oppo_null = TRUE;
 			continue;
 
-		case '9':	/* --expire-bare-shunt <interval> */
+		case '9':	/* --expire-shunt-interval <interval> */
 		{
 			unsigned long d = 0;
 			ugh = ttoulb(optarg, 0, 10, 1000, &d);
@@ -1120,11 +1151,11 @@ int main(int argc, char **argv)
 			continue;
 
 		case 'N':	/* --debug-none */
-			base_debugging = DBG_NONE;
+			cur_debugging = DBG_NONE;
 			continue;
 
 		case 'A':	/* --debug-all */
-			base_debugging = DBG_ALL;
+			cur_debugging = DBG_ALL;
 			continue;
 
 		case 'P':	/* --perpeerlogbase */
@@ -1178,6 +1209,7 @@ int main(int argc, char **argv)
 		case '5':	/* --selftest */
 			selftest_only = TRUE;
 			log_to_stderr_desired = TRUE;
+			log_with_timestamp = FALSE;
 			fork_desired = FALSE;
 			continue;
 
@@ -1192,11 +1224,13 @@ int main(int argc, char **argv)
 			 * overwrite all previously set options. Keep this
 			 * in the same order as long_opts[] is.
 			 */
-			struct starter_config *cfg = read_cfg_file(optarg);
+			pfree(conffile);
+			conffile = clone_str(optarg, "conffile via getopt");
+			struct starter_config *cfg = read_cfg_file(conffile);
 
 			/* leak */
 			set_cfg_string(&pluto_log_file,
-				cfg->setup.strings[KSF_PLUTOSTDERRLOG]);
+				cfg->setup.strings[KSF_LOGFILE]);
 #ifdef USE_DNSSEC
 			set_dnssec_file_names(cfg);
 #endif
@@ -1205,9 +1239,10 @@ int main(int argc, char **argv)
 				log_to_syslog = FALSE;
 			/* plutofork= no longer supported via config file */
 			log_with_timestamp =
-				cfg->setup.options[KBF_PLUTOSTDERRLOGTIME];
-			log_append = cfg->setup.options[KBF_PLUTOSTDERRLOGAPPEND];
-			log_ip = cfg->setup.options[KBF_PLUTOSTDERRLOGIP];
+				cfg->setup.options[KBF_LOGTIME];
+			log_append = cfg->setup.options[KBF_LOGAPPEND];
+			log_ip = cfg->setup.options[KBF_LOGIP];
+			log_to_audit = cfg->setup.options[KBF_AUDIT_LOG];
 			pluto_drop_oppo_null = cfg->setup.options[KBF_DROP_OPPO_NULL];
 			pluto_ddos_mode = cfg->setup.options[KBF_DDOS_MODE];
 #ifdef HAVE_SECCOMP
@@ -1359,10 +1394,8 @@ int main(int argc, char **argv)
 				cfg->setup.strings[KSF_GLOBAL_REDIRECT_TO]);
 
 			nhelpers = cfg->setup.options[KBF_NHELPERS];
-#ifdef HAVE_LABELED_IPSEC
 			secctx_attr_type = cfg->setup.options[KBF_SECCTX];
-#endif
-			base_debugging = cfg->setup.options[KBF_PLUTODEBUG];
+			cur_debugging = cfg->setup.options[KBF_PLUTODEBUG];
 
 			char *protostack = cfg->setup.strings[KSF_PROTOSTACK];
 
@@ -1391,11 +1424,26 @@ int main(int argc, char **argv)
 			continue;
 		}
 
+		case OPT_EFENCE_PROTECT:
+#ifdef USE_EFENCE
+			/*
+			 * This flag was already processed at the
+			 * start of main().  While it isn't immutable,
+			 * having it apply to all mallocs() is
+			 * presumably better.
+			 */
+			passert(EF_PROTECT_BELOW);
+			passert(EF_PROTECT_FREE);
+#else
+			libreswan_log("efence support is not enabled; option --efence-protect ignored");
+#endif
+			break;
+
 		case OPT_DEBUG:
 		{
 			lmod_t mod = empty_lmod;
 			if (lmod_arg(&mod, &debug_lmod_info, optarg, true/*enable*/)) {
-				base_debugging = lmod(base_debugging, mod);
+				cur_debugging = lmod(cur_debugging, mod);
 			} else {
 				libreswan_log("unrecognized --debug '%s' option ignored",
 					      optarg);
@@ -1407,7 +1455,7 @@ int main(int argc, char **argv)
 		{
 			lmod_t mod = empty_lmod;
 			if (lmod_arg(&mod, &impair_lmod_info, optarg, true/*enable*/)) {
-				base_debugging = lmod(base_debugging, mod);
+				cur_debugging = lmod(cur_debugging, mod);
 			} else {
 				libreswan_log("unrecognized --impair '%s' option ignored",
 					      optarg);
@@ -1438,7 +1486,6 @@ int main(int argc, char **argv)
 	}
 	if (optind != argc)
 		invocation_fail("unexpected argument");
-	reset_debugging();
 
 	if (chdir(coredir) == -1) {
 		int e = errno;
@@ -1558,22 +1605,11 @@ int main(int argc, char **argv)
 		passert(log_to_stderr || dup2(0, 2) == 2);
 	}
 
-	init_af_info();
 	init_constants();
 	init_pluto_constants();
-
 	pluto_init_log();
+	pluto_init_nss(oco->nssdir);
 
-#ifdef FIPS_CHECK
-	/*
-	 * Probe FIPS support.  Part #1 of #2.
-	 *
-	 * This needs to occur very early, after pluto's log has been
-	 * initialized so that the result gets written to a file.
-	 *
-	 * This call is what triggers the FIPS Product: et.al. log
-	 * messages.
-	 */
 	enum lsw_fips_mode pluto_fips_mode = lsw_get_fips_mode();
 	if (pluto_fips_mode == LSW_FIPS_ON) {
 		/*
@@ -1582,8 +1618,8 @@ int main(int argc, char **argv)
 		 * impairs are also not allowed but cannot come in via
 		 * ipsec.conf, only whack
 		 */
-		if (base_debugging & DBG_PRIVATE) {
-			base_debugging &= ~DBG_PRIVATE;
+		if (cur_debugging & DBG_PRIVATE) {
+			cur_debugging &= ~DBG_PRIVATE;
 			loglog(RC_LOG_SERIOUS, "FIPS mode: debug-private disabled as such logging is not allowed");
 		}
 	}
@@ -1591,13 +1627,6 @@ int main(int argc, char **argv)
 		libreswan_log("Forcing FIPS checks to true to emulate FIPS mode");
 		lsw_set_fips_mode(LSW_FIPS_ON);
 	}
-#endif
-
-	if (!pluto_init_nss(oco->nssdir)) {
-		loglog(RC_LOG_SERIOUS, "FATAL: NSS initialization failure");
-		exit_pluto(PLUTO_EXIT_NSS_FAIL);
-	}
-	libreswan_log("NSS crypto library initialized");
 
 	if (ocsp_enable) {
 		if (!init_nss_ocsp(ocsp_uri, ocsp_trust_name,
@@ -1611,58 +1640,56 @@ int main(int argc, char **argv)
 		}
 	}
 
-#ifdef FIPS_CHECK
 	/*
 	 * Probe FIPS support.  Part #2 of #2.
 	 *
 	 * Now that NSS is initialized, need to verify it matches the
 	 * mode pluto is in.
 	 */
-	libreswan_log("FIPS HMAC integrity support [enabled]");
-	{
-		bool nss_fips_mode = PK11_IsFIPS();
+	bool nss_fips_mode = PK11_IsFIPS();
 
-		/*
-		 * Now verify the consequences.  Always run the tests
-		 * as combinations such as NSS in fips mode but as out
-		 * of it could be bad.
-		 */
-		switch (pluto_fips_mode) {
-		case LSW_FIPS_UNKNOWN:
-			loglog(RC_LOG_SERIOUS, "ABORT: pluto FIPS mode could not be determined");
-			exit_pluto(PLUTO_EXIT_FIPS_FAIL);
-			break;
-		case LSW_FIPS_ON:
-			libreswan_log("FIPS mode enabled for pluto daemon");
-			if (nss_fips_mode) {
-				libreswan_log("NSS library is running in FIPS mode");
-			} else {
-				loglog(RC_LOG_SERIOUS, "ABORT: pluto in FIPS mode but NSS library is not");
-				exit_pluto(PLUTO_EXIT_FIPS_FAIL);
-			}
-			break;
-		case LSW_FIPS_OFF:
-			libreswan_log("FIPS mode disabled for pluto daemon");
-			if (nss_fips_mode) {
-				loglog(RC_LOG_SERIOUS, "Warning: NSS library is running in FIPS mode");
-			}
-			break;
-		case LSW_FIPS_UNSET:
-		default:
-			bad_case(pluto_fips_mode);
-		}
-
-		/* always run hmac check so we can print diagnostic */
-		bool fips_files = FIPSCHECK_verify_files(fips_package_files);
-
-		if (fips_files) {
-			libreswan_log("FIPS HMAC integrity verification self-test passed");
+	/*
+	 * Now verify the consequences.  Always run the tests
+	 * as combinations such as NSS in fips mode but as out
+	 * of it could be bad.
+	 */
+	switch (pluto_fips_mode) {
+	case LSW_FIPS_UNKNOWN:
+		loglog(RC_LOG_SERIOUS, "ABORT: pluto FIPS mode could not be determined");
+		exit_pluto(PLUTO_EXIT_FIPS_FAIL);
+		break;
+	case LSW_FIPS_ON:
+		libreswan_log("FIPS mode enabled for pluto daemon");
+		if (nss_fips_mode) {
+			libreswan_log("NSS library is running in FIPS mode");
 		} else {
-			loglog(RC_LOG_SERIOUS, "FIPS HMAC integrity verification self-test FAILED");
-		}
-		if (pluto_fips_mode == LSW_FIPS_ON && !fips_files) {
+			loglog(RC_LOG_SERIOUS, "ABORT: pluto in FIPS mode but NSS library is not");
 			exit_pluto(PLUTO_EXIT_FIPS_FAIL);
 		}
+		break;
+	case LSW_FIPS_OFF:
+		libreswan_log("FIPS mode disabled for pluto daemon");
+		if (nss_fips_mode) {
+			loglog(RC_LOG_SERIOUS, "Warning: NSS library is running in FIPS mode");
+		}
+		break;
+	case LSW_FIPS_UNSET:
+	default:
+		bad_case(pluto_fips_mode);
+	}
+
+#ifdef FIPS_CHECK
+	bool fips_files = FIPSCHECK_verify_files(fips_package_files);
+
+	libreswan_log("FIPS HMAC integrity support [enabled]");
+
+	if (fips_files) {
+		libreswan_log("FIPS HMAC integrity verification self-test passed");
+	} else {
+		loglog(RC_LOG_SERIOUS, "FIPS HMAC integrity verification self-test FAILED");
+	}
+	if (pluto_fips_mode == LSW_FIPS_ON && !fips_files) {
+		exit_pluto(PLUTO_EXIT_FIPS_FAIL);
 	}
 #else
 	libreswan_log("FIPS HMAC integrity support [disabled]");
@@ -1702,7 +1729,7 @@ int main(int argc, char **argv)
 #endif
 
 #ifdef USE_LINUX_AUDIT
-	linux_audit_init();
+	linux_audit_init(log_to_audit);
 #else
 	libreswan_log("Linux audit support [disabled]");
 #endif
@@ -1743,16 +1770,20 @@ int main(int argc, char **argv)
 /* Initialize all of the various features */
 
 	init_state_db();
-	init_event_base();
+	init_server();
 
+	init_rate_log();
 	init_nat_traversal(keep_alive);
 
 	init_virtual_ip(virtual_private);
 	/* obsoleted by nss code: init_rnd_pool(); */
 	init_root_certs();
 	init_secret();
+	init_ikev1();
+	init_ikev2();
 	init_states();
 	init_connections();
+	init_host_pair();
 	init_ike_alg();
 	test_ike_alg();
 
@@ -1765,12 +1796,11 @@ int main(int argc, char **argv)
 		exit(PLUTO_EXIT_OK);
 	}
 
-	init_crypto_helpers(nhelpers);
-	init_demux();
+	start_crypto_helpers(nhelpers);
 	init_kernel();
 	init_vendorid();
 #if defined(LIBCURL) || defined(LIBLDAP)
-	init_fetch();
+	start_crl_fetch_helper();
 #endif
 #ifdef HAVE_LABELED_IPSEC
 	init_avc();
@@ -1786,7 +1816,7 @@ int main(int argc, char **argv)
 	}
 #endif
 
-	call_server();
+	call_server(conffile);
 	return -1;	/* Shouldn't ever reach this */
 }
 
@@ -1801,16 +1831,13 @@ volatile bool exiting_pluto = false;
  *  1 general discomfort
  * 10 lock file exists
  */
-void exit_pluto(int status)
+void exit_pluto(enum pluto_exit_code status)
 {
 	/*
 	 * Tell the world, well actually all the threads, that pluto
 	 * is exiting and they should quit.  Even if pthread_cancel()
 	 * weren't buggy, using it correctly would be hard, so use
 	 * this instead.
-	 *
-	 * XXX: All threads need to be told to quit before things like
-	 * NSS can be closed.  So a TODO is to join those threads.
 	 */
 	exiting_pluto = true;
 
@@ -1819,6 +1846,25 @@ void exit_pluto(int status)
  #ifdef USE_SYSTEMD_WATCHDOG
 	pluto_sd(PLUTO_SD_STOPPING, status);
  #endif
+
+	/*
+	 * Wait for the crypto-helper threads to notice EXITING_PLUTO
+	 * and exit (if necessary, wake any sleeping helpers from
+	 * their slumber).  Without this any helper using NSS after
+	 * the code below has shutdown the NSS DB will crash.
+	 *
+	 * This does not try to delete any tasks left waiting on the
+	 * helper queue.  Instead, code further down deleting
+	 * connections (which in turn deletes states) should clean
+	 * that up?
+	 *
+	 * This also does not try to delete any completed tasks
+	 * waiting on the event loop.  One theory is for the helper
+	 * code to be changed so that helper tasks can be "cancelled"
+	 * after the've completed?
+	 */
+	stop_crypto_helpers();
+
 	free_root_certs();
 	free_preshared_secrets();
 	free_remembered_public_keys();
@@ -1830,17 +1876,31 @@ void exit_pluto(int status)
 	 */
 
 #if defined(LIBCURL) || defined(LIBLDAP)
-	free_crl_fetch();	/* free chain of crl fetch requests */
+	/*
+	 * Wait for the CRL fetch handler to finish its current task.
+	 * Without this CRL fetch requests are left hanging and, after
+	 * the NSS DB has been closed (below), the helper can crash.
+	 */
+	stop_crl_fetch_helper();
+	/*
+	 * free the crl list that the fetch-helper is currently
+	 * processing
+	 */
+	free_crl_fetch();
+	/*
+	 * free the crl requests that are waiting to be picked and
+	 * processed by the fetch-helper.
+	 */
+	free_crl_queue();
 #endif
 
 	lsw_conf_free_oco();	/* free global_oco containing path names */
 
 	free_ifaces();	/* free interface list from memory */
-	free_md_pool();	/* free the md pool */
 	lsw_nss_shutdown();
 	delete_lock();	/* delete any lock files */
 	free_virtual_ip();	/* virtual_private= */
-	free_pluto_event_list(); /* no libevent evnts beyond this point */
+	free_server(); /* no libevent evnts beyond this point */
 	free_pluto_main();	/* our static chars */
 
 #ifdef USE_DNSSEC
@@ -1857,36 +1917,37 @@ void exit_pluto(int status)
 	exit(status);	/* exit, with our error code */
 }
 
-void show_setup_plutomain(void)
+void show_setup_plutomain(struct fd *whackfd)
 {
-	whack_log(RC_COMMENT, "config setup options:");	/* spacer */
-	whack_log(RC_COMMENT, " ");	/* spacer */
-	whack_log(RC_COMMENT, "configdir=%s, configfile=%s, secrets=%s, ipsecdir=%s",
+	whack_comment(whackfd, "config setup options:");	/* spacer */
+	whack_comment(whackfd, " ");	/* spacer */
+	whack_comment(whackfd, "configdir=%s, configfile=%s, secrets=%s, ipsecdir=%s",
 		oco->confdir,
-		oco->conffile,
+		conffile, /* oco contains only a copy of hardcoded default */
 		oco->secretsfile,
 		oco->confddir);
 
-	whack_log(RC_COMMENT, "nssdir=%s, dumpdir=%s, statsbin=%s",
+	whack_comment(whackfd, "nssdir=%s, dumpdir=%s, statsbin=%s",
 		oco->nssdir,
 		coredir,
 		pluto_stats_binary == NULL ? "unset" :  pluto_stats_binary);
 
 #ifdef USE_DNSSEC
-	whack_log(RC_COMMENT, "dnssec-rootkey-file=%s, dnssec-trusted=%s",
+	whack_comment(whackfd, "dnssec-rootkey-file=%s, dnssec-trusted=%s",
 		pluto_dnssec_rootfile == NULL ? "<unset>" : pluto_dnssec_rootfile,
 		pluto_dnssec_trusted == NULL ? "<unset>" : pluto_dnssec_trusted);
 #endif
 
-	whack_log(RC_COMMENT, "sbindir=%s, libexecdir=%s",
+	whack_comment(whackfd, "sbindir=%s, libexecdir=%s",
 		IPSEC_SBINDIR,
 		IPSEC_EXECDIR);
 
-	whack_log(RC_COMMENT, "pluto_version=%s, pluto_vendorid=%s",
+	whack_comment(whackfd, "pluto_version=%s, pluto_vendorid=%s, audit-log=%s",
 		ipsec_version_code(),
-		pluto_vendorid);
+		pluto_vendorid,
+		bool_str(log_to_audit));
 
-	whack_log(RC_COMMENT,
+	whack_comment(whackfd,
 		"nhelpers=%d, uniqueids=%s, "
 		"dnssec-enable=%s, "
 		"perpeerlog=%s, logappend=%s, logip=%s, shuntlifetime=%jds, xfrmlifetime=%jds",
@@ -1900,14 +1961,14 @@ void show_setup_plutomain(void)
 		(intmax_t) pluto_xfrmlifetime
 	);
 
-	whack_log(RC_COMMENT,
+	whack_comment(whackfd,
 		"ddos-cookies-threshold=%d, ddos-max-halfopen=%d, ddos-mode=%s",
 		pluto_max_halfopen,
 		pluto_ddos_threshold,
 		(pluto_ddos_mode == DDOS_AUTO) ? "auto" :
 			(pluto_ddos_mode == DDOS_FORCE_BUSY) ? "busy" : "unlimited");
 
-	whack_log(RC_COMMENT,
+	whack_comment(whackfd,
 		"ikeport=%d, ikebuf=%d, msg_errqueue=%s, strictcrlpolicy=%s, crlcheckinterval=%jd, listen=%s, nflog-all=%d",
 		pluto_port,
 		pluto_sock_bufsize,
@@ -1918,33 +1979,33 @@ void show_setup_plutomain(void)
 		pluto_nflog_group
 		);
 
-	whack_log(RC_COMMENT,
+	whack_comment(whackfd,
 		"ocsp-enable=%s, ocsp-strict=%s, ocsp-timeout=%d, ocsp-uri=%s",
 		bool_str(ocsp_enable),
 		bool_str(ocsp_strict),
 		ocsp_timeout,
 		ocsp_uri != NULL ? ocsp_uri : "<unset>"
 		);
-	whack_log(RC_COMMENT,
+	whack_comment(whackfd,
 		"ocsp-trust-name=%s",
 		ocsp_trust_name != NULL ? ocsp_trust_name : "<unset>"
 		);
 
-	whack_log(RC_COMMENT,
+	whack_comment(whackfd,
 		"ocsp-cache-size=%d, ocsp-cache-min-age=%d, ocsp-cache-max-age=%d, ocsp-method=%s",
 		ocsp_cache_size, ocsp_cache_min_age, ocsp_cache_max_age,
 		ocsp_method == OCSP_METHOD_GET ? "get" : "post"
 		);
 
-	whack_log(RC_COMMENT,
+	whack_comment(whackfd,
 		"global-redirect=%s, global-redirect-to=%s",
 		enum_name(&allow_global_redirect_names, global_redirect),
 		global_redirect_to != NULL ? global_redirect_to : "<unset>"
 		);
 
 #ifdef HAVE_LABELED_IPSEC
-	whack_log(RC_COMMENT, "secctx-attr-type=%d", secctx_attr_type);
+	whack_comment(whackfd, "secctx-attr-type=%d", secctx_attr_type);
 #else
-	whack_log(RC_COMMENT, "secctx-attr-type=<unsupported>");
+	whack_comment(whackfd, "secctx-attr-type=<unsupported>");
 #endif
 }

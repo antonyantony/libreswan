@@ -36,12 +36,12 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>     /* used only if MSG_NOSIGNAL not defined */
+#include <stdint.h> /* for uint32_t */
 #include <sys/socket.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <netinet/udp.h>
 
-#include <libreswan.h>
 #include <libreswan/ipsec_tunnel.h>
 #include <libreswan/ipsec_param.h>
 
@@ -74,6 +74,8 @@
 #include "send.h"
 #include "nat_traversal.h"
 #include "ikev2_send.h"
+#include "state_db.h"
+#include "ip_info.h"
 
 /* As per https://tools.ietf.org/html/rfc3948#section-4 */
 #define DEFAULT_KEEP_ALIVE_SECS  20
@@ -96,8 +98,7 @@ void init_nat_traversal(deltatime_t keep_alive_period)
 
 			if (n == '0') {
 				nat_traversal_enabled = FALSE;
-				libreswan_log(
-					"  KLIPS does not have NAT-Traversal built in (see /proc/net/ipsec/natt)\n");
+				libreswan_log("  KLIPS does not have NAT-Traversal built in (see /proc/net/ipsec/natt)");
 			}
 			fclose(f);
 		}
@@ -116,52 +117,48 @@ void init_nat_traversal(deltatime_t keep_alive_period)
 	init_oneshot_timer(EVENT_NAT_T_KEEPALIVE, nat_traversal_ka_event);
 }
 
-static void natd_hash(const struct hash_desc *hasher, unsigned char *hash,
-		      const ike_spis_t *spis,
-		      const ip_address *ip, uint16_t port /* host order */)
+static struct crypt_mac natd_hash(const struct hash_desc *hasher,
+				  const ike_spis_t *spis,
+				  const ip_endpoint *endpoint)
 {
 	/* only responder's IKE SPI can be zero */
 	pexpect(!ike_spi_is_zero(&spis->initiator));
 
 	if (ike_spi_is_zero(&spis->responder)) {
 		/* IKE_SA_INIT exchange */
-		dbg("natd_hash: rcookie is zero");
+		dbg("natd_hash: IKE.SPIr is zero");
 	}
 
 	/*
 	 * RFC 3947
 	 *
-	 *   HASH = HASH(CKY-I | CKY-R | IP | Port)
+	 *   HASH = HASH(IKE.SPIi | IKE.SPIr | IP | Port)
 	 *
 	 * All values in network order
 	 */
 	struct crypt_hash *ctx = crypt_hash_init("NATD", hasher);
 
-	crypt_hash_digest_bytes(ctx, "ICOOKIE/IKE SPIi",
-				&spis->initiator, sizeof(spis->initiator));
-	crypt_hash_digest_bytes(ctx, "RCOOKIE/IKE SPIr",
-				&spis->responder, sizeof(spis->responder));
+	crypt_hash_digest_thing(ctx, "IKE SPIi", spis->initiator);
+	crypt_hash_digest_thing(ctx, "IKE SPIr", spis->responder);
 
-	const unsigned char *ab;
-	size_t al = addrbytesptr_read(ip, &ab);
-	crypt_hash_digest_bytes(ctx, "IP addr", ab, al);
+	ip_address ip = endpoint_address(endpoint);
+	shunk_t ap = address_as_shunk(&ip);
+	crypt_hash_digest_hunk(ctx, "IP addr", ap);
 
-	{
-		uint16_t netorder_port = htons(port);
-		crypt_hash_digest_bytes(ctx, "PORT",
-					&netorder_port, sizeof(netorder_port));
-	}
-	crypt_hash_final_bytes(&ctx, hash, hasher->hash_digest_size);
+	uint16_t nport = endpoint_nport(endpoint);
+	crypt_hash_digest_thing(ctx, "PORT", nport);
+	struct crypt_mac hash = crypt_hash_final_mac(&ctx);
+
 	if (DBGP(DBG_BASE)) {
 		DBG_log("natd_hash: hasher=%p(%d)", hasher,
 			(int)hasher->hash_digest_size);
-		DBG_dump("natd_hash: icookie=", &spis->initiator, sizeof(spis->initiator));
-		DBG_dump("natd_hash: rcookie=", &spis->responder, sizeof(spis->responder));
-		DBG_dump("natd_hash: ip=", ab, al);
-		DBG_log("natd_hash: port=%d", port);
-		DBG_dump("natd_hash: hash=", hash,
-			 hasher->hash_digest_size);
+		DBG_dump_thing("natd_hash: icookie=", spis->initiator);
+		DBG_dump_thing("natd_hash: rcookie=", spis->responder);
+		DBG_dump_hunk("natd_hash: ip=", ap);
+		DBG_dump_thing("natd_hash: port=", nport);
+		DBG_dump_hunk("natd_hash: hash=", hash);
 	}
+	return hash;
 }
 
 /*
@@ -180,26 +177,26 @@ bool ikev2_out_nat_v2n(pb_stream *outs, struct state *st,
 		.initiator = st->st_ike_spis.initiator,
 		.responder = *ike_responder_spi,
 	};
-	uint16_t lport = st->st_localport;
 
 	/* if encapsulation=yes, force NAT-T detection by using wrong port for hash calc */
+	pexpect_st_local_endpoint(st);
+	uint16_t lport = endpoint_hport(&st->st_interface->local_endpoint);
 	if (st->st_connection->encaps == yna_yes) {
 		dbg("NAT-T: encapsulation=yes, so mangling hash to force NAT-T detection");
 		lport = 0;
 	}
-
-	return ikev2_out_natd(&st->st_localaddr, lport,
-				&st->st_remoteaddr, st->st_remoteport,
-				&ike_spis, outs);
+	ip_endpoint local_endpoint = endpoint(&st->st_interface->local_endpoint, lport);
+	ip_endpoint remote_endpoint = st->st_remote_endpoint;
+	return ikev2_out_natd(&local_endpoint, &remote_endpoint,
+			      &ike_spis, outs);
 }
 
-bool ikev2_out_natd(const ip_address *localaddr, uint16_t localport,
-		    const ip_address *remoteaddr, uint16_t remoteport,
+bool ikev2_out_natd(const ip_endpoint *local_endpoint,
+		    const ip_endpoint *remote_endpoint,
 		    const ike_spis_t *ike_spis,
 		    pb_stream *outs)
 {
-	unsigned char hb[IKEV2_NATD_HASH_SIZE];
-	chunk_t hch = { hb, sizeof(hb) };
+	struct crypt_mac hb;
 
 	DBG(DBG_NATT,
 		DBG_log(" NAT-Traversal support %s add v2N payloads.",
@@ -207,18 +204,19 @@ bool ikev2_out_natd(const ip_address *localaddr, uint16_t localport,
 
 	/* First: one with local (source) IP & port */
 
-	natd_hash(&ike_alg_hash_sha1, hb, ike_spis,
-		  localaddr, localport);
-
-	if (!emit_v2Nchunk(v2N_NAT_DETECTION_SOURCE_IP, &hch, outs))
-		return FALSE;
+	hb = natd_hash(&ike_alg_hash_sha1, ike_spis, local_endpoint);
+	if (!emit_v2N_hunk(v2N_NAT_DETECTION_SOURCE_IP, hb, outs)) {
+		return false;
+	}
 
 	/* Second: one with remote (destination) IP & port */
 
-	natd_hash(&ike_alg_hash_sha1, hb, ike_spis,
-		  remoteaddr, remoteport);
+	hb = natd_hash(&ike_alg_hash_sha1, ike_spis, remote_endpoint);
+	if (!emit_v2N_hunk(v2N_NAT_DETECTION_DESTINATION_IP, hb, outs)) {
+		return false;
+	}
 
-	return emit_v2Nchunk(v2N_NAT_DETECTION_DESTINATION_IP, &hch, outs);
+	return true;
 }
 
 /*
@@ -319,7 +317,7 @@ static void natd_lookup_common(struct state *st,
 	const ip_address *sender,
 	bool found_me, bool found_him)
 {
-	anyaddr(AF_INET, &st->hidden_variables.st_natd);
+	st->hidden_variables.st_natd = address_any(&ipv4_info);
 
 	/* update NAT-T settings for local policy */
 	switch (st->st_connection->encaps) {
@@ -374,7 +372,6 @@ static void ikev1_natd_lookup(struct msg_digest *md)
 {
 	struct state *st = md->st;
 	const struct hash_desc *const hasher = st->st_oakley.ta_prf->hasher;
-	const size_t hl = hasher->hash_digest_size;
 	const struct payload_digest *const hd = md->chain[ISAKMP_NEXT_NATD_RFC];
 
 	passert(md->iface != NULL);
@@ -397,45 +394,37 @@ static void ikev1_natd_lookup(struct msg_digest *md)
 
 	/* First: one with my IP & port */
 
-	unsigned char hash_me[MAX_DIGEST_LEN];
-
-	natd_hash(hasher, hash_me, &st->st_ike_spis,
-		  &md->iface->ip_addr, md->iface->port);
+	struct crypt_mac hash_local = natd_hash(hasher, &st->st_ike_spis,
+						&md->iface->local_endpoint);
 
 	/* Second: one with sender IP & port */
 
-	unsigned char hash_him[MAX_DIGEST_LEN];
+	struct crypt_mac hash_remote = natd_hash(hasher, &st->st_ike_spis,
+						 &md->sender);
 
-	natd_hash(hasher, hash_him,
-		  &st->st_ike_spis,
-		  &md->sender, hportof(&md->sender));
+	if (DBGP(DBG_BASE)) {
+		DBG_dump_hunk("expected NAT-D(local):", hash_local);
+		DBG_dump_hunk("expected NAT-D(remote):", hash_remote);
+	}
 
-	DBG(DBG_NATT, {
-		DBG_dump("expected NAT-D(me):", hash_me, hl);
-		DBG_dump("expected NAT-D(him):", hash_him, hl);
-	});
-
-	bool found_me = FALSE;
-	bool found_him = FALSE;
+	bool found_local = false;
+	bool found_remote = false;
 
 	for (const struct payload_digest *p = hd; p != NULL; p = p->next) {
 		DBG(DBG_NATT,
 			DBG_dump("received NAT-D:", p->pbs.cur,
 				pbs_left(&p->pbs)));
 
-		if (pbs_left(&p->pbs) == hl) {
-			if (memeq(p->pbs.cur, hash_me, hl))
-				found_me = TRUE;
-
-			if (memeq(p->pbs.cur, hash_him, hl))
-				found_him = TRUE;
-
-			if (found_me && found_him)
-				break;
-		}
+		shunk_t left = pbs_in_left_as_shunk(&p->pbs);
+		if (hunk_eq(left, hash_local))
+			found_local = true;
+		if (hunk_eq(left, hash_remote))
+			found_remote = true;
+		if (found_local && found_remote)
+			break;
 	}
 
-	natd_lookup_common(st, &md->sender, found_me, found_him);
+	natd_lookup_common(st, &md->sender, found_local, found_remote);
 }
 
 bool ikev1_nat_traversal_add_natd(uint8_t np, pb_stream *outs,
@@ -458,42 +447,39 @@ bool ikev1_nat_traversal_add_natd(uint8_t np, pb_stream *outs,
 
 	DBG(DBG_EMITTING | DBG_NATT, DBG_log("sending NAT-D payloads"));
 
-	const ip_address *first = &md->sender;
-	unsigned short firstport = st->st_remoteport;
-
-	const ip_address *second = &md->iface->ip_addr;
-	unsigned short secondport = st->st_localport;
-
+	unsigned remote_port = endpoint_hport(&st->st_remote_endpoint);
+	pexpect_st_local_endpoint(st);
+	unsigned short local_port = endpoint_hport(&st->st_interface->local_endpoint);
 	if (st->st_connection->encaps == yna_yes) {
 		DBG(DBG_NATT,
 			DBG_log("NAT-T: encapsulation=yes, so mangling hash to force NAT-T detection"));
-		firstport = secondport = 0;
+		local_port = remote_port = 0;
 	}
 
 	struct_desc *pd = LDISJOINT(st->hidden_variables.st_nat_traversal, NAT_T_WITH_RFC_VALUES) ?
 		&isakmp_nat_d_drafts : &isakmp_nat_d;
 	unsigned int nat_np = pd->pt;
 
-	unsigned char hash[MAX_DIGEST_LEN];
-
 	/* first: emit payload with hash of sender IP & port */
 
-	natd_hash(st->st_oakley.ta_prf->hasher, hash,
-		  &ike_spis, first, firstport);
+	const ip_endpoint remote_endpoint = set_endpoint_hport(&md->sender,
+							       remote_port);
+	struct crypt_mac hash;
 
-	if (!ikev1_out_generic_raw(nat_np, pd, outs, hash,
-				   st->st_oakley.ta_prf->hasher->hash_digest_size,
+	hash = natd_hash(st->st_oakley.ta_prf->hasher,
+			 &ike_spis, &remote_endpoint);
+	if (!ikev1_out_generic_raw(nat_np, pd, outs, hash.ptr, hash.len,
 				   "NAT-D"))
 		return FALSE;
 
 	/* second: emit payload with hash of my IP & port */
 
-	natd_hash(st->st_oakley.ta_prf->hasher, hash,
-		  &ike_spis, second, secondport);
-
-	return ikev1_out_generic_raw(np, pd, outs, hash,
-		st->st_oakley.ta_prf->hasher->hash_digest_size,
-		"NAT-D");
+	const ip_endpoint local_endpoint = set_endpoint_hport(&md->iface->local_endpoint,
+							      local_port);
+	hash = natd_hash(st->st_oakley.ta_prf->hasher,
+			 &ike_spis, &local_endpoint);
+	return ikev1_out_generic_raw(np, pd, outs, hash.ptr, hash.len,
+				     "NAT-D");
 }
 
 /*
@@ -507,7 +493,7 @@ void nat_traversal_natoa_lookup(struct msg_digest *md,
 	passert(md->iface != NULL);
 
 	/* Initialize NAT-OA */
-	anyaddr(AF_INET, &hv->st_nat_oa);
+	hv->st_nat_oa = address_any(&ipv4_info);
 
 	/* Count NAT-OA */
 	const struct payload_digest *p;
@@ -542,30 +528,16 @@ void nat_traversal_natoa_lookup(struct msg_digest *md,
 		DBG_dump("NAT-OA:", p->pbs.start, pbs_room(&p->pbs)));
 
 	ip_address ip;
+	struct pbs_in pbs = p->pbs;
 
+	const struct ip_info *ipv;
 	switch (p->payload.nat_oa.isanoa_idtype) {
 	case ID_IPV4_ADDR:
-		if (pbs_left(&p->pbs) != sizeof(struct in_addr)) {
-			loglog(RC_LOG_SERIOUS,
-				"NAT-Traversal: received IPv4 NAT-OA with invalid IP size (%d)",
-				(int)pbs_left(&p->pbs));
-			return;
-		}
-
-		initaddr(p->pbs.cur, pbs_left(&p->pbs), AF_INET, &ip);
+		ipv = &ipv4_info;
 		break;
-
 	case ID_IPV6_ADDR:
-		if (pbs_left(&p->pbs) != sizeof(struct in6_addr)) {
-			loglog(RC_LOG_SERIOUS,
-				"NAT-Traversal: received IPv6 NAT-OA with invalid IP size (%d)",
-				(int)pbs_left(&p->pbs));
-			return;
-		}
-
-		initaddr(p->pbs.cur, pbs_left(&p->pbs), AF_INET6, &ip);
+		ipv = &ipv6_info;
 		break;
-
 	default:
 		loglog(RC_LOG_SERIOUS,
 			"NAT-Traversal: invalid ID Type (%d) in NAT-OA - ignored",
@@ -573,13 +545,14 @@ void nat_traversal_natoa_lookup(struct msg_digest *md,
 		return;
 	}
 
-	DBG(DBG_NATT, {
-		ipstr_buf b;
-		DBG_log("received NAT-OA: %s",
-			ipstr(&ip, &b));
-	});
+	if (!pbs_in_address(&ip, ipv, &pbs, "NAT-Traversal: NAT-OA IP")) {
+		return;
+	}
 
-	if (isanyaddr(&ip)) {
+	ipstr_buf b;
+	dbg("received NAT-OA: %s", ipstr(&ip, &b));
+
+	if (address_is_any(&ip)) {
 		loglog(RC_LOG_SERIOUS,
 			"NAT-Traversal: received 0.0.0.0 NAT-OA...");
 	} else {
@@ -594,10 +567,6 @@ static bool emit_one_natoa(
 	const ip_address *ip,
 	const char *nm)
 {
-	const unsigned char *ip_val;
-	size_t ip_len = addrbytesptr_read(ip, &ip_val);
-	passert(ip_len != 0);
-
 	pb_stream pbs;
 
 	struct isakmp_nat_oa natoa = {
@@ -606,11 +575,11 @@ static bool emit_one_natoa(
 			ID_IPV4_ADDR : ID_IPV6_ADDR,
 	};
 	if (!out_struct(&natoa, pd, outs, &pbs) ||
-	    !out_raw(ip_val, ip_len, &pbs, nm))
+	    !pbs_out_address(ip, &pbs, nm))
 		return FALSE;
 
-	DBG(DBG_NATT,
-		DBG_dump("NAT-OAi (S):", ip_val, ip_len));
+	address_buf ab;
+	dbg("NAT-OAi (S): %s", str_address(ip, &ab));
 	close_output_pbs(&pbs);
 	return TRUE;
 }
@@ -620,12 +589,13 @@ bool nat_traversal_add_natoa(uint8_t np, pb_stream *outs,
 {
 	const ip_address *ipinit, *ipresp;
 
+	pexpect_st_local_endpoint(st);
 	if (initiator) {
-		ipinit = &st->st_localaddr;
-		ipresp = &st->st_remoteaddr;
+		ipinit = &st->st_interface->local_endpoint;
+		ipresp = &st->st_remote_endpoint;
 	} else {
-		ipresp = &st->st_localaddr;
-		ipinit = &st->st_remoteaddr;
+		ipresp = &st->st_interface->local_endpoint;
+		ipinit = &st->st_remote_endpoint;
 	}
 
 	struct_desc *pd = LDISJOINT(st->hidden_variables.st_nat_traversal, NAT_T_WITH_RFC_VALUES) ?
@@ -677,7 +647,7 @@ void ikev1_natd_init(struct state *st, struct msg_digest *md)
 		if (st->hidden_variables.st_nat_traversal != LEMPTY) {
 			nat_traversal_show_result(
 				st->hidden_variables.st_nat_traversal,
-				hportof(&md->sender));
+				endpoint_hport(&md->sender));
 		}
 	}
 	if (st->hidden_variables.st_nat_traversal & NAT_T_WITH_KA) {
@@ -788,13 +758,10 @@ void nat_traversal_new_ka_event(void)
 static void nat_traversal_send_ka(struct state *st)
 {
 	set_cur_state(st);
-	DBG(DBG_NATT | DBG_DPD, {
-		ipstr_buf b;
-		DBG_log("ka_event: send NAT-KA to %s:%d (state=#%lu)",
-			ipstr(&st->st_remoteaddr, &b),
-			st->st_remoteport,
-			st->st_serialno);
-	});
+	endpoint_buf b;
+	dbg("ka_event: send NAT-KA to %s (state=#%lu)",
+	    str_endpoint(&st->st_remote_endpoint, &b),
+	    st->st_serialno);
 
 	/* send keep alive */
 	DBG(DBG_NATT | DBG_DPD, DBG_log("sending NAT-T Keep Alive"));
@@ -814,6 +781,7 @@ static void nat_traversal_ka_event_state(struct state *st, void *data)
 		DBG(DBG_NATT,
 			DBG_log("not behind NAT: no NAT-T KEEP-ALIVE required for conn %s",
 				c->name));
+		return;
 	}
 
 	if (!c->nat_keepalive) {
@@ -893,8 +861,7 @@ void nat_traversal_ka_event(void)
 
 	nat_kap_event = FALSE;  /* ready to be reschedule */
 
-	dbg("FOR_EACH_STATE_... via for_each_state in %s", __func__);
-	for_each_state(nat_traversal_ka_event_state, &nat_kap_st);
+	for_each_state(nat_traversal_ka_event_state, &nat_kap_st, __func__);
 
 	if (nat_kap_st != 0) {
 		/*
@@ -906,66 +873,59 @@ void nat_traversal_ka_event(void)
 }
 
 struct new_mapp_nfo {
-	struct state *st;
-	ip_address addr;
-	uint16_t port;
+	struct ike_sa *ike;
+	const ip_endpoint *new_remote_endpoint;
 };
 
-static void nat_traversal_find_new_mapp_state(struct state *st, void *data)
+static bool nat_traversal_find_new_mapp_state(struct state *st, void *data)
 {
-	struct new_mapp_nfo *nfo = (struct new_mapp_nfo *)data;
-
-	if ((IS_CHILD_SA(nfo->st) &&
-		(st->st_serialno == nfo->st->st_clonedfrom ||
-		 st->st_clonedfrom == nfo->st->st_clonedfrom)) ||
-	    st->st_serialno == nfo->st->st_serialno)
-	{
-		ipstr_buf b1, b2;
-		struct connection *c = st->st_connection;
-
-		DBG(DBG_CONTROLMORE, DBG_log("new NAT mapping for #%lu, was %s:%d, now %s:%d",
-			st->st_serialno,
-			ipstr(&st->st_remoteaddr, &b1),
-			st->st_remoteport,
-			ipstr(&nfo->addr, &b2),
-			nfo->port));
+	struct new_mapp_nfo *nfo = data;
+	if (pexpect(st->st_serialno == nfo->ike->sa.st_serialno ||
+		    st->st_clonedfrom == nfo->ike->sa.st_serialno)) {
+		endpoint_buf b1;
+		endpoint_buf b2;
+		ip_endpoint st_remote_endpoint = st->st_remote_endpoint;
+		dbg("new NAT mapping for #%lu, was %s, now %s",
+		    st->st_serialno,
+		    str_endpoint(&st_remote_endpoint, &b1),
+		    str_endpoint(nfo->new_remote_endpoint, &b2));
 
 		/* update it */
-		st->st_remoteaddr = nfo->addr;
-		st->st_remoteport = nfo->port;
-		st->hidden_variables.st_natd = nfo->addr;
-
+		st->st_remote_endpoint = *nfo->new_remote_endpoint;
+		st->hidden_variables.st_natd = endpoint_address(nfo->new_remote_endpoint);
+		struct connection *c = st->st_connection;
 		if (c->kind == CK_INSTANCE)
-			c->spd.that.host_addr = nfo->addr;
+			c->spd.that.host_addr = endpoint_address(nfo->new_remote_endpoint);
 	}
+	return false;
 }
 
-void nat_traversal_new_mapping(struct state *st,
-			       const ip_address *nsrc,
-			       uint16_t nsrcport)
+void nat_traversal_new_mapping(struct ike_sa *ike,
+			       const ip_endpoint *new_remote_endpoint)
 {
-	struct new_mapp_nfo nfo;
+	endpoint_buf b;
+	dbg("state #%lu NAT-T: new mapping %s",
+	    ike->sa.st_serialno, str_endpoint(new_remote_endpoint, &b));
 
-	DBG(DBG_NATT, {
-		ipstr_buf b;
-		DBG_log("state #%lu NAT-T: new mapping %s:%d",
-			st->st_serialno,
-			ipstr(nsrc, &b),
-			nsrcport);
-	});
+	struct new_mapp_nfo nfo = {
+		.ike = ike,
+		.new_remote_endpoint = new_remote_endpoint,
+	};
 
-	nfo.st    = st;
-	nfo.addr  = *nsrc;
-	nfo.port  = nsrcport;
-
-	dbg("FOR_EACH_STATE_... via for_each_state in %s", __func__);
-	for_each_state(nat_traversal_find_new_mapp_state, &nfo);
+	state_by_ike_spis(ike->sa.st_ike_version,
+			  NULL /* clonedfrom */,
+			  NULL /* v1_msgid */,
+			  NULL /* role */,
+			  &ike->sa.st_ike_spis,
+			  nat_traversal_find_new_mapp_state,
+			  &nfo,
+			  __func__);
 }
 
 /* this should only be called after packet has been verified/authenticated! */
 void nat_traversal_change_port_lookup(struct msg_digest *md, struct state *st)
 {
-	struct iface_port *i = NULL;
+	pexpect_st_local_endpoint(st);
 
 	if (st == NULL)
 		return;
@@ -975,80 +935,63 @@ void nat_traversal_change_port_lookup(struct msg_digest *md, struct state *st)
 		 * If source port/address has changed, update (including other
 		 * states and established kernel SA)
 		 */
-		if (st->st_remoteport != hportof(&md->sender) ||
-		    !sameaddr(&st->st_remoteaddr, &md->sender)) {
-			nat_traversal_new_mapping(st, &md->sender,
-						hportof(&md->sender));
+		if (!endpoint_eq(md->sender, st->st_remote_endpoint)) {
+			nat_traversal_new_mapping(ike_sa(st), &md->sender);
 		}
 
 		/*
 		 * If interface type has changed, update local port (500/4500)
 		 */
-		if (md->iface->port != st->st_localport) {
-			st->st_localport = md->iface->port;
-			DBG(DBG_NATT,
-				DBG_log("NAT-T: updating local port to %d",
-					st->st_localport));
+		if (md->iface != st->st_interface) {
+			endpoint_buf b1, b2;
+			dbg("NAT-T: #%lu updating local interface from %s to %s (using md->iface in %s())",
+			    st->st_serialno,
+			    str_endpoint(&st->st_interface->local_endpoint, &b1),
+			    str_endpoint(&md->iface->local_endpoint, &b2), __func__);
+			st->st_interface = md->iface;
 		}
 	}
+	pexpect_st_local_endpoint(st);
+}
 
+/*
+ * XXX: there should be no maybes about this - each of the callers
+ * know the state and hence, know if there's any point in calling this
+ * function.
+ */
+void v1_maybe_natify_initiator_endpoints(struct state *st, where_t where)
+{
+	pexpect_st_local_endpoint(st);
 	/*
 	 * If we're initiator and NAT-T is detected, we
 	 * need to change port (MAIN_I3, QUICK_I1 or AGGR_I2)
 	 */
-	if ((st->st_state == STATE_MAIN_I3 ||
-	     st->st_state == STATE_QUICK_I1 ||
-	     st->st_state == STATE_AGGR_I2) &&
+	if ((st->st_state->kind == STATE_MAIN_I3 ||
+	     st->st_state->kind == STATE_QUICK_I1 ||
+	     st->st_state->kind == STATE_AGGR_I2) &&
 	    (st->hidden_variables.st_nat_traversal & NAT_T_DETECTED) &&
-	    st->st_localport != pluto_nat_port) {
-		DBG(DBG_NATT,
-			DBG_log("NAT-T: floating local port %d to nat port %d",
-				st->st_localport, pluto_nat_port));
-
-		st->st_localport  = pluto_nat_port;
-		st->st_remoteport = pluto_nat_port;
-
+	    endpoint_hport(&st->st_interface->local_endpoint) != pluto_nat_port) {
+		dbg("NAT-T: #%lu in %s floating IKEv1 ports to PLUTO_NAT_PORT %d",
+		    st->st_serialno, st->st_state->short_name,
+		    pluto_nat_port);
+		natify_initiator_endpoints(st, where);
 		/*
 		 * Also update pending connections or they will be deleted if
 		 * uniqueids option is set.
 		 * THIS does NOTHING as, both arguments are "st"!
+		 *
+		 * XXX: so can it be deleted, it would kill the
+		 * function.
 		 */
-		update_pending(st, st);
+		update_pending(pexpect_ike_sa(st), pexpect_ike_sa(st));
 	}
-
-	/*
-	 * Find valid interface according to local port (500/4500)
-	 */
-	if (!sameaddr(&st->st_localaddr, &st->st_interface->ip_addr) ||
-	     st->st_localport != st->st_interface->port) {
-		DBG(DBG_NATT, {
-			ipstr_buf b1;
-			ipstr_buf b2;
-			DBG_log("NAT-T connection has wrong interface definition %s:%u vs %s:%u",
-				ipstr(&st->st_localaddr, &b1),
-				st->st_localport,
-				ipstr(&st->st_interface->ip_addr, &b2),
-				st->st_interface->port);
-		});
-
-		for (i = interfaces; i !=  NULL; i = i->next) {
-			if (sameaddr(&st->st_localaddr, &i->ip_addr) &&
-			    st->st_localport == i->port) {
-				DBG(DBG_NATT,
-					DBG_log("NAT-T: updated to use interface %s:%d",
-						i->ip_dev->id_rname,
-						i->port));
-				st->st_interface = i;
-				break;
-			}
-		}
-	}
+	pexpect_st_local_endpoint(st);
 }
 
-void show_setup_natt(void)
+void show_setup_natt(struct fd *whackfd)
 {
-	whack_log(RC_COMMENT, " ");     /* spacer */
-	whack_log(RC_COMMENT, "nat-traversal=%s, keep-alive=%ld, nat-ikeport=%d",
+	whack_comment(whackfd, " ");     /* spacer */
+	whack_comment(whackfd, "nat-traversal=%s, keep-alive=%ld, nat-ikeport=%d",
 		  bool_str(nat_traversal_enabled),
 		  (long) deltasecs(nat_kap),
 		  pluto_nat_port);
@@ -1070,20 +1013,16 @@ void ikev2_natd_lookup(struct msg_digest *md, const ike_spi_t *ike_responder_spi
 	 * TODO: This use must be allowed even with USE_SHA1=false
 	 */
 
-	unsigned char hash_me[IKEV2_NATD_HASH_SIZE];
-
-	natd_hash(&ike_alg_hash_sha1, hash_me, &ike_spis,
-		  &md->iface->ip_addr, md->iface->port);
+	struct crypt_mac hash_local = natd_hash(&ike_alg_hash_sha1, &ike_spis,
+						&md->iface->local_endpoint);
 
 	/* Second: one with sender IP & port */
 
-	unsigned char hash_him[IKEV2_NATD_HASH_SIZE];
+	struct crypt_mac hash_remote = natd_hash(&ike_alg_hash_sha1, &ike_spis,
+						 &md->sender);
 
-	natd_hash(&ike_alg_hash_sha1, hash_him, &ike_spis,
-		  &md->sender, hportof(&md->sender));
-
-	bool found_me = FALSE;
-	bool found_him = FALSE;
+	bool found_local = false;
+	bool found_remote = false;
 
 	for (struct payload_digest *p = md->chain[ISAKMP_NEXT_v2N]; p != NULL; p = p->next) {
 		if (pbs_left(&p->pbs) != IKEV2_NATD_HASH_SIZE)
@@ -1093,28 +1032,68 @@ void ikev2_natd_lookup(struct msg_digest *md, const ike_spi_t *ike_responder_spi
 		case v2N_NAT_DETECTION_DESTINATION_IP:
 		case v2N_NAT_DETECTION_SOURCE_IP:
 			/* ??? do we know from the isan_type which of these to test? */
-			if (memeq(p->pbs.cur, hash_me, sizeof(hash_me)))
-				found_me = TRUE;
-			if (memeq(p->pbs.cur, hash_him, sizeof(hash_him)))
-				found_him = TRUE;
+			/* XXX: should this check pbs_left(), see other code */
+			if (memeq(p->pbs.cur, hash_local.ptr, hash_local.len))
+				found_local = true;
+			if (memeq(p->pbs.cur, hash_remote.ptr, hash_remote.len))
+				found_remote = true;
 			break;
 		default:
 			continue;
 		}
 	}
 
-	natd_lookup_common(st, &md->sender, found_me, found_him);
+	natd_lookup_common(st, &md->sender, found_local, found_remote);
+}
 
-	if (st->st_state == STATE_PARENT_I1 &&
-	    (st->hidden_variables.st_nat_traversal & NAT_T_DETECTED)) {
-		DBG(DBG_NATT, {
-			ipstr_buf b;
-			DBG_log("NAT-T: floating to port %s:%d",
-				ipstr(&md->sender, &b), pluto_nat_port);
-		});
-		st->st_localport = pluto_nat_port;
-		st->st_remoteport = pluto_nat_port;
 
-		nat_traversal_change_port_lookup(NULL, st);
+/*
+ * Update the initiator endpoints so that all further exchanges are
+ * encapsulated in UDP and exchanged between :PLUTO_NAT_PORTs (i.e.,
+ * :4500).
+ */
+
+void natify_initiator_endpoints(struct state *st, where_t where)
+{
+	/*
+	 * Float the local endpoint's port to :PLUTO_NAT_PORT (:4500)
+	 * and then re-bind the interface so that all further
+	 * exchanges use that port.
+	 */
+	pexpect_st_local_endpoint(st);
+	endpoint_buf b1, b2;
+	ip_endpoint new_local_endpoint = set_endpoint_hport(&st->st_interface->local_endpoint, pluto_nat_port);
+	dbg("NAT: #%lu floating local endpoint from %s to %s using pluto_nat_port "PRI_WHERE,
+	    st->st_serialno,
+	    str_endpoint(&st->st_interface->local_endpoint, &b1),
+	    str_endpoint(&new_local_endpoint, &b2),
+	    pri_where(where));
+	/*
+	 * If not already ...
+	 */
+	if (!endpoint_eq(new_local_endpoint, st->st_interface->local_endpoint)) {
+		/*
+		 * For IPv4, both :PLUTO_PORT and :PLUTO_NAT_PORT are
+		 * opened by server.c so the new endpoint using
+		 * :PLUTO_NAT_PORT should exist.  IPv6 nat isn't
+		 * supported.
+		 */
+		struct iface_port *i = find_iface_port_by_local_endpoint(&new_local_endpoint);
+		if (pexpect(i != NULL)) {
+			endpoint_buf b;
+			dbg("NAT: #%lu floating endpoint ended up on interface %s %s",
+			    st->st_serialno, i->ip_dev->id_rname,
+			    str_endpoint(&i->local_endpoint, &b));
+			st->st_interface = i;
+		}
 	}
+	pexpect_st_local_endpoint(st);
+
+	/*
+	 * Float the remote port to :PLUTO_NAT_PORT (:4500)
+	 */
+	dbg("NAT-T: #%lu floating remote port from %d to %d using pluto_nat_port "PRI_WHERE,
+	    st->st_serialno, endpoint_hport(&st->st_remote_endpoint), pluto_nat_port,
+	    pri_where(where));
+	update_endpoint_hport(&st->st_remote_endpoint, pluto_nat_port);
 }

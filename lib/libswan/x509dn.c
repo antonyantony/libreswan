@@ -34,8 +34,7 @@
 #include "oid.h"
 #include "x509.h"
 #include "lswconf.h"
-
-static void hex_str(chunk_t bin, chunk_t *str);	/* forward */
+#include "ctype.h"
 
 /* coding of X.501 distinguished name */
 typedef const struct {
@@ -103,43 +102,6 @@ static const x501rdn_t x501rdns[] = {
 #	undef OC
 };
 
-static void format_chunk(chunk_t *ch, const char *format, ...) PRINTF_LIKE(2);
-
-/*
- * format into a chunk.
- * The chunk is used as a cursor for free space at the end of the buffer.
- * We leave it advanced to the remainder of the free space.
- * BUG: if there is no free space to start with, we don't do anything.
- */
-static void format_chunk(chunk_t *ch, const char *format, ...)
-{
-	if (ch->len > 0) {
-		size_t len = ch->len;
-		va_list args;
-		va_start(args, format);
-		int ret = vsnprintf((char *)ch->ptr, len, format, args);
-		va_end(args);
-		if (ret < 0) {
-			/*
-			 * BUG: if ret < 0, vsnprintf encountered some error,
-			 * we ought to raise a stink
-			 * For now: pretend nothing happened!
-			 */
-		} else if ((size_t)ret > len) {
-			/*
-			 * BUG: if ret >= len, then the vsnprintf output was
-			 * truncate, we ought to raise a stink!
-			 * For now: accept truncated output.
-			 */
-			ch->ptr += len;
-			ch->len = 0;
-		} else {
-			ch->ptr += ret;
-			ch->len -= ret;
-		}
-	}
-}
-
 /*
  * Routines to iterate through a DN.
  * rdn: remainder of the sequence of RDNs
@@ -170,13 +132,17 @@ static err_t unwrap(asn1_t ty, chunk_t *container, chunk_t *contents)
 {
 	if (container->len == 0)
 		return "missing ASN1 type";
+
 	if (container->ptr[0] != ty)
 		return "unexpected ASN1 type";
+
 	size_t sz = asn1_length(container);
 	if (sz == ASN1_INVALID_LENGTH)
 		return "invalid ASN1 length";
+
 	if (sz > container->len)
 		return "ASN1 length larger than space";
+
 	contents->ptr = container->ptr;
 	contents->len = sz;
 	container->ptr += sz;
@@ -206,11 +172,12 @@ static err_t init_rdn(chunk_t dn, /* input (copy) */
  * Fetches the next RDN in a DN
  */
 static err_t get_next_rdn(chunk_t *rdn,	/* input/output */
-	chunk_t *attribute, /* input/output */
-	chunk_t *oid /* output */,
-	asn1_t *val_ty,	/* output */
-	chunk_t *value,	/* output */
-	bool *more) /* output */
+			  chunk_t *attribute, /* input/output */
+			  chunk_t *oid /* output */,
+			  chunk_t *value_ber,		/* output */
+			  asn1_t *value_type,		/* output */
+			  chunk_t *value_content,	/* output */
+			  bool *more) /* output */
 {
 	/* if all attributes have been parsed, get next rdn */
 	if (attribute->len == 0) {
@@ -234,79 +201,29 @@ static err_t get_next_rdn(chunk_t *rdn,	/* input/output */
 	if (body.len == 0)
 		return "no room for string's type";
 
-	*val_ty = body.ptr[0];
+	*value_ber = body;
+	*value_type = body.ptr[0];
 
 	/* ??? what types of string are legitimate? */
-	switch(*val_ty) {
+	switch(*value_type) {
 	case ASN1_PRINTABLESTRING:
 	case ASN1_T61STRING:
 	case ASN1_IA5STRING:
-	case ASN1_UTF8STRING:	/* ??? will this work? */
+	case ASN1_UTF8STRING:
 	case ASN1_BMPSTRING:
 		break;
 	default:
-		dbg("unexpected ASN1 string type 0x%x", *val_ty);
+		dbg("unexpected ASN1 string type 0x%x", *value_type);
 		return "unexpected ASN1 string type";
 	}
 
-	RETURN_IF_ERR(unwrap(*val_ty, &body, value));
+	RETURN_IF_ERR(unwrap(*value_type, &body, value_content));
 
 	if (body.len != 0)
 		return "crap after OID and value pair of RDN";
 
 	/* are there any RDNs left? */
 	*more = rdn->len > 0 || attribute->len > 0;
-	return NULL;
-}
-
-/*
- * Parses an ASN.1 distinguished name into its OID/value pairs
- */
-static err_t dn_parse(chunk_t dn, chunk_t *str)
-{
-	chunk_t rdn;
-	chunk_t attribute;
-	bool more;
-
-	if (dn.ptr == NULL) {
-		format_chunk(str, "(empty)");
-		return NULL;
-	}
-	RETURN_IF_ERR(init_rdn(dn, &rdn, &attribute, &more));
-
-	for (bool first = TRUE; more; first = FALSE) {
-		chunk_t oid;
-		asn1_t type;
-		chunk_t value;
-		RETURN_IF_ERR(get_next_rdn(&rdn, &attribute, &oid, &type, &value,
-				   &more));
-		if (!first)
-			format_chunk(str, ", ");
-
-		/* print OID */
-		int oid_code = known_oid(oid);
-		if (oid_code == OID_UNKNOWN)	/* OID not found in list */
-			hex_str(oid, str);
-		else
-			format_chunk(str, "%s", oid_names[oid_code].name);
-
-		format_chunk(str, "=");
-		/* print value, doubling any ',' and '/' */
-		unsigned char *p = value.ptr;
-		size_t l = value.len;
-		for (size_t i = 0; i<l; ) {
-			if (p[i] == ',' || p[i] == '/') {
-				/* character p[i] must be doubled */
-				format_chunk(str, "%.*s%c", (int)(i + 1), p, p[i]);
-				l -= i + 1;
-				p += i + 1;
-				i = 0;
-			} else {
-				i++;
-			}
-		}
-		format_chunk(str, "%.*s", (int)l, p);
-	}
 	return NULL;
 }
 
@@ -326,58 +243,361 @@ int dn_count_wildcards(chunk_t dn)
 
 	while (more) {
 		chunk_t oid;
-		asn1_t type;
-		chunk_t value;
-		ugh = get_next_rdn(&rdn, &attribute, &oid, &type, &value,
+		chunk_t value_ber;
+		asn1_t value_type;
+		chunk_t value_content;
+		ugh = get_next_rdn(&rdn, &attribute, &oid,
+				   &value_ber, &value_type, &value_content,
 				   &more);
 		if (ugh != NULL)
 			return -1;
-		if (value.len == 1 && *value.ptr == '*')
+
+		if (value_content.len == 1 && value_content.ptr[0] == '*')
 			wildcards++;	/* we have found a wildcard RDN */
 	}
 	return wildcards;
 }
 
 /*
- * Prints a binary string in hexadecimal form
+ * Formats an ASN.1 Distinguished Name into an ASCII string of
+ * OID/value pairs.  If there's a problem, return err_t (buf's
+ * contents should be ignored).
+ *
+ * Since the raw output is fed to CERT_AsciiToName() and that,
+ * according to the comments, expects RFC-1485 (1993) (A String
+ * Representation of Distinguished Names (OSI-DS 23 (v5))) and
+ * successors, this function should be emitting the same.
+ *
+ * RFC-1485 was obsoleted by RFC-1779 - A String Representation of
+ * Distinguished Names - in 1995.
+ *
+ * XXX: added OID.N.N.N; added '#' prefix; added \ escape; according
+ * to NSS bug 210584 this was all added to NSS 2019-12 years ago.
+
+ * RFC-1779 was obsoleted by RFC-2253 - Lightweight Directory Access
+ * Protocol (v3): UTF-8 String Representation of Distinguished Names -
+ * in 1997.
+ *
+ * XXX: deprecated OID.N.N.N; according to NSS bug 1342137 this was
+ * fixed 2019-2 years ago.
+ *
+ * RFC-2253 was obsoleted by RFC-4514 - Lightweight Directory Access
+ * Protocol (v3): UTF-8 String Representation of Distinguished Names -
+ * in 2006.
+ *
+ * Hence this tries to implement https://tools.ietf.org/html/rfc4514
+ * using \<CHAR> for printable and \XX for non-printable.
  */
-static void hex_str(chunk_t bin, chunk_t *str)
+
+static err_t format_dn(jambuf_t *buf, chunk_t dn,
+		       jam_bytes_fn *jam_bytes, bool nss_compatible)
 {
-	format_chunk(str, "0x");
-	for (unsigned i = 0; i < bin.len; i++)
-		format_chunk(str, "%02X", *bin.ptr++);
+	chunk_t rdn;
+	chunk_t attribute;
+	bool more;
+
+	RETURN_IF_ERR(init_rdn(dn, &rdn, &attribute, &more));
+
+	for (bool first = TRUE; more; first = FALSE) {
+		chunk_t oid;
+		chunk_t value_ber;
+		asn1_t value_type;
+		chunk_t value_content;
+		RETURN_IF_ERR(get_next_rdn(&rdn, &attribute, &oid,
+					   &value_ber, &value_type, &value_content,
+					   &more));
+		if (!first)
+			jam(buf, ", ");
+
+		/*
+		 * 2.3.  Converting AttributeTypeAndValue
+		 *
+		 * The AttributeTypeAndValue is encoded as the string
+		 * representation of the AttributeType, followed by an
+		 * equals sign ('=' U+003D) character, followed by the
+		 * string representation of the AttributeValue.  The
+		 * encoding of the AttributeValue is given in Section
+		 * 2.4.
+		 *
+		 * If the AttributeType is defined to have a short
+		 * name (descriptor) [RFC4512] and that short name is
+		 * known to be registered [REGISTRY] [RFC4520] as
+		 * identifying the AttributeType, that short name, a
+		 * <descr>, is used.  Otherwise the AttributeType is
+		 * encoded as the dotted-decimal encoding, a
+		 * <numericoid>, of its OBJECT IDENTIFIER.  The
+		 * <descr> and <numericoid> are defined in [RFC4512].
+		 *
+		 * XXX: An early RFC defined this as OID.N.N.N but
+		 * later the OID prefix was dropped.
+		 */
+
+		/* print OID */
+		int oid_code = known_oid(oid);
+		if (oid_code == OID_UNKNOWN) {
+			/*
+			 * 2.4.  Converting an AttributeValue from
+			 * ASN.1 to a String
+			 *
+			 * If the AttributeType is of the
+			 * dotted-decimal form, the AttributeValue is
+			 * represented by an number sign ('#' U+0023)
+			 * character followed by the hexadecimal
+			 * encoding of each of the octets of the BER
+			 * encoding of the X.500 AttributeValue.  This
+			 * form is also used when the syntax of the
+			 * AttributeValue does not have an LDAP-
+			 * specific ([RFC4517], Section 3.1) string
+			 * encoding defined for it, or the
+			 * LDAP-specific string encoding is not
+			 * restricted to UTF-8-encoded Unicode
+			 * characters.  This form may also be used in
+			 * other cases, such as when a reversible
+			 * string representation is desired (see
+			 * Section 5.2).
+			 *
+			 * XXX: i.e., N.M#BER
+			 */
+			const uint8_t *p = oid.ptr; /* cast void* */
+			const uint8_t *end = p + oid.len;
+			/* handled above? */
+			if (!pexpect(p < end)) {
+				return "OID length is zero";
+			}
+			/* first two nodes encoded in single byte */
+			/* ??? where does 40 come from? */
+			jam(buf, "%d.%d", *p / 40, *p % 40);
+			p++;
+			/* runs of 1xxxxxxx+ 0xxxxxxx */
+			while (p < end) {
+				uintmax_t n = 0;
+				for (;;) {
+					uint8_t b = *p++;
+					if (n > UINTMAX_MAX >> 7)
+						return "OID too large";
+
+					n = (n << 7) | (b & 0x7f);
+					/* stop at 0xxxxxxx */
+					if (b < 0x80)
+						break;
+
+					if (p >= end)
+						return "corrupt OID run encoding";
+				}
+				jam(buf, ".%ju", n);
+			}
+		} else {
+			jam(buf, "%s", oid_names[oid_code].name);
+		}
+		jam(buf, "=");
+		if (oid_code == OID_UNKNOWN ||
+		    /*
+		     * NSS totally screws up a leading '#' - stripping
+		     * of the escape and then interpreting it as a
+		     * #BER.
+		     */
+		    (nss_compatible &&
+		     ((const char*)value_content.ptr)[0] == '#')) {
+			/* BER */
+			jam(buf, "#");
+			for (unsigned i = 0; i < value_ber.len; i++) {
+				uint8_t byte = ((const uint8_t*)value_ber.ptr)[i];
+				jam(buf, "%02X", byte);
+			}
+		} else {
+
+			const char *p = (void*) value_content.ptr; /* cast void */
+			const char *end = p + value_content.len;
+
+			/*
+			 * - a space (' ' U+0020) or number sign ('#'
+			 *   U+0023) occurring at the beginning of the
+			 *   string;
+			 *
+			 * Per below, can be escaped using <ESC>
+			 * <CHAR>.
+			 *
+			 * Note the singuar - a space - presumably
+			 * only the first of these needs to be escaped
+			 * as after that everything must be part of
+			 * the string until either ',' or '+' or ';'
+			 * is hit?
+			 */
+			if (p < end && (*p == ' ' || *p == '#')) {
+				jam_bytes(buf, "\\", 1);
+				jam_bytes(buf, p, 1);
+				p++;
+			}
+
+			/*
+			 * - a space (' ' U+0020) character occurring
+			 *   at the end of the string;
+			 *
+			 * Again note the singlar - a space - I guess
+			 * the parser tosses a run of un-escaped
+			 * spaces before a separator.
+			 */
+			unsigned trailing = 0;
+			if (p < end && end[-1] == ' ') {
+				trailing++;
+				end--;
+			}
+
+			/*
+			 * Emit the body:
+			 *
+			 * - one of the characters '"', '+', ',', ';',
+			 *   '<', '>', or '\' (U+0022, U+002B, U+002C,
+			 *   U+003B, U+003C, U+003E, or U+005C,
+			 *   respectively);
+			 *
+			 * - the null (U+0000) character.
+			 *
+			 * Other characters may be escaped.
+			 *
+			 * [...]
+			 *
+			 * Each octet of the character to be escaped
+			 * is replaced by a backslash and two hex
+			 * digits, which form a single octet in the
+			 * code of the character.  Alternatively, if
+			 * and only if the character to be escaped is
+			 * one of
+			 *
+			 *   ' ', '"', '#', '+', ',', ';', '<', '=',
+			 *   '>', or '\' (U+0020, U+0022, U+0023,
+			 *   U+002B, U+002C, U+003B, U+003C, U+003D,
+			 *   U+003E, U+005C, respectively)
+			 *
+			 * it can be prefixed by a backslash ('\'
+			 * U+005C).
+			 *
+			 * XXX: the below uses \XX to encode any
+			 * character outside of [U+0020..U+007E].
+			 * Since all bytes of a UTF-8 encoded code
+			 * point have the top-bit set this works for
+			 * UTF-8.
+			 *
+			 * XXX: following earlier code, the below
+			 * tries to micro-optimize calls to
+			 * jam_bytes() - runs of un-escaped characters
+			 * are accumulated and then written using a
+			 * single call.
+			 *
+			 * XXX: isprint() is affected by locale, and
+			 * isascii() isn't considered portable; so use
+			 * a simple compare.
+			 */
+			unsigned run = 0;
+			while (p + run < end) {
+				uint8_t c = p[run]; /* byte */
+				bool needs_prefix = (c == '\\' ||
+						     c == '\"' ||
+						     c == '+' ||
+						     c == ',' ||
+						     c == ';' ||
+						     c == '<' ||
+						     c == '>');
+				if (nss_compatible) {
+					/*
+					 * XXX: Old versions of NSS
+					 * also wants these special
+					 * characters escaped
+					 * everywhere.
+					 */
+					needs_prefix = (needs_prefix ||
+							c == '#' ||
+							c == '=');
+				}
+				bool printable = (c >= 0x20 && c <= 0x7e &&
+						  !needs_prefix);
+				if (printable) {
+					/*
+					 * add to run of characters that don't
+					 * need to be escaped
+					 */
+					run++;
+				} else {
+					/* emit previous run */
+					jam_bytes(buf, p, run);
+					if (needs_prefix) {
+						/* <ESC> <CHAR> */
+						jam_bytes(buf, "\\", 1);
+						jam_bytes(buf, &c, 1);
+					} else {
+						/* <ESC> <HEX> <HEX> */
+						jam_bytes(buf, "\\", 1);
+						jam(buf, "%02X", c);
+					}
+					/* advance past this escaped character */
+					p += run + 1;
+					run = 0;
+				}
+			}
+			/* emit final run */
+			jam_bytes(buf, p, run);
+			/*
+			 * Escape any trailing ' ' characters; using \<CHAR>
+			 * is ok; remember END had these stripped.
+			 */
+			for (unsigned i = 0; i < trailing; i++) {
+				jam_bytes(buf, "\\", 1);
+				jam_bytes(buf, &end[i], 1);
+			}
+		}
+	}
+	return NULL;
 }
 
 /*
  * Converts a binary DER-encoded ASN.1 distinguished name
  * into LDAP-style human-readable ASCII format
  */
-int dntoa(char *dst, size_t dstlen, chunk_t dn)
+
+void jam_raw_dn(jambuf_t *buf, chunk_t dn, jam_bytes_fn *jam_bytes,
+		bool nss_compatible)
 {
-	chunk_t str;
-
-	str.ptr = (unsigned char *)dst;
-	str.len = dstlen;
-	err_t ugh = dn_parse(dn, &str);
-
-	if (ugh != NULL) {	/* error, print DN as hex string */
+	/* save start in case things screw up */
+	jampos_t pos = jambuf_get_pos(buf);
+	err_t ugh = format_dn(buf, dn, jam_bytes, nss_compatible);
+	if (ugh != NULL) {
+		/* error: print DN as hex string */
 		libreswan_log("error in DN parsing: %s", ugh);
-		DBG_dump_chunk("Bad DN:", dn);
-		str.ptr = (unsigned char *)dst;
-		str.len = dstlen;
-		hex_str(dn, &str);
+		DBG_dump_hunk("Bad DN:", dn);
+		/* reset the buffer */
+		jambuf_set_pos(buf, &pos);
+		jam(buf, "0x");
+		jam_HEX_bytes(buf, dn.ptr, dn.len);
 	}
-	return (int)(dstlen - str.len);
 }
 
-/*
- * Same as dntoa but prints a special string for a null dn
- */
-int dntoa_or_null(char *dst, size_t dstlen, chunk_t dn, const char *null_dn)
+void jam_dn_or_null(jambuf_t *buf, chunk_t dn, const char *null_dn,
+		    jam_bytes_fn *jam_bytes)
 {
-	return dn.ptr == NULL ?
-		snprintf(dst, dstlen, "%s", null_dn) :
-		dntoa(dst, dstlen, dn);
+	if (dn.ptr == NULL) {
+		jam(buf, "%s", null_dn);
+	} else {
+		jam_raw_dn(buf, dn, jam_bytes, true/*nss_compatible*/);
+	}
+}
+
+const char *str_dn_or_null(chunk_t dn, const char *null_dn, dn_buf *dst)
+{
+	jambuf_t buf = ARRAY_AS_JAMBUF(dst->buf);
+	jam_dn_or_null(&buf, dn, null_dn, jam_sanitized_bytes);
+	return dst->buf;
+}
+
+void jam_dn(jambuf_t *buf, chunk_t dn, jam_bytes_fn *jam_bytes)
+{
+	jam_dn_or_null(buf, dn, "(empty)", jam_bytes);
+}
+
+const char *str_dn(chunk_t dn, dn_buf *dst)
+{
+	jambuf_t buf = ARRAY_AS_JAMBUF(dst->buf);
+	jam_dn(&buf, dn, jam_sanitized_bytes);
+	return dst->buf;
 }
 
 /*
@@ -426,6 +646,7 @@ static unsigned char *temporary_cyclic_buffer(void)
  *	}
  * }
  */
+
 err_t atodn(const char *src, chunk_t *dn)
 {
 	dbg("ASCII to DN <= \"%s\"", src);
@@ -443,6 +664,7 @@ err_t atodn(const char *src, chunk_t *dn)
 #	define START_OBJ() { *ppp++ = dn_ptr; }
 
 	/* note: on buffer overflow this returns from atodn */
+	/* ??? all but one call has len==1 so we could simplify */
 #	define EXTEND_OBJ(ptr, len) { \
 		if (dn_redline - dn_ptr < (ptrdiff_t)(len)) \
 			return "DN too big"; \
@@ -471,7 +693,6 @@ err_t atodn(const char *src, chunk_t *dn)
 	for (;;) {
 		/* for each Relative DN */
 
-		/* ??? are multiple '/' and ',' OK? */
 		src += strspn(src, " /,");	/* skip any separators */
 		if (*src == '\0')
 			break;	/* finished! */
@@ -480,63 +701,148 @@ err_t atodn(const char *src, chunk_t *dn)
 
 		START_OBJ();	/* 1 ASN1_SET */
 		START_OBJ();	/* 2 ASN1_SEQUENCE */
-
-		size_t ol = strcspn(src, " =");	/* length of OID name */
+		START_OBJ();	/* 3 ASN1_OID */
 
 		x501rdn_t *op;	/* OID description */
-
-		for (op = x501rdns; ; op++) {
-			if (op == &x501rdns[elemsof(x501rdns)]) {
-				dbg("unknown OID: \"%.*s\"",
-					(int)ol, src);
-				return "unknown OID in ID_DER_ASN1_DN";
+		if (*src >= '0' && *src <= '9') {
+			op = NULL; /* so #BER is expected */
+			char *end;
+			uint8_t byte;
+			/* B1.B2 */
+			unsigned long b0a = strtoul(src, &end, 10);
+			/* ??? where does 40 come from? */
+			if (src == end || b0a > UINT8_MAX / 40) {
+				return "numeric OID has invalid first digit";
 			}
-			if (strlen(op->name) == ol && strncaseeq(op->name, src, ol)) {
-				break;	/* found */
+			src = end;
+			if (src[0] != '.') {
+				return "numeric OID missing first '.'";
 			}
+			src++;
+			unsigned long b0b = strtoul(src, &end, 10);
+			if (src == end || b0b >= 40) {
+				return "numeric OID has invalid second digit";
+			}
+			src = end;
+			byte = b0a * 40 + b0b;
+			EXTEND_OBJ(&byte, 1);
+			/* .B ... */
+			while (src[0] == '.') {
+				src++;
+				unsigned long b = strtoul(src, &end, 10);
+				if (src == end) {
+					return "numeric OID has invalid second digit";
+				}
+				src = end;
+				/* XXX: this is neither smart nor efficient */
+				while (b >= 128) {
+					unsigned long l = b;
+					unsigned shifts = 0;
+					while (l >= 128) {
+						l >>= 7;
+						shifts += 7;
+					}
+					byte = l | 0x80;
+					EXTEND_OBJ(&byte, 1);
+					b -= l << shifts;
+				}
+				byte = b;
+				EXTEND_OBJ(&byte, 1);
+			}
+		} else {
+			size_t ol = strcspn(src, " =");	/* length of OID name */
+			for (op = x501rdns; ; op++) {
+				if (op == &x501rdns[elemsof(x501rdns)]) {
+					dbg("unknown OID: \"%.*s\"",
+					    (int)ol, src);
+					return "unknown OID in ID_DER_ASN1_DN";
+				}
+				if (strlen(op->name) == ol && strncaseeq(op->name, src, ol)) {
+					break;	/* found */
+				}
+			}
+			EXTEND_OBJ(op->oid_ptr, op->oid_len);
+			src += ol;
 		}
 
-		src += ol;
-
-		START_OBJ();	/* 3 ASN1_OID */
-		EXTEND_OBJ(op->oid_ptr, op->oid_len);
 		END_OBJ(ASN1_OID);	/* 3 */
 
-		/* parse name */
+		/* = */
 
-		/* ??? are multiple '=' OK? */
-		src += strspn(src, " =");	/* skip any separators */
-
-		START_OBJ();	/* 3 op->type or ASN1_T61STRING */
-
-		for (;;) {
-			size_t nl = strcspn(src, ",/");
-
-			EXTEND_OBJ(src, nl);
-			src += nl;
-
-			if (src[0] == '\0' || src[0] != src[1])
-				break;	/* end of name */
-			/*
-			 * doubled: a form of escape.
-			 * Insert a single copy of the char.
-			 */
-			EXTEND_OBJ(src, 1);
-			src += 2;	/* skip both copies */
+		src += strspn(src, " ");	/* skip white space */
+		if (*src != '=') {
+			return "missing '='";
 		}
+		src++;
+		src += strspn(src, " ");	/* skip white space */
 
-		/* remove trailing SPaces from name operand */
+		if (src[0] == '#') {
+			/* dump the raw hex assuming it is a BER */
+			src++;
+			while (isxdigit(src[0]) && isxdigit(src[1])) {
+				char hex[3] = { src[0], src[1], };
+				uint8_t byte = strtol(hex, NULL, 16);
+				EXTEND_OBJ(&byte, 1);
+				src += 2;
+			}
+		} else if (*src == '"') {
+			return "obsolete rfc1779 quoting using '\"' not supported";
+		} else {
+			if (op == NULL) {
+				return "numeric OID requires #HEXPAIR BER";
+			}
+			/* parse value */
 
-		unsigned char *ns = ppp[-1];	/* name operand start */
+			START_OBJ();	/* 3 op->type or ASN1_T61STRING */
 
-		while (dn_ptr > ns && dn_ptr[-1] == ' ')
-			dn_ptr--;
+			uint8_t *escape_stop = dn_ptr;
+			while (src[0] != '\0' &&
+			       src[0] != ',' &&
+			       /* XXX: where did '/' come from? */
+			       src[0] != '/') {
+				/* assume nul termination */
+				if (src[0] == '\\' && isxdigit(src[1]) && isxdigit(src[2])) {
+					char hex[3] = { src[1], src[2], };
+					uint8_t byte = strtol(hex, NULL, 16);
+					EXTEND_OBJ(&byte, 1);
+					src += 3;
+					escape_stop = dn_ptr;
+				} else if (src[0] == '\\' && src[1] != '\0') {
+					EXTEND_OBJ(&src[1], 1);
+					src += 2;
+					escape_stop = dn_ptr;
+				} else if ((src[0] == ',' || src[0] == '/') &&
+					   src[0] == src[1]) {
+					/*
+					 * doubled: a form of escape.  Insert
+					 * a single copy of the char.
+					 *
+					 * XXX: ',,' came from rhbz#868986;
+					 * '//' was added shortly after; both
+					 * are bogus.
+					 */
+					EXTEND_OBJ(src, 1);
+					src += 2;	/* skip both copies */
+					escape_stop = dn_ptr;
+				} else {
+					EXTEND_OBJ(src, 1);
+					src++;
+				}
+			}
 
-		asn1_t t = op->type == ASN1_PRINTABLESTRING &&
-			!is_printablestring(chunk(ns, dn_ptr - ns)) ?
+			/* remove trailing SPaces from name operand */
+			/* XXX: but not escaped */
+
+			while (dn_ptr > escape_stop && dn_ptr[-1] == ' ')
+				dn_ptr--;
+
+			unsigned char *ns = ppp[-1];	/* name operand start */
+			asn1_t t = op->type == ASN1_PRINTABLESTRING &&
+				!is_printablestring(chunk(ns, dn_ptr - ns)) ?
 				ASN1_T61STRING : op->type;
 
-		END_OBJ(t);	/* 3 name */
+			END_OBJ(t);	/* 3 value */
+		}
 
 		END_OBJ(ASN1_SEQUENCE);	/* 2 */
 		END_OBJ(ASN1_SET);	/* 1 */
@@ -545,7 +851,7 @@ err_t atodn(const char *src, chunk_t *dn)
 	END_OBJ(ASN1_SEQUENCE);	/* 0 */
 	dn->len = dn_ptr - dn->ptr;
 	if (DBGP(DBG_BASE)) {
-		DBG_dump_chunk("ASCII to DN =>", *dn);
+		DBG_dump_hunk("ASCII to DN =>", *dn);
 	}
 	return NULL;
 
@@ -612,19 +918,22 @@ bool match_dn(chunk_t a, chunk_t b, int *wildcards)
 		 * but don't report errors.
 		 */
 		chunk_t oid_a, oid_b;
-		asn1_t type_a, type_b;
-		chunk_t value_a, value_b;
+		chunk_t value_ber_a, value_ber_b;
+		asn1_t value_type_a, value_type_b;
+		chunk_t value_content_a, value_content_b;
 
 		{
 			err_t ua = get_next_rdn(&rdn_a, &attribute_a, &oid_a,
-				 &type_a, &value_a, &more_a);
+						&value_ber_a, &value_type_a, &value_content_a,
+						&more_a);
 			if (ua != NULL) {
 				dbg("match_dn bad a[%d]: %s", n, ua);
 				return FALSE;
 			}
 
 			err_t ub = get_next_rdn(&rdn_b, &attribute_b, &oid_b,
-				 &type_b, &value_b, &more_b);
+						&value_ber_b, &value_type_b, &value_content_b,
+						&more_b);
 			if (ub != NULL) {
 				dbg("match_dn bad b[%d]: %s", n, ub);
 				return FALSE;
@@ -637,12 +946,14 @@ bool match_dn(chunk_t a, chunk_t b, int *wildcards)
 
 		/* does rdn_b contain a wildcard? */
 		/* ??? this does not care whether types match.  Should it? */
-		if (wildcards != NULL && value_b.len == 1 && *value_b.ptr == '*') {
+		if (wildcards != NULL &&
+		    value_content_b.len == 1 &&
+		    value_content_b.ptr[0] == '*') {
 			(*wildcards)++;
 			continue;
 		}
 
-		if (value_a.len != value_b.len)
+		if (value_content_a.len != value_content_b.len)
 			return FALSE;	/* lengths must match */
 
 		/*
@@ -650,10 +961,11 @@ bool match_dn(chunk_t a, chunk_t b, int *wildcards)
 		 * or if ASN1_PRINTABLESTRING is involved,
 		 * we must forbid the high bit.
 		 */
-		if (type_a != type_b || type_a == ASN1_PRINTABLESTRING) {
+		if (value_type_a != value_type_b ||
+		    value_type_a == ASN1_PRINTABLESTRING) {
 			unsigned char or = 0x00;
-			for (size_t i = 0; i != value_a.len; i++)
-				or |= value_a.ptr[i] | value_b.ptr[i];
+			for (size_t i = 0; i != value_content_a.len; i++)
+				or |= value_content_a.ptr[i] | value_content_b.ptr[i];
 			if (or & 0x80)
 				return FALSE;
 		}
@@ -664,7 +976,7 @@ bool match_dn(chunk_t a, chunk_t b, int *wildcards)
 		 */
 
 		/* cheap match, as if case matters */
-		if (memeq(value_a.ptr, value_b.ptr, value_a.len))
+		if (memeq(value_content_a.ptr, value_content_b.ptr, value_content_a.len))
 			continue;
 
 		/*
@@ -674,12 +986,12 @@ bool match_dn(chunk_t a, chunk_t b, int *wildcards)
 		 * Forbid NUL in such strings.
 		 */
 
-		if ((type_a == ASN1_PRINTABLESTRING ||
-		     (type_a == ASN1_IA5STRING &&
+		if ((value_type_a == ASN1_PRINTABLESTRING ||
+		     (value_type_a == ASN1_IA5STRING &&
 		      known_oid(oid_a) == OID_PKCS9_EMAIL)) &&
-		    strncaseeq((char *)value_a.ptr,
-				(char *)value_b.ptr, value_b.len) &&
-		    memchr(value_a.ptr, '\0', a.len) == NULL)
+		    strncaseeq((char *)value_content_a.ptr,
+				(char *)value_content_b.ptr, value_content_b.len) &&
+		    memchr(value_content_a.ptr, '\0', a.len) == NULL)
 		{
 			continue;	/* component match */
 		}
@@ -690,16 +1002,11 @@ bool match_dn(chunk_t a, chunk_t b, int *wildcards)
 	if (more_a || more_b) {
 		if (wildcards != NULL && *wildcards != 0) {
 			/* ??? for some reason we think a failure with wildcards is worth logging */
-			char abuf[ASN1_BUF_LEN];
-			char bbuf[ASN1_BUF_LEN];
-
-			dntoa(abuf, ASN1_BUF_LEN, a);
-			dntoa(bbuf, ASN1_BUF_LEN, b);
-
-			libreswan_log(
-				"while comparing A='%s'<=>'%s'=B with a wildcard count of %d, %s had too few RDNs",
-				abuf, bbuf, *wildcards,
-				(more_a ? "B" : "A"));
+			dn_buf abuf;
+			dn_buf bbuf;
+			libreswan_log("while comparing A='%s'<=>'%s'=B with a wildcard count of %d, %s had too few RDNs",
+				      str_dn(a, &abuf), str_dn(b, &bbuf), *wildcards,
+				      (more_a ? "B" : "A"));
 		}
 		return FALSE;
 	}

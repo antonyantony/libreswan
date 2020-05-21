@@ -5,14 +5,10 @@ if test $# -lt 2 -o $# -gt 3; then
 
 Usage:
 
-    $0 <repodir> <summarydir> [ <first-commit> ]
+    $0 <repodir> <summarydir>
 
 Track <repodir>'s current branch and test each "interesting" commit.
 Publish results under <summarydir>.
-
-If <first-commit> is specified, then only go back as far as that
-commit when looking for work.  Default is to use <repodir>s current
-HEAD as the earliest commit.
 
 XXX: Should this also look at and use things like WEB_PREFIXES and
 WEB_WORKERS in Makefile.inc.local?
@@ -30,28 +26,27 @@ webdir=$(dirname $0)
 makedir=$(cd ${webdir}/../.. && pwd)
 utilsdir=${makedir}/testing/utils
 
-# By default, only test new commits.
-if test $# -gt 0 ; then
-    first_commit=$1 ; shift
-else
-    first_commit=HEAD
-fi
-first_commit=$(cd ${repodir} && git show --no-patch --format=%H ${first_commit})
+# start with new shiny domains
 
-status() {
-    ${webdir}/json-status.sh --json ${summarydir}/status.json "$@"
-    cat <<EOF
+kvm_setup=kvm-purge
 
---------------------------------------
+# Select the oldest commit to test.
+#
+# Will search [HEAD..oldest_commit] for something interesting and
+# untested.
+#
+# When recovering from an error (and when just starting) set
+# oldest_commit to HEAD so that only a new commit, which hopefully
+# fixes, the barf will be tested (if there's no new commit things go
+# idle).
 
-    $*
+oldest_commit=$(cd ${repodir} && git show --no-patch --format=%H HEAD)
 
---------------------------------------
+json_status="${webdir}/json-status.sh --json ${summarydir}/status.json"
+status=${json_status}
 
-EOF
-}
 
-run() {
+run() (
     href="<a href=\"$(basename ${resultsdir})/$1.log\">$1</a>"
     ${status} "running 'make ${href}'"
 
@@ -83,10 +78,13 @@ run() {
 	${status} "'make ${href}' failed"
 	exit 1
     fi
-
-}
+)
 
 while true ; do
+
+    # start with basic status
+
+    status=${json_status}
 
     # Update the repo.
     #
@@ -96,7 +94,7 @@ while true ; do
     # Force ${branch} to be identical to ${remote} by using --ff-only
     # - if it fails the script dies.
 
-    status "updating repo"
+    ${status} "updating repository"
     ( cd ${repodir} && git fetch || true )
     ( cd ${repodir} && git merge --ff-only )
 
@@ -105,24 +103,25 @@ while true ; do
     # This will add any new commits found in ${repodir} (added by
     # above fetch) and merge the results from the last test run.
 
-    status "updating summary"
+    ${status} "updating summary"
     make -C ${makedir} web-summarydir \
 	 WEB_REPODIR=${repodir} \
 	 WEB_RESULTSDIR= \
 	 WEB_SUMMARYDIR=${summarydir}
 
-    # find something to do
+    # Select the next commit to test
     #
-    # If there is nothing to do then sleep for a bit.
+    # Will search [HEAD..oldest_commit] for something interesting and
+    # untested.
 
-    status "looking for work"
-    if ! commit=$(${webdir}/gime-work.sh ${summarydir} ${repodir} ${first_commit}) ; then \
+    ${status} "looking for work"
+    if ! commit=$(${webdir}/gime-work.sh ${summarydir} ${repodir} ${oldest_commit}) ; then \
 	# Seemlingly nothing to do; github gets updated up every 15
 	# minutes so sleep for less than that
 	seconds=$(expr 10 \* 60)
 	now=$(date +%s)
 	future=$(expr ${now} + ${seconds})
-	status "idle; will retry $(date -u -d @${future} +%H:%M)"
+	${status} "idle; will retry $(date -u -d @${future} +%H:%M)"
 	sleep ${seconds}
 	continue
     fi
@@ -130,17 +129,19 @@ while true ; do
     # Now discard everything back to the commit to be tested, making
     # that HEAD.  This could have side effects such as switching
     # branches, take care.
+    #
+    # When first starting and/or recovering this does nothing as the
+    # repo is already at head.
 
-    status "checking out ${commit}"
+    ${status} "checking out ${commit}"
     ( cd ${repodir} && git reset --hard ${commit} )
 
-    # Mimic how web-targets.mki computes RESULTSDIR.
+    # Mimic how web-targets.mki computes RESULTSDIR; switch to
+    # directory specific status.
 
     resultsdir=${summarydir}/$(${webdir}/gime-git-description.sh ${repodir})
     gitstamp=$(basename ${resultsdir})
-    status="${webdir}/json-status.sh \
-      --json ${summarydir}/status.json \
-      --directory ${gitstamp}"
+    status="${json_status} --directory ${gitstamp}"
 
     # create the resultsdir and point the summary at it.
 
@@ -153,25 +154,41 @@ while true ; do
 	 WEB_RESULTSDIR=${resultsdir} \
 	 WEB_SUMMARYDIR=${summarydir}
 
-    # run the testsuite
+    # Run the testsuite
+    #
+    # This list should match results.html.  Should a table be
+    # generated?
+    #
+    # ${kvm_setup} starts out as kvm-purge but then filps to
+    # kvm-shutdown.  For kvm-purge, since it is only invoked when the
+    # script is first changing and the REPO is at HEAD, the upgrade /
+    # transmogrify it triggers will always be for the latest changes.
 
-    run kvm-shutdown
-    run distclean
-    run kvm-install
-    run kvm-keys
-    run kvm-test
+    targets="distclean ${kvm_setup} kvm-keys kvm-install kvm-test"
+    kvm_setup=kvm-shutdown
+    for target in ${targets}; do
+	# generate json of the progress
+	touch ${resultsdir}/${target}.log
+	${webdir}/json-make.sh --json ${resultsdir}/make.json --resultsdir ${resultsdir} ${targets}
+	# run the target on hand
+	if ! run ${target} ; then
+	    # force the next run to test HEAD++ using rebuilt and
+	    # updated domains; hopefully that will contain the fix (or
+	    # at least contain the damage).
+	    ${status} "${target} barfed, restarting with HEAD"
+	    exec $0 ${repodir} ${summarydir}
+	fi
+    done
 
     # Check that the test VMs are ok
     #
     # A result with output-missing is good sign that the VMs have
     # become corrupt and need a rebuild.
 
-    status "checking KVMs"
+    ${status} "checking KVMs"
     if grep '"output-missing"' "${resultsdir}/results.json" ; then
-	status "corrupt domains detected, deleting old"
-	( cd ${repodir} && make kvm-purge )
-	status "corrupt domains detected, building fresh domains"
-	( cd ${repodir} && make kvm-install-test-domains )
+	${status} "corrupt domains detected, restarting with HEAD"
+	exec $0 ${repodir} ${summarydir}
     fi
 
     # loop back to code updating summary dir

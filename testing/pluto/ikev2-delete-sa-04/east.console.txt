@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -21,12 +21,9 @@ east #
 east #
  # confirm the revive conn code triggered
 east #
- hostname | grep east > /dev/null && grep EVENT_REVIVE_CONNS /tmp/pluto.log | sed "s/@.*$//"
-| global one-shot timer EVENT_REVIVE_CONNS initialized
-"west-east-auto" #1: deleting IKE SA for connection 'west-east-auto' but connection is supposed to remain up; schedule EVENT_REVIVE_CONNS
-| global one-shot timer EVENT_REVIVE_CONNS scheduled in 0 seconds
-| global timer EVENT_REVIVE_CONNS event
-east #
+ hostname | grep east > /dev/null && grep -e 'but must remain up per local policy' -e '^[^|].*EVENT_REVIVE_CONNS' /tmp/pluto.log
+"west-east-auto" #1: deleting IKE SA but connection is supposed to remain up; schedule EVENT_REVIVE_CONNS
+"west-east-auto": initiating connection which received a Delete/Notify but must remain up per local policy
 east #
  ../bin/check-for-core.sh
 east #

@@ -13,7 +13,7 @@
  * for more details.
  */
 
-#ifdef USE_AES
+#ifdef USE_PRF_AES_XCBC
 extern const struct prf_desc ike_alg_prf_aes_xcbc;
 #endif
 
@@ -28,5 +28,5 @@ extern const struct prf_desc ike_alg_prf_sha2_512;
 #endif
 
 #ifdef USE_MD5
-extern const struct prf_desc ike_alg_prf_md5;
+extern const struct prf_desc ike_alg_prf_hmac_md5;
 #endif

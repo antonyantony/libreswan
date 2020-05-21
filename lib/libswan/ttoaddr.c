@@ -17,10 +17,13 @@
  */
 
 #include <string.h>
+#include <netdb.h>		/* for gethostbyname2() */
+#include <ctype.h>		/* for isxdigit() */
 
-#include "internal.h"		/* for MALLOC()!! */
 #include "ip_address.h"
-#include "libreswan.h"		/* for ttoul() */
+#include "ip_info.h"
+#include "lswalloc.h"		/* for alloc_things(), pfree() */
+#include "lswlog.h"		/* for pexpect() */
 
 /*
  * Legal ASCII characters in a domain name.  Underscore technically is not,
@@ -169,7 +172,7 @@ static err_t tryname(
 		cp = src;
 	} else {
 		if (srclen + 1 > sizeof(namebuf)) {
-			p = (char *) MALLOC(srclen + 1);
+			p = alloc_things(char, srclen + 1, "p");
 			if (p == NULL)
 				return "unable to get temporary space for name";
 		}
@@ -183,7 +186,7 @@ static err_t tryname(
 	if (h == NULL && af == AF_INET)
 		ne = getnetbyname(cp);
 	if (p != namebuf)
-		FREE(p);
+		pfree(p);
 	if (h == NULL && ne == NULL) {
 		/* intricate because we cannot compose a static string */
 		switch (tried_af) {
@@ -200,33 +203,30 @@ static err_t tryname(
 		if (h->h_addrtype != af)
 			return "address-type mismatch from gethostbyname2!!!";
 
-		return initaddr((unsigned char *)h->h_addr, h->h_length, af,
-				dst);
+		return data_to_address(h->h_addr, h->h_length, aftoinfo(af), dst);
 	} else {
 		if (ne->n_addrtype != af)
 			return "address-type mismatch from getnetbyname!!!";
-
-		ne->n_net = htonl(ne->n_net);
-		return initaddr((unsigned char *)&ne->n_net, sizeof(ne->n_net),
-				af, dst);
+		if (!pexpect(af == AF_INET)) {
+			return "address-type mismatch by convoluted logic!!!";
+		}
+		/* apparently .n_net is in host order */
+		struct in_addr in = { htonl(ne->n_net), };
+		*dst = address_from_in_addr(&in);
+		return NULL;
 	}
 }
 
 /*
  * tryhex - try conversion as an eight-digit hex number (AF_INET only)
  */
-static err_t tryhex(src, srclen, flavor, dst)
-const char *src;
-size_t srclen;	/* should be 8 */
-int flavor;	/* 'x' for network order, 'h' for host order */
-ip_address *dst;
+static err_t tryhex(const char *src,
+		    size_t srclen,	/* should be 8 */
+		    int flavour, 	/* 'x' for network order, 'h' for host order */
+		    ip_address *dst)
 {
 	err_t oops;
 	unsigned long ul;
-	union {
-		uint32_t addr;
-		unsigned char buf[4];
-	} u;
 
 	if (srclen != 8)
 		return "internal error, tryhex called with bad length";
@@ -235,8 +235,9 @@ ip_address *dst;
 	if (oops != NULL)
 		return oops;
 
-	u.addr = (flavor == 'h') ? ul : htonl(ul);
-	return initaddr(u.buf, sizeof(u.buf), AF_INET, dst);
+	struct in_addr addr = { (flavour == 'h') ? ul : htonl(ul), };
+	*dst = address_from_in_addr(&addr);
+	return NULL;
 }
 
 /*
@@ -245,20 +246,19 @@ ip_address *dst;
  * If the first char of a complaint is '?', that means "didn't look like
  * dotted decimal at all".
  */
-static err_t trydotted(src, srclen, dst)
-const char *src;
-size_t srclen;
-ip_address *dst;
+static err_t trydotted(const char *src, size_t srclen, ip_address *dst)
 {
 	const char *stop = src + srclen;	/* just past end */
-	int byte;
 	err_t oops;
-#       define  NBYTES  4
-	unsigned char buf[NBYTES];
-	int i;
 
-	memset(buf, 0, sizeof(buf));
-	for (i = 0; i < NBYTES && src < stop; i++) {
+	/* start with blank IPv4 address */
+	union {
+		struct in_addr addr;
+		uint8_t bytes[sizeof(struct in_addr)];
+	} u = { .bytes = { 0, }, };
+
+	for (size_t i = 0; i < sizeof(u) && src < stop; i++) {
+		int byte;
 		oops = getbyte(&src, stop, &byte);
 		if (oops != NULL) {
 			if (*oops != '?')
@@ -269,19 +269,19 @@ ip_address *dst;
 
 			return oops;	/* with leading '?' */
 		}
-		buf[i] = byte;
+		u.bytes[i] = byte;
 		if (i < 3 && src < stop && *src++ != '.') {
 			if (i == 0)
 				return "?syntax error in dotted-decimal address";
 			else
 				return "syntax error in dotted-decimal address";
-
 		}
 	}
 	if (src != stop)
 		return "extra garbage on end of dotted-decimal address";
 
-	return initaddr(buf, sizeof(buf), AF_INET, dst);
+	*dst = address_from_in_addr(&u.addr);
+	return NULL;
 }
 
 /*
@@ -326,17 +326,19 @@ int *retp;	/* return-value pointer */
 /*
  * colon - convert IPv6 "numeric" address
  */
-static err_t colon(src, srclen, dst)
-const char *src;
-size_t srclen;	/* known to be >0 */
-ip_address *dst;
+static err_t colon(const char *src,
+		   size_t srclen,	/* known to be >0 */
+		   ip_address *dst)
 {
 	const char *stop = src + srclen;	/* just past end */
 	unsigned piece;
 	int gapat;	/* where was empty piece seen */
 	err_t oops;
 #       define  NPIECES 8
-	unsigned char buf[NPIECES * 2];	/* short may have wrong byte order */
+	union {
+		struct in6_addr in6;
+		uint8_t bytes[sizeof(struct in6_addr)];
+	} u = { .bytes = { 0, }, };
 	int i;
 	int j;
 #       define  IT      "IPv6 numeric address"
@@ -348,7 +350,7 @@ ip_address *dst;
 			return "illegal leading `:' in " IT;
 
 		if (srclen == 2) {
-			unspecaddr(AF_INET6, dst);
+			*dst = address_any(&ipv6_info);
 			return NULL;
 		}
 		src++;	/* past first but not second */
@@ -373,8 +375,8 @@ ip_address *dst;
 		} else if (oops != NULL) {
 			return oops;
 		}
-		buf[2 * i] = piece >> 8;
-		buf[2 * i + 1] = piece & 0xff;
+		u.bytes[2 * i] = piece >> 8;
+		u.bytes[2 * i + 1] = piece & 0xff;
 		if (i < NPIECES - 1) {	/* there should be more input */
 			if (src == stop && gapat < 0)
 				return IT " ends prematurely";
@@ -396,14 +398,15 @@ ip_address *dst;
 		naftergap = i - (gapat + 1);
 		for (i--, j = NPIECES - 1; naftergap > 0;
 			i--, j--, naftergap--) {
-			buf[2 * j] = buf[2 * i];
-			buf[2 * j + 1] = buf[2 * i + 1];
+			u.bytes[2 * j] = u.bytes[2 * i];
+			u.bytes[2 * j + 1] = u.bytes[2 * i + 1];
 		}
 		for (; j >= gapat; j--)
-			buf[2 * j] = buf[2 * j + 1] = 0;
+			u.bytes[2 * j] = u.bytes[2 * j + 1] = 0;
 	}
 
-	return initaddr(buf, sizeof(buf), AF_INET6, dst);
+	*dst = address_from_in6_addr(&u.in6);
+	return NULL;
 }
 
 /*
@@ -478,6 +481,16 @@ ttoaddr(const char *src,
 	return err;
 }
 
+err_t domain_to_address(shunk_t src, const struct ip_info *type, ip_address *dst)
+{
+	*dst = address_invalid;
+	if (src.len == 0) {
+		return "empty string";
+	}
+
+	return ttoaddr(src.ptr, src.len, type == NULL ? AF_UNSPEC : type->af, dst);
+}
+
 err_t	/* NULL for success, else string literal */
 ttoaddr_num(const char *src,
 	size_t srclen,	/* 0 means "apply strlen" */
@@ -493,4 +506,14 @@ ttoaddr_num(const char *src,
 	}
 
 	return ttoaddr_base(src, srclen, af, &numfailed, dst);
+}
+
+err_t numeric_to_address(shunk_t src, const struct ip_info *type, ip_address *dst)
+{
+	*dst = address_invalid;
+	if (src.len == 0) {
+		return "empty string";
+	}
+
+	return ttoaddr_num(src.ptr, src.len, type == NULL ? AF_UNSPEC : type->af, dst);
 }

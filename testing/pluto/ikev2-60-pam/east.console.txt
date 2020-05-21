@@ -9,7 +9,7 @@ east #
  cp pluto.pam /etc/pam.d/pluto
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -20,7 +20,6 @@ east #
 initdone
 east #
  if [ -f /etc/pam.d/pluto.stock ]; then mv /etc/pam.d/pluto.stock /etc/pam.d/pluto ; fi
-east #
 east #
  ../bin/check-for-core.sh
 east #

@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -40,27 +40,27 @@ src 192.1.2.23 dst 192.1.2.45
 	enc cbc(aes) 0xENCKEY
 XFRM policy:
 src 192.1.2.23/32 dst 192.1.2.45/32 proto tcp dport 222
-	dir out priority 843743 ptype main
+	dir out priority 1687486 ptype main
 src 192.1.2.23/32 dst 192.1.2.45/32 proto tcp sport 222
-	dir out priority 843743 ptype main
+	dir out priority 1687486 ptype main
 src 192.1.2.45/32 dst 192.1.2.23/32 proto tcp dport 222
-	dir fwd priority 843743 ptype main
+	dir fwd priority 1687486 ptype main
 src 192.1.2.45/32 dst 192.1.2.23/32 proto tcp dport 222
-	dir in priority 843743 ptype main
+	dir in priority 1687486 ptype main
 src 192.1.2.45/32 dst 192.1.2.23/32 proto tcp sport 222
-	dir fwd priority 843743 ptype main
+	dir fwd priority 1687486 ptype main
 src 192.1.2.45/32 dst 192.1.2.23/32 proto tcp sport 222
-	dir in priority 843743 ptype main
+	dir in priority 1687486 ptype main
 src 192.1.2.23/32 dst 192.1.2.45/32
-	dir out priority 1040351 ptype main
+	dir out priority 2080702 ptype main
 	tmpl src 192.1.2.23 dst 192.1.2.45
 		proto esp reqid REQID mode tunnel
 src 192.1.2.45/32 dst 192.1.2.23/32
-	dir fwd priority 1040351 ptype main
+	dir fwd priority 2080702 ptype main
 	tmpl src 192.1.2.45 dst 192.1.2.23
 		proto esp reqid REQID mode tunnel
 src 192.1.2.45/32 dst 192.1.2.23/32
-	dir in priority 1040351 ptype main
+	dir in priority 2080702 ptype main
 	tmpl src 192.1.2.45 dst 192.1.2.23
 		proto esp reqid REQID mode tunnel
 XFRM done
@@ -71,12 +71,10 @@ default via 192.1.2.254 dev eth1
 192.0.1.0/24 via 192.1.2.45 dev eth1
 192.0.2.0/24 dev eth0 proto kernel scope link src 192.0.2.254
 192.1.2.0/24 dev eth1 proto kernel scope link src 192.1.2.23
-192.9.2.0/24 dev eth2 proto kernel scope link src 192.9.2.23
 NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
 [1]+  Done                    nc -4 -l 192.1.2.23 222
-east #
 east #
  ../bin/check-for-core.sh
 east #

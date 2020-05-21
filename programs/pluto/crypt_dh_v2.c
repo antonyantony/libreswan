@@ -249,28 +249,28 @@ static void calc_skeyseed_v2(struct pcr_dh_v2 *sk,
 
 	size_t next_byte = 0;
 
-	SK_d_k = key_from_symkey_bytes(finalkey, next_byte, skd_bytes);
+	SK_d_k = key_from_symkey_bytes(finalkey, next_byte, skd_bytes, HERE);
 	next_byte += skd_bytes;
 
-	SK_ai_k = key_from_symkey_bytes(finalkey, next_byte, integ_size);
+	SK_ai_k = key_from_symkey_bytes(finalkey, next_byte, integ_size, HERE);
 	next_byte += integ_size;
 
-	SK_ar_k = key_from_symkey_bytes(finalkey, next_byte, integ_size);
+	SK_ar_k = key_from_symkey_bytes(finalkey, next_byte, integ_size, HERE);
 	next_byte += integ_size;
 
 	/* The encryption key and salt are extracted together. */
 
 	if (encrypter != NULL)
 		SK_ei_k = encrypt_key_from_symkey_bytes("SK_ei_k",
-						encrypter,
-						next_byte, key_size,
-						finalkey);
+							encrypter,
+							next_byte, key_size,
+							finalkey, HERE);
 	else
 		SK_ei_k = NULL;
 
 	next_byte += key_size;
 	PK11SymKey *initiator_salt_key = key_from_symkey_bytes(finalkey, next_byte,
-							       salt_size);
+							       salt_size, HERE);
 	initiator_salt = chunk_from_symkey("initiator salt",
 					   initiator_salt_key);
 	release_symkey(__func__, "initiator-salt-key", &initiator_salt_key);
@@ -280,26 +280,26 @@ static void calc_skeyseed_v2(struct pcr_dh_v2 *sk,
 	/* The encryption key and salt are extracted together. */
 	if (encrypter != NULL)
 		SK_er_k = encrypt_key_from_symkey_bytes("SK_er_k",
-						encrypter,
-						next_byte, key_size,
-						finalkey);
+							encrypter,
+							next_byte, key_size,
+							finalkey, HERE);
 	else
 		SK_er_k = NULL;
 
 	next_byte += key_size;
 	PK11SymKey *responder_salt_key = key_from_symkey_bytes(finalkey, next_byte,
-							       salt_size);
+							       salt_size, HERE);
 	responder_salt = chunk_from_symkey("responder salt",
 					   responder_salt_key);
 	release_symkey(__func__, "responder-salt-key", &responder_salt_key);
 	next_byte += salt_size;
 
-	SK_pi_k = key_from_symkey_bytes(finalkey, next_byte, skp_bytes);
+	SK_pi_k = key_from_symkey_bytes(finalkey, next_byte, skp_bytes, HERE);
 	/* store copy of SK_pi_k for later use in authnull */
 	chunk_SK_pi = chunk_from_symkey("chunk_SK_pi", SK_pi_k);
 	next_byte += skp_bytes;
 
-	SK_pr_k = key_from_symkey_bytes(finalkey, next_byte, skp_bytes);
+	SK_pr_k = key_from_symkey_bytes(finalkey, next_byte, skp_bytes, HERE);
 	/* store copy of SK_pr_k for later use in authnull */
 	chunk_SK_pr = chunk_from_symkey("chunk_SK_pr", SK_pr_k);
 
@@ -331,10 +331,10 @@ static void calc_skeyseed_v2(struct pcr_dh_v2 *sk,
 		/* ??? this won't fire count-pointers.awk; should it? */
 		DBG_log("calc_skeyseed_v2 pointers: shared-key@%p, SK_d-key@%p, SK_ai-key@%p, SK_ar-key@%p, SK_ei-key@%p, SK_er-key@%p, SK_pi-key@%p, SK_pr-key@%p",
 			shared, SK_d_k, SK_ai_k, SK_ar_k, SK_ei_k, SK_er_k, SK_pi_k, SK_pr_k);
-		DBG_dump_chunk("calc_skeyseed_v2 initiator salt", initiator_salt);
-		DBG_dump_chunk("calc_skeyseed_v2 responder salt", responder_salt);
-		DBG_dump_chunk("calc_skeyseed_v2 SK_pi", chunk_SK_pi);
-		DBG_dump_chunk("calc_skeyseed_v2 SK_pr", chunk_SK_pr);
+		DBG_dump_hunk("calc_skeyseed_v2 initiator salt", initiator_salt);
+		DBG_dump_hunk("calc_skeyseed_v2 responder salt", responder_salt);
+		DBG_dump_hunk("calc_skeyseed_v2 SK_pi", chunk_SK_pi);
+		DBG_dump_hunk("calc_skeyseed_v2 SK_pr", chunk_SK_pr);
 	});
 }
 
@@ -344,7 +344,7 @@ void calc_dh_v2(struct pluto_crypto_req *r)
 {
 	struct pcr_dh_v2 *const sk = &r->pcr_d.dh_v2;
 
-	const struct oakley_group_desc *group = sk->dh;
+	const struct dh_desc *group = sk->dh;
 	passert(group != NULL);
 
 	/* now calculate the (g^x)(g^y) --- need gi on responder, gr on initiator */
@@ -352,7 +352,7 @@ void calc_dh_v2(struct pluto_crypto_req *r)
 	chunk_t remote_ke;
 	setchunk_from_wire(remote_ke, sk, sk->role == ORIGINAL_RESPONDER ? &sk->gi : &sk->gr);
 
-	DBG(DBG_CRYPT, DBG_dump_chunk("peer's g: ", remote_ke));
+	DBG(DBG_CRYPT, DBG_dump_hunk("peer's g: ", remote_ke));
 
 	sk->shared = calc_dh_shared(sk->secret, remote_ke);
 	if (sk->shared == NULL) {

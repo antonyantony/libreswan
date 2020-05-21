@@ -24,6 +24,7 @@
 
 struct certs;
 struct payload_digest;
+struct root_certs;
 
 /*
  * Try to find and verify the end cert.  Sets CRL_NEEDED and BAD (for
@@ -42,10 +43,11 @@ struct rev_opts {
 extern struct certs *find_and_verify_certs(struct state *st,
 					   struct payload_digest *cert_payloads,
 					   const struct rev_opts *rev_opts,
-					   bool *crl_needed,
-					   bool *bad);
+					   bool *crl_needed, bool *bad,
+					   const struct root_certs *root_certs);
 
-extern bool cert_VerifySubjectAltName(const CERTCertificate *cert, const char *name);
+extern bool cert_VerifySubjectAltName(const CERTCertificate *cert,
+				      const struct id *id);
 
 extern SECItem *nss_pkcs7_blob(CERTCertificate *cert, bool send_full_chain);
 

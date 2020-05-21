@@ -35,7 +35,6 @@
 #include <arpa/inet.h>
 #include <resolv.h>
 
-#include <libreswan.h>
 #include "libreswan/pfkeyv2.h"
 
 #include "sysdep.h"
@@ -74,7 +73,7 @@
 #include "ikev2.h"
 #include "ikev2_send.h"
 #include "ikev1_xauth.h"
-
+#include "ip_info.h"
 #include "vendor.h"
 #include "nat_traversal.h"
 #include "virtual.h"	/* needs connections.h */
@@ -139,7 +138,7 @@ void unpack_KE_from_helper(struct state *st,
  *  value with zeros.
  */
 bool accept_KE(chunk_t *dest, const char *val_name,
-	       const struct oakley_group_desc *gr,
+	       const struct dh_desc *gr,
 	       struct payload_digest *ke_pd)
 {
 	if (ke_pd == NULL) {
@@ -154,10 +153,11 @@ bool accept_KE(chunk_t *dest, const char *val_name,
 		/* XXX Could send notification back */
 		return false;
 	}
-	free_chunk_contents(dest); /* XXX: ever needed? */
-	*dest = clone_in_pbs_left_as_chunk(pbs, val_name);
+	free_chunk_content(dest); /* XXX: ever needed? */
+	*dest = clone_hunk(pbs_in_left_as_shunk(pbs), val_name);
 	if (DBGP(DBG_CRYPT)) {
-		DBG_dump_chunk("DH public value received:\n", *dest);
+		DBG_log("DH public value received:");
+		DBG_dump_hunk(NULL, *dest);
 	}
 	return true;
 }
@@ -195,14 +195,13 @@ static initiator_function *pick_initiator(struct connection *c,
 	}
 }
 
-void ipsecdoi_initiate(fd_t whack_sock,
+void ipsecdoi_initiate(struct fd *whack_sock,
 		       struct connection *c,
 		       lset_t policy,
 		       unsigned long try,
-		       so_serial_t replacing
-#ifdef HAVE_LABELED_IPSEC
-		       , struct xfrm_user_sec_ctx_ike *uctx
-#endif
+		       so_serial_t replacing,
+		       const threadtime_t *inception,
+		       struct xfrm_user_sec_ctx_ike *uctx
 		       )
 {
 	/*
@@ -227,37 +226,25 @@ void ipsecdoi_initiate(fd_t whack_sock,
 			 * turn will start its timing it), need a way
 			 * to stop it.
 			 */
-			statetime_t start = statetime_start(NULL);
-			initiator(whack_sock, c, NULL, policy, try
-#ifdef HAVE_LABELED_IPSEC
-				  , uctx
-#endif
-				  );
-			statetime_stop(&start, "initiator");
-		} else {
-			/* fizzle: whack_sock will be unused */
-			close_any(&whack_sock);
+			initiator(whack_sock, c, NULL, policy, try, inception, uctx);
 		}
 	} else if (HAS_IPSEC_POLICY(policy)) {
 		if (!IS_ISAKMP_SA_ESTABLISHED(st->st_state)) {
 			/* leave our Phase 2 negotiation pending */
-			add_pending(whack_sock, st, c, policy, try,
-				    replacing
-#ifdef HAVE_LABELED_IPSEC
-				    , uctx
-#endif
-				    );
+			add_pending(whack_sock, pexpect_ike_sa(st),
+				    c, policy, try,
+				    replacing, uctx,
+				    false/*part of initiate*/);
 		} else if (st->st_ike_version == IKEv2) {
-			struct pending p;
-			p.whack_sock = whack_sock;
-			p.isakmp_sa = st;
-			p.connection = c;
-			p.try = try;
-			p.policy = policy;
-			p.replacing = replacing;
-#ifdef HAVE_LABELED_IPSEC
-			p.uctx = uctx;
-#endif
+			struct pending p = {
+				.whack_sock = whack_sock, /*on-stack*/
+				.ike = pexpect_ike_sa(st),
+				.connection = c,
+				.try = try,
+				.policy = policy,
+				.replacing = replacing,
+				.uctx = uctx,
+			};
 			ikev2_initiate_child_sa(&p);
 		} else {
 			/* ??? we assume that peer_nexthop_sin isn't important:
@@ -265,11 +252,7 @@ void ipsecdoi_initiate(fd_t whack_sock,
 			 * It isn't clear what to do with the error return.
 			 */
 			quick_outI1(whack_sock, st, c, policy, try,
-				    replacing
-#ifdef HAVE_LABELED_IPSEC
-				    , uctx
-#endif
-				    );
+				    replacing, uctx);
 			}
 	}
 }
@@ -285,6 +268,12 @@ void ipsecdoi_initiate(fd_t whack_sock,
  */
 void ipsecdoi_replace(struct state *st, unsigned long try)
 {
+	/*
+	 * start billing the new state.  The old state also gets
+	 * billed for this function call, oops.
+	 */
+	threadtime_t inception = threadtime_start();
+
 	if (IS_IKE_SA(st)) {
 		/* start from policy in connection */
 
@@ -303,14 +292,9 @@ void ipsecdoi_replace(struct state *st, unsigned long try)
 			 * turn will start its timing it), need a way
 			 * to stop it.
 			 */
-			statetime_t start = statetime_start(NULL);
-			(void) initiator(dup_any(st->st_whack_sock),
-				c, st, policy, try
-#ifdef HAVE_LABELED_IPSEC
-				, st->sec_ctx
-#endif
-				);
-			statetime_stop(&start, "initiator");
+			(void) initiator(st->st_whack_sock,
+					 c, st, policy, try, &inception,
+				st->sec_ctx);
 		}
 	} else {
 		/*
@@ -346,12 +330,9 @@ void ipsecdoi_replace(struct state *st, unsigned long try)
 		if (st->st_ike_version == IKEv1)
 			passert(HAS_IPSEC_POLICY(policy));
 
-		ipsecdoi_initiate(dup_any(st->st_whack_sock), st->st_connection,
-			policy, try, st->st_serialno
-#ifdef HAVE_LABELED_IPSEC
-			, st->sec_ctx
-#endif
-			);
+		ipsecdoi_initiate(st->st_whack_sock, st->st_connection,
+				  policy, try, st->st_serialno, &inception,
+			st->sec_ctx);
 	}
 }
 
@@ -371,7 +352,7 @@ bool has_preloaded_public_key(const struct state *st)
 		     p = p->next) {
 			const struct pubkey *key = p->key;
 
-			if (key->alg == PUBKEY_ALG_RSA &&
+			if (key->type == &pubkey_type_rsa &&
 			    same_id(&c->spd.that.id, &key->id) &&
 			    is_realtime_epoch(key->until_time)) {
 				/* found a preloaded public key */
@@ -402,17 +383,13 @@ bool extract_peer_id(enum ike_id_type kind, struct id *peer, const pb_stream *id
 	case ID_IPV6_ADDR:
 		/* failure mode for initaddr is probably inappropriate address length */
 	{
-		err_t ugh = initaddr(id_pbs->cur, left,
-				peer->kind == ID_IPV4_ADDR ? AF_INET : AF_INET6,
-				&peer->ip_addr);
-
-		if (ugh != NULL) {
-			loglog(RC_LOG_SERIOUS,
-				"improper %s identification payload: %s",
-				enum_show(&ike_idtype_names, kind),
-				ugh);
+		struct pbs_in in_pbs = *id_pbs;
+		if (!pbs_in_address(&peer->ip_addr,
+				    (peer->kind == ID_IPV4_ADDR ? &ipv4_info :
+				     &ipv6_info),
+				    &in_pbs, "peer ID")) {
 			/* XXX Could send notification back */
-			return FALSE;
+			return false;
 		}
 	}
 	break;
@@ -443,13 +420,13 @@ bool extract_peer_id(enum ike_id_type kind, struct id *peer, const pb_stream *id
 	case ID_KEY_ID:
 		setchunk(peer->name, id_pbs->cur, left);
 		DBG(DBG_PARSING,
-		    DBG_dump_chunk("KEY ID:", peer->name));
+		    DBG_dump_hunk("KEY ID:", peer->name));
 		break;
 
 	case ID_DER_ASN1_DN:
 		setchunk(peer->name, id_pbs->cur, left);
 		DBG(DBG_PARSING,
-		    DBG_dump_chunk("DER ASN1 DN:", peer->name));
+		    DBG_dump_hunk("DER ASN1 DN:", peer->name));
 		break;
 
 	case ID_NULL:
@@ -473,21 +450,16 @@ bool extract_peer_id(enum ike_id_type kind, struct id *peer, const pb_stream *id
 void initialize_new_state(struct state *st,
 			  struct connection *c,
 			  lset_t policy,
-			  int try,
-			  fd_t whack_sock)
+			  int try)
 {
-	st->st_connection = c;	/* surely safe: must be a new state */
-
+	update_state_connection(st, c);
 	set_state_ike_endpoints(st, c);
 
-	set_cur_state(st);                                      /* we must reset before exit */
 	st->st_policy = policy & ~POLICY_IPSEC_MASK;        /* clear bits */
-	st->st_whack_sock = whack_sock;
 	st->st_try = try;
 
-	const struct spd_route *sr;
-
-	for (sr = &c->spd; sr != NULL; sr = sr->spd_next) {
+	for (const struct spd_route *sr = &c->spd;
+	     sr != NULL; sr = sr->spd_next) {
 		if (sr->this.xauth_client) {
 			if (sr->this.xauth_username != NULL) {
 				jam_str(st->st_xauth_username, sizeof(st->st_xauth_username), sr->this.xauth_username);
@@ -497,8 +469,6 @@ void initialize_new_state(struct state *st,
 	}
 
 	binlog_refresh_state(st);
-
-	set_cur_state(st);
 }
 
 void send_delete(struct state *st)
@@ -509,7 +479,7 @@ void send_delete(struct state *st)
 		dbg("#%lu send %s delete notification for %s",
 		    st->st_serialno,
 		    enum_name(&ike_version_names, st->st_ike_version),
-		    st->st_state_name);
+		    st->st_state->name);
 		switch (st->st_ike_version) {
 		case IKEv1:
 			send_v1_delete(st);
@@ -518,30 +488,6 @@ void send_delete(struct state *st)
 			record_v2_delete(st);
 			send_recorded_v2_ike_msg(st, "delete notification");
 			struct ike_sa *ike = ike_sa(st);
-			/*
-			 * increase message ID for next delete message
-			 * ikev2_update_msgid_counters need an md
-			 *
-			 * Since this is a request, this ends st_msgid
-			 * needs an update so that there is somewhere
-			 * for the reply to go.  If ST is a CHILD SA
-			 * then the next thing that happens is that it
-			 * gets deleted so no point trying to route
-			 * the message to that (hacks in the event
-			 * loop redirect this to the IKE SA, but lets
-			 * make the hack more transparent).
-			 *
-			 * Save the nextuse' value used by this
-			 * message and not the next.
-			 */
-			msgid_t new_msgid = ike->sa.st_msgid_nextuse;
-			msgid_t new_nextuse = ike->sa.st_msgid_nextuse + 1;
-			dbg("Message ID: IKE #%lu sender #%lu in %s record 'n' sending delete request so forcing IKE nextuse="PRI_MSGID"->"PRI_MSGID" and sender msgid="PRI_MSGID"->"PRI_MSGID,
-			    ike->sa.st_serialno, st->st_serialno, __func__,
-			    ike->sa.st_msgid_nextuse, new_nextuse,
-			    st->st_msgid, new_msgid);
-			ike->sa.st_msgid = new_msgid;
-			ike->sa.st_msgid_nextuse = new_nextuse;
 			/*
 			 * XXX: The record 'n' send call shouldn't be
 			 * needed.  Instead, as part of this
@@ -646,7 +592,7 @@ void lswlog_child_sa_established(struct lswlog *buf, struct state *st)
 		snprintf(oa, sizeof(oa),
 			 "%s:%d",
 			 sensitive_ipstr(&st->hidden_variables.st_natd, &ipb),
-			 st->st_remoteport);
+			 endpoint_hport(&st->st_remote_endpoint));
 		lswlogs(buf, oa);
 	}
 

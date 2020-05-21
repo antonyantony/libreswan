@@ -62,7 +62,6 @@
 #  include <sys/uio.h>          /* struct iovec */
 #endif
 
-#include <libreswan.h>
 
 #include "sysdep.h"
 #include "socketwrapper.h"
@@ -85,6 +84,13 @@
 #include "pluto_crypt.h"        /* cryptographic helper functions */
 #include "udpfromto.h"
 #include "monotime.h"
+#include "ikev1.h"		/* for complete_v1_state_transition() */
+#include "ikev2.h"		/* for complete_v2_state_transition() */
+#include "state_db.h"
+
+#ifdef USE_XFRM_INTERFACE
+#include "kernel_xfrm_interface.h"
+#endif
 
 #include "nat_traversal.h"
 
@@ -97,6 +103,8 @@
 #include "pluto_stats.h"
 #include "hash_table.h"
 #include "ip_address.h"
+#include "hostpair.h"
+#include "ip_info.h"
 
 /*
  *  Server main loop and socket initialization routines.
@@ -235,12 +243,11 @@ static void free_dead_ifaces(void)
 
 	for (p = interfaces; p != NULL; p = p->next) {
 		if (p->change == IFN_DELETE) {
-			ipstr_buf b;
-
-			libreswan_log("shutting down interface %s/%s %s:%d",
+			endpoint_buf b;
+			libreswan_log("shutting down interface %s/%s %s",
 				      p->ip_dev->id_vname,
 				      p->ip_dev->id_rname,
-				      ipstr(&p->ip_addr, &b), p->port);
+				      str_endpoint(&p->local_endpoint, &b));
 			some_dead = TRUE;
 		} else if (p->change == IFN_ADD) {
 			some_new = TRUE;
@@ -277,11 +284,14 @@ void free_ifaces(void)
 {
 	mark_ifaces_dead();
 	free_dead_ifaces();
+#ifdef USE_XFRM_INTERFACE
+	free_xfrmi_ipsec1();
+#endif
 }
 
 struct raw_iface *static_ifn = NULL;
 
-int create_socket(struct raw_iface *ifp, const char *v_name, int port)
+int create_socket(const struct raw_iface *ifp, const char *v_name, int port)
 {
 	int fd = socket(addrtypeof(&ifp->addr), SOCK_DGRAM, IPPROTO_UDP);
 	int fcntl_flags;
@@ -384,20 +394,26 @@ int create_socket(struct raw_iface *ifp, const char *v_name, int port)
 	 */
 	if (kernel_ops->poke_ipsec_policy_hole != NULL &&
 	    !kernel_ops->poke_ipsec_policy_hole(ifp, fd)) {
-		return -1;
-	}
-
-	setportof(htons(port), &ifp->addr);
-	if (bind(fd, sockaddrof(&ifp->addr), sockaddrlenof(&ifp->addr)) < 0) {
-		ipstr_buf b;
-
-		LOG_ERRNO(errno, "bind() for %s/%s %s:%u in process_raw_ifaces()",
-			  ifp->name, v_name,
-			  ipstr(&ifp->addr, &b), (unsigned) port);
 		close(fd);
 		return -1;
 	}
-	setportof(htons(pluto_port), &ifp->addr);
+
+	/*
+	 * ??? does anyone care about the value of port of ifp->addr?
+	 * Old code seemed to assume that it should be reset to pluto_port.
+	 * But only on successful bind.  Seems wrong or unnecessary.
+	 */
+	ip_endpoint if_endpoint = endpoint(&ifp->addr, port);
+	ip_sockaddr if_sa;
+	size_t if_sa_size = endpoint_to_sockaddr(&if_endpoint, &if_sa);
+	if (bind(fd, &if_sa.sa, if_sa_size) < 0) {
+		endpoint_buf b;
+		LOG_ERRNO(errno, "bind() for %s/%s %s in process_raw_ifaces()",
+			  ifp->name, v_name,
+			  str_endpoint(&if_endpoint, &b));
+		close(fd);
+		return -1;
+	}
 
 #if defined(HAVE_UDPFROMTO)
 	/* we are going to use udpfromto.c, so initialize it */
@@ -449,16 +465,17 @@ struct global_timer {
 static struct global_timer global_timers[GLOBAL_TIMERS_ROOF];
 
 static void global_timer_event(evutil_socket_t fd UNUSED,
-			       const short event,
-			       void *arg)
+			       const short event, void *arg)
 {
 	passert(in_main_thread());
 	struct global_timer *gt = arg;
 	passert(event & EV_TIMEOUT);
 	passert(gt >= global_timers);
 	passert(gt < global_timers + elemsof(global_timers));
-	dbg("global timer %s event", gt->name);
+	dbg("processing global timer %s", gt->name);
+	threadtime_t start = threadtime_start();
 	gt->cb();
+	threadtime_stop(&start, SOS_NOBODY, "global timer %s", gt->name);
 }
 
 void enable_periodic_timer(enum event_type type, global_timer_cb *cb,
@@ -531,7 +548,8 @@ static void free_global_timers(void)
 	}
 }
 
-static void list_global_timers(monotime_t now)
+static void list_global_timers(struct fd *whackfd,
+			       monotime_t now)
 {
 	for (unsigned u = 0; u < elemsof(global_timers); u++) {
 		struct global_timer *gt = &global_timers[u];
@@ -546,7 +564,8 @@ static void list_global_timers(monotime_t now)
 			const char *what = (event_get_events(&gt->ev) & EV_PERSIST) ? "periodic" : "one-shot";
 			deltatime_t delay = monotimediff(due, now);
 			deltatime_buf delay_buf;
-			whack_log(RC_LOG, "global %s timer %s is scheduled for %jd (in %s seconds)",
+			whack_comment(whackfd,
+				  "global %s timer %s is scheduled for %jd (in %s seconds)",
 				  what, gt->name,
 				  monosecs(due), /* XXX: useful? */
 				  str_deltatime(delay, &delay_buf));
@@ -585,14 +604,15 @@ static struct signal_handler signal_handlers[] = {
 };
 
 static void signal_handler_handler(evutil_socket_t fd UNUSED,
-				 const short event,
-				 void *arg)
+				   const short event, void *arg)
 {
 	passert(in_main_thread());
-	struct signal_handler *se = arg;
 	passert(event & EV_SIGNAL);
-	dbg("signal %s event", se->name);
+	struct signal_handler *se = arg;
+	dbg("processing signal %s", se->name);
+	threadtime_t start = threadtime_start();
 	se->cb();
+	threadtime_stop(&start, SOS_NOBODY, "signal handler %s", se->name);
 }
 
 static void install_signal_handlers(void)
@@ -618,13 +638,13 @@ static void free_signal_handlers(void)
 	}
 }
 
-static void list_signal_handlers(void)
+static void list_signal_handlers(struct fd *whackfd)
 {
 	for (unsigned i = 0; i < elemsof(signal_handlers); i++) {
 		struct signal_handler *se = &signal_handlers[i];
 		if (event_initialized(&se->ev) &&
 		    event_pending(&se->ev, EV_SIGNAL, NULL) > 0) {
-			whack_log(RC_LOG, "signal event handler %s", se->name);
+			whack_comment(whackfd, "signal event handler %s", se->name);
 		}
 	}
 }
@@ -644,17 +664,26 @@ static struct pluto_event *free_event_entry(struct pluto_event **evp)
 		e->ev  = NULL;
 	}
 
-	DBG(DBG_LIFECYCLE,
-			const char *en = enum_name(&timer_event_names, e->ev_type);
-			DBG_log("%s: release %s-pe@%p", __func__, en, e));
+	dbg("%s: delref %s-pe@%p", __func__,
+	    enum_name(&timer_event_names, e->ev_type), e);
 
 	pfree(e);
 	*evp = NULL;
 	return next;
 }
 
-void free_pluto_event_list(void)
+void free_server(void)
 {
+	if (pluto_eb == NULL) {
+		/*
+		 * exit_pluto() can call free_server() before
+		 * init_server(); mumble something about using
+		 * atexit().
+		 */
+		dbg("server event base not initialized");
+		return;
+	}
+
 	struct pluto_event **head = &pluto_events_head;
 	while (*head != NULL)
 		*head = free_event_entry(head);
@@ -722,32 +751,6 @@ void delete_pluto_event(struct pluto_event **evp)
  * can fire before setting it up has finished.
  */
 
-static void fire_event_photon_torpedo(struct event **evp,
-				      evutil_socket_t fd, short events,
-				      event_callback_fn cb, void *arg,
-				      const deltatime_t *delay)
-{
-	struct event *ev = event_new(pluto_eb, fd, events, cb, arg);
-	passert(ev != NULL);
-	/*
-	 * EV must be saved in its final destination before the event
-	 * is enabled.
-	 *
-	 * Otherwise the event on the main thread will try to use the
-	 * saved EV before it has been saved by the helper thread.
-	 */
-	*evp = ev;
-
-	int r;
-	if (delay == NULL) {
-		r = event_add(ev, NULL);
-	} else {
-		struct timeval t = deltatimeval(*delay);
-		r = event_add(ev, &t);
-	}
-	passert(r >= 0);
-}
-
 void fire_timer_photon_torpedo(struct event **evp,
 			       event_callback_fn cb, void *arg,
 			       const deltatime_t delay)
@@ -769,7 +772,7 @@ void fire_timer_photon_torpedo(struct event **evp,
 }
 
 /*
- * Schedule an event now.
+ * Schedule a resume event now.
  *
  * Unlike pluto_event_add(), it can't be canceled, can only run once,
  * doesn't show up in the event list, and leaks when the event-loop
@@ -779,22 +782,18 @@ void fire_timer_photon_torpedo(struct event **evp,
  * cleans up after the event has run.
  */
 
-struct now_event {
-	pluto_event_now_cb *ne_callback;
-	void *ne_context;
-	const char *ne_name;
-	struct event *ne_event;
-	so_serial_t ne_serialno;
+struct resume_event {
+	so_serial_t serialno;
+	resume_cb *callback;
+	void *context;
+	const char *name;
+	struct event *event;
 };
 
-static void schedule_event_now_cb(evutil_socket_t fd UNUSED,
-				  short events UNUSED,
-				  void *arg)
+static void resume_handler(evutil_socket_t fd UNUSED,
+			   short events UNUSED, void *arg)
 {
-	struct now_event *ne = (struct now_event *)arg;
-	dbg("start executing now-event %s for #%lu",
-	    ne->ne_name, ne->ne_serialno);
-
+	struct resume_event *e = (struct resume_event *)arg;
 	/*
 	 * At one point, .ne_event was was being set after the event
 	 * was enabled.  With multiple threads this resulted in a race
@@ -802,74 +801,204 @@ static void schedule_event_now_cb(evutil_socket_t fd UNUSED,
 	 * pexpect() followed by the passert() demonstrated this - the
 	 * pexpect() failed yet the passert() passed.
 	 */
-	pexpect(ne->ne_event != NULL);
-	struct state *st = state_with_serialno(ne->ne_serialno);
+	pexpect(e->event != NULL);
+	dbg("processing resume %s for #%lu", e->name, e->serialno);
+	/*
+	 * XXX: Don't confuse this and the "callback") code path.
+	 * This unsuspends MD, "callback" does not.
+	 */
+	struct state *st = state_with_serialno(e->serialno);
 	if (st == NULL) {
-		ne->ne_callback(NULL, NULL, ne->ne_context);
+		threadtime_t start = threadtime_start();
+		stf_status status = e->callback(NULL, NULL, e->context);
+		pexpect(status == STF_SKIP_COMPLETE_STATE_TRANSITION);
+		threadtime_stop(&start, e->serialno, "resume %s", e->name);
 	} else {
+		pexpect(push_cur_state(st) == SOS_NOBODY);
+		statetime_t start = statetime_start(st);
 		struct msg_digest *md = unsuspend_md(st);
-		so_serial_t old_state = push_cur_state(st);
-		ne->ne_callback(st, &md, ne->ne_context);
+
+		/* trust nothing */
+		struct msg_digest *old_md = md;
+		so_serial_t old_st_serialno = st->st_serialno;
+		enum ike_version ike_version = st->st_ike_version;
+
+		/* run the callback */
+		stf_status status = e->callback(st, &md, e->context);
+		/* XXX: this may trash ST and MD */
+
+		if (status == STF_SKIP_COMPLETE_STATE_TRANSITION) {
+			dbg("resume %s for #%lu suppresed complete_v%d_state_transition()%s",
+			    e->name, e->serialno, ike_version,
+			    md == old_md ? "" : " and stole MD");
+		} else {
+			/* no stealing MD */
+			pexpect(old_md == md);
+			/* don't trust ST */
+			/* XXX: mumble something about struct ike_version */
+			switch (ike_version) {
+			case IKEv1:
+				/* no switching ST */
+				pexpect(md == NULL || md->st == NULL || md->st->st_serialno == old_st_serialno);
+				complete_v1_state_transition(&md, status);
+				break;
+			case IKEv2:
+				/* get grumpy when ST is switched */
+				if (md != NULL && md->st != NULL && md->st->st_serialno != old_st_serialno) {
+					dbg("XXX: resume for #%lu switched MD.ST to #%lu",
+					    old_st_serialno, md->st->st_serialno);
+					st = md->st;
+				}
+				complete_v2_state_transition(st, &md, status);
+				break;
+			default:
+				bad_case(ike_version);
+			}
+		}
 		release_any_md(&md);
-		pop_cur_state(old_state);
+		statetime_stop(&start, "resume %s", e->name);
+		pop_cur_state(SOS_NOBODY);
 	}
-	passert(ne->ne_event != NULL);
-	dbg("stop executing now-event %s for #%lu",
-	    ne->ne_name, ne->ne_serialno);
-	event_free(ne->ne_event);
-	pfree(ne);
+	passert(e->event != NULL);
+	event_free(e->event);
+	pfree(e);
 }
 
-void pluto_event_now(const char *name, so_serial_t serialno,
-		     pluto_event_now_cb *callback, void *context)
+void schedule_resume(const char *name, so_serial_t serialno,
+		     resume_cb *callback, void *context)
 {
-	struct now_event *ne = alloc_thing(struct now_event, name);
-	ne->ne_callback = callback;
-	ne->ne_context = context;
-	ne->ne_name = name;
-	ne->ne_serialno = serialno;
-	DBG(DBG_CONTROLMORE,
-	    DBG_log("scheduling now-event %s for #%lu",
-		    ne->ne_name, ne->ne_serialno));
+	pexpect(serialno != SOS_NOBODY);
+	struct resume_event tmp = {
+		.serialno = serialno,
+		.callback = callback,
+		.context = context,
+		.name = name,
+	};
+	struct resume_event *e = clone_thing(tmp, name);
+	dbg("scheduling resume %s for #%lu",
+	    e->name, e->serialno);
 
 	/*
 	 * Everything set up; arm and fire the timer's photon torpedo.
 	 * Event may have even run on another thread before the below
 	 * call returns.
 	 */
-	fire_timer_photon_torpedo(&ne->ne_event, schedule_event_now_cb, ne,
+	fire_timer_photon_torpedo(&e->event, resume_handler, e,
 				  deltatime(0)/*now*/);
 }
 
-struct pluto_event *pluto_event_add(evutil_socket_t fd, short events,
-				    event_callback_fn cb, void *arg,
-				    const deltatime_t *delay,
-				    const char *name)
+/*
+ * Schedule a callback now.
+ */
+
+struct callback_event {
+	so_serial_t serialno;
+	callback_cb *callback;
+	void *context;
+	const char *name;
+	struct event *event;
+};
+
+static void callback_handler(evutil_socket_t fd UNUSED,
+			     short events UNUSED, void *arg)
 {
+	struct callback_event *e = (struct callback_event *)arg;
+	/*
+	 * At one point, .event was was being set after the event was
+	 * enabled.  With multiple threads this resulted in a race
+	 * where the event ran before .event was set.  The pexpect()
+	 * followed by the passert() demonstrated this - the pexpect()
+	 * failed yet the passert() passed.
+	 */
+	pexpect(e->event != NULL);
+	if (e->serialno == SOS_NOBODY) {
+		dbg("processing callback %s", e->name);
+		threadtime_t start = threadtime_start();
+		e->callback(NULL, e->context);
+		threadtime_stop(&start, SOS_NOBODY, "callback %s", e->name);
+	} else {
+		/*
+		 * XXX: Don't confuse this and the "resume" code paths
+		 * - this does not unsuspend MD, "resume" does.
+		 */
+		dbg("processing callback %s for #%lu", e->name, e->serialno);
+		struct state *st = state_with_serialno(e->serialno);
+		if (st == NULL) {
+			threadtime_t start = threadtime_start();
+			e->callback(NULL, e->context);
+			threadtime_stop(&start, e->serialno, "callback %s", e->name);
+		} else {
+			so_serial_t old_state = push_cur_state(st);
+			statetime_t start = statetime_start(st);
+			e->callback(st, e->context);
+			statetime_stop(&start, "callback %s", e->name);
+			pop_cur_state(old_state);
+		}
+	}
+	passert(e->event != NULL);
+	event_free(e->event);
+	pfree(e);
+}
+
+extern void schedule_callback(const char *name, so_serial_t serialno,
+			      callback_cb *callback, void *context)
+{
+	struct callback_event tmp = {
+		.serialno = serialno,
+		.callback = callback,
+		.context = context,
+		.name = name,
+	};
+	struct callback_event *e = clone_thing(tmp, name);
+	dbg("scheduling callback %s (#%lu)", e->name, e->serialno);
+	/*
+	 * Everything set up; arm and fire the timer's photon torpedo.
+	 * Event may have even run on another thread before the below
+	 * call returns.
+	 */
+	fire_timer_photon_torpedo(&e->event, callback_handler, e,
+				  deltatime(0)/*now*/);
+}
+
+/*
+ * XXX: Some of the callers save the struct pluto_event reference but
+ * some do not.
+ */
+struct pluto_event *add_fd_read_event_handler(evutil_socket_t fd,
+					      event_callback_fn cb, void *arg,
+					      const char *name)
+{
+	passert(in_main_thread());
+	pexpect(fd >= 0);
 	struct pluto_event *e = alloc_thing(struct pluto_event, name);
-	dbg("%s: new %s-pe@%p", __func__, name, e);
+	dbg("%s: newref %s-pe@%p", __func__, name, e);
 	e->ev_type = EVENT_NULL;
 	e->ev_name = name;
 	link_pluto_event_list(e);
-	if (delay != NULL) {
-		e->ev_time = monotimesum(mononow(), *delay);
-	}
-	fire_event_photon_torpedo(&e->ev, fd, events, cb, arg, delay);
+	/*
+	 * Since this is on the main thread, and the event loop isn't
+	 * running, there can't be a race between the event being
+	 * added and the event firing.
+	 */
+	e->ev = event_new(pluto_eb, fd, EV_READ|EV_PERSIST, cb, arg);
+	passert(e->ev != NULL);
+	passert(event_add(e->ev, NULL) >= 0);
 	return e; /* compatible with pluto_event_new for the time being */
 }
 
 /*
  * dump list of events to whacklog
  */
-void timer_list(void)
+void timer_list(struct fd *whackfd)
 {
 	monotime_t nw = mononow();
 
-	whack_log(RC_LOG, "It is now: %jd seconds since monotonic epoch",
+	whack_comment(whackfd,
+		  "it is now: %jd seconds since monotonic epoch",
 		  monosecs(nw));
 
-	list_global_timers(nw);
-	list_signal_handlers();
+	list_global_timers(whackfd, nw);
+	list_signal_handlers(whackfd);
 
 	for (struct pluto_event *ev = pluto_events_head;
 	     ev != NULL; ev = ev->next) {
@@ -881,7 +1010,7 @@ void timer_list(void)
 				 monosecs(ev->ev_time),
 				 deltasecs(monotimediff(ev->ev_time, nw)));
 		}
-		whack_log(RC_LOG, "event %s is %s", ev->ev_name, buf);
+		whack_comment(whackfd, "event %s is %s", ev->ev_name, buf);
 	}
 
 	list_state_events(nw);
@@ -909,36 +1038,37 @@ void find_ifaces(bool rm_dead)
 
 		for (ifp = interfaces; ifp != NULL; ifp = ifp->next) {
 			delete_pluto_event(&ifp->pev);
-			ifp->pev = pluto_event_add(ifp->fd,
-					EV_READ | EV_PERSIST, comm_handle_cb,
-					ifp, NULL, "ethX");
-			dbg("setup callback for interface %s:%u fd %d",
-			    ifp->ip_dev->id_rname, ifp->port, ifp->fd);
+			ifp->pev = add_fd_read_event_handler(ifp->fd,
+							     comm_handle_cb,
+							     ifp, "ethX");
+			endpoint_buf b;
+			dbg("setup callback for interface %s %s fd %d",
+			    ifp->ip_dev->id_rname,
+			    str_endpoint(&ifp->local_endpoint, &b),
+			    ifp->fd);
 		}
 	}
 }
 
-struct iface_port *lookup_iface_ip(ip_address *ip, uint16_t port)
+struct iface_port *find_iface_port_by_local_endpoint(ip_endpoint *local_endpoint)
 {
-	struct iface_port *p;
-	for (p = interfaces; p != NULL; p = p->next) {
-		if (sameaddr(ip, &p->ip_addr) && (p->port == port))
+	for (struct iface_port *p = interfaces; p != NULL; p = p->next) {
+		if (endpoint_eq(*local_endpoint, p->local_endpoint)) {
 			return p;
+		}
 	}
-
 	return NULL;
 }
 
-void show_ifaces_status(void)
+void show_ifaces_status(struct fd *whackfd)
 {
 	struct iface_port *p;
 
 	for (p = interfaces; p != NULL; p = p->next) {
-		ipstr_buf b;
-
-		whack_log(RC_COMMENT, "interface %s/%s %s@%d",
+		endpoint_buf b;
+		whack_comment(whackfd, "interface %s/%s %s",
 			  p->ip_dev->id_vname, p->ip_dev->id_rname,
-			  ipstr(&p->ip_addr, &b), p->port);
+			  str_endpoint(&p->local_endpoint, &b));
 	}
 }
 
@@ -955,19 +1085,11 @@ void show_debug_status(void)
 	}
 }
 
-void show_fips_status(void)
+void show_fips_status(struct fd *whackfd)
 {
-#ifdef FIPS_CHECK
 	bool fips = libreswan_fipsmode();
-#else
-	bool fips = FALSE;
-#endif
-	whack_log(RC_COMMENT, "FIPS mode %s", !fips ?
-#ifdef FIPS_CHECK
+	whack_comment(whackfd, "FIPS mode %s", !fips ?
 		"disabled" :
-#else
-		"disabled [support not compiled in]" :
-#endif
 		IMPAIR(FORCE_FIPS) ? "enabled [forced]" : "enabled");
 }
 
@@ -1006,27 +1128,37 @@ struct pid_entry {
 	monotime_t start_time;
 };
 
-static size_t log_pid_entry(struct lswlog *buf, void *data)
+static void jam_pid_entry(struct lswlog *buf, const void *data)
 {
 	if (data == NULL) {
-		return lswlogs(buf, "NULL pid");
+		jam(buf, "NULL pid");
 	} else {
-		struct pid_entry *entry = (struct pid_entry*)data;
+		const struct pid_entry *entry = data;
 		passert(entry->magic == PID_MAGIC);
-		size_t size = 0;
 		if (entry->serialno != SOS_NOBODY) {
-			size += lswlogf(buf, "#%lu ", entry->serialno);
+			jam(buf, "#%lu ", entry->serialno);
 		}
-		size += lswlogf(buf, "%s pid %d", entry->name, entry->pid);
-		return size;
+		jam(buf, "%s pid %d", entry->name, entry->pid);
 	}
 }
 
-static size_t hash_pid_entry(void *data)
+static hash_t pid_hasher(const pid_t *pid)
 {
-	struct pid_entry *entry = (struct pid_entry*)data;
+	return hasher(shunk2(pid, sizeof(*pid)), zero_hash);
+}
+
+static hash_t pid_entry_hasher(const void *data)
+{
+	const struct pid_entry *entry = data;
 	passert(entry->magic == PID_MAGIC);
-	return entry->pid;
+	return pid_hasher(&entry->pid);
+}
+
+static struct list_entry *pid_entry_entry(void *data)
+{
+	struct pid_entry *entry = data;
+	passert(entry->magic == PID_MAGIC);
+	return &entry->hash_entry;
 }
 
 static struct list_head pid_entry_slots[23];
@@ -1034,9 +1166,10 @@ static struct list_head pid_entry_slots[23];
 static struct hash_table pids_hash_table = {
 	.info = {
 		.name = "pid table",
-		.log = log_pid_entry,
+		.jam = jam_pid_entry,
 	},
-	.hash = hash_pid_entry,
+	.hasher = pid_entry_hasher,
+	.entry = pid_entry_entry,
 	.nr_slots = elemsof(pid_entry_slots),
 	.slots = pid_entry_slots,
 };
@@ -1054,8 +1187,7 @@ static void add_pid(const char *name, so_serial_t serialno, pid_t pid,
 	new_pid->serialno = serialno;
 	new_pid->name = name;
 	new_pid->start_time = mononow();
-	add_hash_table_entry(&pids_hash_table,
-			     new_pid, &new_pid->hash_entry);
+	add_hash_table_entry(&pids_hash_table, new_pid);
 }
 
 int pluto_fork(const char *name, so_serial_t serialno,
@@ -1142,8 +1274,9 @@ static void childhandler_cb(void)
 				log_status(buf, status);
 			}
 			struct pid_entry *pid_entry = NULL;
-			struct list_head *head = hash_table_slot_by_hash(&pids_hash_table, child);
-			FOR_EACH_LIST_ENTRY_OLD2NEW(head, pid_entry) {
+			hash_t hash = pid_hasher(&child);
+			struct list_head *bucket = hash_table_bucket(&pids_hash_table, hash);
+			FOR_EACH_LIST_ENTRY_OLD2NEW(bucket, pid_entry) {
 				passert(pid_entry->magic == PID_MAGIC);
 				if (pid_entry->pid == child) {
 					break;
@@ -1162,7 +1295,7 @@ static void childhandler_cb(void)
 							    status, pid_entry->context);
 				} else if (st == NULL) {
 					LSWDBGP(DBG_CONTROLMORE, buf) {
-						log_pid_entry(buf, pid_entry);
+						jam_pid_entry(buf, pid_entry);
 						lswlogs(buf, " disappeared");
 					}
 					pid_entry->callback(NULL, NULL,
@@ -1184,8 +1317,7 @@ static void childhandler_cb(void)
 					release_any_md(&md);
 					pop_cur_state(old_state);
 				}
-				del_hash_table_entry(&pids_hash_table,
-						     &pid_entry->hash_entry);
+				del_hash_table_entry(&pids_hash_table, pid_entry);
 				pfree(pid_entry);
 			}
 			break;
@@ -1196,32 +1328,30 @@ static void childhandler_cb(void)
 #ifdef EVENT_SET_MEM_FUNCTIONS_IMPLEMENTED
 static void *libevent_malloc(size_t size)
 {
-	void *ptr = alloc_bytes(size, __func__);
-	dbg("%s: new ptr-libevent@%p size %zu", __func__, ptr, size);
+	void *ptr = uninitialized_malloc(size, __func__);
+	dbg("%s: newref ptr-libevent@%p size %zu", __func__, ptr, size);
 	return ptr;
 }
-static void *libevent_realloc(void *ptr, size_t size)
+static void *libevent_realloc(void *old, size_t size)
 {
-	if (ptr == NULL) {
-		ptr = alloc_bytes(size, __func__);
-		dbg("%s: new ptr-libevent@%p size %zu", __func__, ptr, size);
-		return ptr;
+	void *new = uninitialized_realloc(old, size, __func__);
+	if (old == NULL) {
+		dbg("%s: newref ptr-libevent@%p size %zu", __func__, new, size);
 	} else {
-		/* enough to keep count-pointers.awk happy */
-		dbg("%s: release ptr-libevent@%p", __func__, ptr);
-		resize_bytes(&ptr, size);
-		dbg("%s: new ptr-libevent@%p size %zu", __func__, ptr, size);
-		return ptr;
+		/* enough to keep refcnt.awk happy */
+		dbg("%s: delref ptr-libevent@%p", __func__, old);
+		dbg("%s: newref ptr-libevent@%p size %zu", __func__, new, size);
 	}
+	return new;
 }
 static void libevent_free(void *ptr)
 {
-	dbg("%s: release ptr-libevent@%p", __func__, ptr);
+	dbg("%s: delref ptr-libevent@%p", __func__, ptr);
 	pfree(ptr);
 }
 #endif
 
-void init_event_base(void)
+void init_server(void)
 {
 	/*
 	 * "... if you are going to call this function, you should do
@@ -1256,7 +1386,7 @@ void init_event_base(void)
 /* call_server listens for incoming ISAKMP packets and Whack messages,
  * and handles timer events.
  */
-void call_server(void)
+void call_server(char *conffile)
 {
 	init_hash_table(&pids_hash_table);
 
@@ -1266,8 +1396,7 @@ void call_server(void)
 
 	DBG(DBG_CONTROLMORE, DBG_log("Setting up events, loop start"));
 
-	pluto_event_add(ctl_fd, EV_READ | EV_PERSIST, whack_handle_cb, NULL,
-			NULL, "PLUTO_CTL_FD");
+	add_fd_read_event_handler(ctl_fd, whack_handle_cb, NULL, "PLUTO_CTL_FD");
 
 	install_signal_handlers();
 
@@ -1330,6 +1459,8 @@ void call_server(void)
 		char *newargv[] = { DISCARD_CONST(char *, "addconn"),
 				    DISCARD_CONST(char *, "--ctlsocket"),
 				    DISCARD_CONST(char *, ctl_addr.sun_path),
+				    DISCARD_CONST(char *, "--config"),
+				    DISCARD_CONST(char *, conffile),
 				    DISCARD_CONST(char *, "--autoall"), NULL };
 		char *newenv[] = { NULL };
 #if USE_VFORK
@@ -1425,6 +1556,89 @@ void call_server(void)
  */
 
 #if defined(IP_RECVERR) && defined(MSG_ERRQUEUE)
+static struct state *find_likely_sender(size_t packet_len, uint8_t *buffer,
+					size_t sizeof_buffer)
+{
+	if (packet_len > sizeof_buffer) {
+		/*
+		 * When the message is too big it is truncated.  But
+		 * what about the returned packet length?  Force
+		 * truncation.
+		 */
+		dbg("MSG_ERRQUEUE packet longer than %zu bytes; truncated", sizeof_buffer);
+		packet_len = sizeof_buffer;
+	}
+	if (packet_len < sizeof(struct isakmp_hdr)) {
+		dbg("MSG_ERRQUEUE packet is smaller than an IKE header");
+		return NULL;
+	}
+	pb_stream packet_pbs;
+	init_pbs(&packet_pbs, buffer, packet_len, __func__);
+	struct isakmp_hdr hdr;
+	if (!in_struct(&hdr, &raw_isakmp_hdr_desc, &packet_pbs, NULL)) {
+		/*
+		 * XXX:
+		 *
+		 * When in_struct() fails it logs an obscure and
+		 * typically context free error (for instance, cur_*
+		 * is unset when processing error messages); and
+		 * there's no clean for this or calling code to pass
+		 * in context.
+		 *
+		 * Fortunately, since the buffer is large enough to
+		 * hold the header, there's really not much left that
+		 * can trigger an error (everything in ISAKMP_HDR_DESC
+		 * that involves validation has its type set to FT_NAT
+		 * in RAW_ISAKMP_HDR_DESC).
+		 */
+		libreswan_log("MSG_ERRQUEUE packet IKE header is corrupt");
+		return NULL;
+	}
+	enum ike_version ike_version = hdr_ike_version(&hdr);
+	struct state *st;
+	switch (ike_version) {
+	case IKEv1:
+		/* might work? */
+		st = state_by_ike_spis(ike_version,
+				       NULL/*ignore-clonedfrom*/,
+				       NULL/*ignore-v1_msgid*/,
+				       NULL/*ignore-role*/,
+				       &hdr.isa_ike_spis,
+				       NULL, NULL,
+				       __func__);
+		break;
+	case IKEv2:
+	{
+		/*
+		 * Since this end sent the message mapping IKE_I is
+		 * straight forward.
+		 */
+		enum sa_role ike_role = (hdr.isa_flags & ISAKMP_FLAGS_v2_IKE_I) ? SA_INITIATOR : SA_RESPONDER;
+		so_serial_t clonedfrom = SOS_NOBODY;
+		st = state_by_ike_spis(ike_version,
+				       &clonedfrom/*IKE*/,
+				       NULL/*ignore-v1_msgid*/,
+				       &ike_role,
+				       &hdr.isa_ike_spis,
+				       NULL, NULL,
+				       __func__);
+		break;
+	}
+	default:
+		dbg("MSG_ERRQUEUE packet IKE header version unknown");
+		return NULL;
+	}
+	if (st == NULL) {
+		dbg("MSG_ERRQUEUE packet has no matching %s SA",
+		    enum_name(&ike_version_names, ike_version));
+		return NULL;
+	}
+	dbg("MSG_ERRQUEUE packet matches %s SA #%lu",
+	    enum_name(&ike_version_names, ike_version),
+	    st->st_serialno);
+	return st;
+}
+
 static bool check_msg_errqueue(const struct iface_port *ifp, short interest, const char *before)
 {
 	struct pollfd pfd;
@@ -1435,7 +1649,16 @@ static bool check_msg_errqueue(const struct iface_port *ifp, short interest, con
 
 	while (pfd.revents = 0,
 	       poll(&pfd, 1, -1) > 0 && (pfd.revents & POLLERR)) {
-		uint8_t buffer[3000]; /* hope that this is big enough */
+		/*
+		 * This buffer needs to be large enough to fit the IKE
+		 * header so that the IKE SPIs and flags can be
+		 * extracted and used to find the sender of the
+		 * message.
+		 *
+		 * Give it double that.
+		 */
+		uint8_t buffer[sizeof(struct isakmp_hdr) * 2];
+
 		union {
 			struct sockaddr sa;
 			struct sockaddr_in sa_in4;
@@ -1474,9 +1697,6 @@ static bool check_msg_errqueue(const struct iface_port *ifp, short interest, con
 
 		packet_len = recvmsg(ifp->fd, &emh, MSG_ERRQUEUE);
 
-		if (emh.msg_flags & MSG_TRUNC)
-			libreswan_log("recvmsg: received truncated IKE packet (MSG_TRUNC)");
-
 		if (packet_len == -1) {
 			if (errno == EAGAIN) {
 				/* 32 is picked from thin air */
@@ -1495,20 +1715,29 @@ static bool check_msg_errqueue(const struct iface_port *ifp, short interest, con
 					  ifp->ip_dev->id_rname, before);
 				break;
 			}
-		} else if (packet_len == (ssize_t)sizeof(buffer)) {
-			libreswan_log(
-				"MSG_ERRQUEUE message longer than %zu bytes; truncated",
-				sizeof(buffer));
-		} else if (packet_len >= (ssize_t)sizeof(struct isakmp_hdr)) {
-			sender = find_likely_sender((size_t) packet_len, buffer);
+		} else {
+			/*
+			 * Getting back a truncated IKE datagram a big
+			 * deal - find_likely_sender() only needs the
+			 * header when figuring out which state sent
+			 * the packet.
+			 */
+			if (DBGP(DBG_BASE) && (emh.msg_flags & MSG_TRUNC)) {
+				DBG_log("recvmsg(,, MSG_ERRQUEUE) on %s returned a truncated (IKE) datagram (MSG_TRUNC)",
+					ifp->ip_dev->id_rname);
+			}
+
+			sender = find_likely_sender((size_t) packet_len,
+						    buffer, sizeof(buffer));
 		}
 
 		if (DBGP(DBG_BASE)) {
 			if (packet_len > 0) {
-				DBG_dump("rejected packet:\n", buffer,
-					  packet_len);
+				DBG_log("rejected packet:");
+				DBG_dump(NULL, buffer, packet_len);
 			}
-			DBG_dump("control:\n", emh.msg_control,
+			DBG_log("control:");
+			DBG_dump(NULL, emh.msg_control,
 				 emh.msg_controllen);
 		}
 
@@ -1520,7 +1749,8 @@ static bool check_msg_errqueue(const struct iface_port *ifp, short interest, con
 		 */
 		passert(emh.msg_name == &from.sa);
 		if (DBGP(DBG_BASE)) {
-			DBG_dump("name:\n", emh.msg_name, emh.msg_namelen);
+			DBG_log("name:");
+			DBG_dump(NULL, emh.msg_name, emh.msg_namelen);
 		}
 
 		fromstr[0] = '\0'; /* usual case :-( */
@@ -1632,20 +1862,14 @@ static bool check_msg_errqueue(const struct iface_port *ifp, short interest, con
 					break;
 				}
 
-#define LOG(buf) lswlogf(buf,			\
-	"ERROR: asynchronous network error report on %s (sport=%d)%s, complainant %s: %s [errno %" PRIu32 ", origin %s]", \
-	ifp->ip_dev->id_rname, ifp->port,	\
-	fromstr,				\
-	offstr,					\
-	strerror(ee->ee_errno),			\
-	ee->ee_errno, orname);
-
+				enum stream logger;
 				if (packet_len == 1 && buffer[0] == 0xff &&
 				    (cur_debugging & DBG_NATT) == 0) {
 					/*
 					 * don't log NAT-T keepalive related errors unless NATT debug is
 					 * enabled
 					 */
+					logger = NO_STREAM;
 				} else if (sender != NULL && sender->st_connection != NULL &&
 					   LDISJOINT(sender->st_connection->policy, POLICY_OPPORTUNISTIC)) {
 					/*
@@ -1671,19 +1895,32 @@ static bool check_msg_errqueue(const struct iface_port *ifp, short interest, con
 					 * explicit parameter to the
 					 * logging system?
 					 */
-					LSWLOG_STATE(sender, buf) {
-						LOG(buf);
-					}
-				} else {
+					logger = ALL_STREAMS;
+				} else if (DBGP(DBG_BASE)) {
 					/*
 					 * Since this output is forced
 					 * using DBGP, report the
 					 * error using debug-log.
+					 *
+					 * A NULL SENDER here doesn't
+					 * matter - it just gets
+					 * ignored.
 					 */
-					LSWDBGP_STATE(DBG_OPPO, sender, buf) {
-						LOG(buf);
-					}
-#undef LOG
+					logger = DEBUG_STREAM;
+				} else {
+					logger = NO_STREAM;
+				}
+				if (logger != NO_STREAM) {
+					endpoint_buf epb;
+					log_message(logger,
+						    sender/*could be null*/, NULL/*md*/,
+						    "ERROR: asynchronous network error report on %s (%s)%s, complainant %s: %s [errno %" PRIu32 ", origin %s]",
+						    ifp->ip_dev->id_rname,
+						    str_endpoint(&ifp->local_endpoint, &epb),
+						    fromstr,
+						    offstr,
+						    strerror(ee->ee_errno),
+						    ee->ee_errno, orname);
 				}
 			} else if (cm->cmsg_level == SOL_IP &&
 				   cm->cmsg_type == IP_PKTINFO) {
@@ -1719,35 +1956,6 @@ void check_outgoing_msg_errqueue(const struct iface_port *ifp UNUSED,
 #if defined(IP_RECVERR) && defined(MSG_ERRQUEUE)
 	(void) check_msg_errqueue(ifp, POLLOUT, before);
 #endif	/* defined(IP_RECVERR) && defined(MSG_ERRQUEUE) */
-}
-
-bool should_fragment_ike_msg(struct state *st, size_t len, bool resending)
-{
-	if (st->st_interface != NULL && st->st_interface->ike_float)
-		len += NON_ESP_MARKER_SIZE;
-
-	/* This condition is complex.  Formatting is meant to help reader.
-	 *
-	 * Hugh thinks his banished style would make this earlier version
-	 * a little clearer:
-	 * len + natt_bonus
-	 *    >= (st->st_connection->addr_family == AF_INET
-	 *       ? ISAKMP_FRAG_MAXLEN_IPv4 : ISAKMP_FRAG_MAXLEN_IPv6)
-	 * && ((  resending
-	 *        && (st->st_connection->policy & POLICY_IKE_FRAG_ALLOW)
-	 *        && st->st_seen_fragvid)
-	 *     || (st->st_connection->policy & POLICY_IKE_FRAG_FORCE)
-	 *     || st->st_seen_fragments))
-	 *
-	 * ??? the following test does not account for natt_bonus
-	 */
-	return len >= (st->st_connection->addr_family == AF_INET ?
-		       ISAKMP_V1_FRAG_MAXLEN_IPv4 : ISAKMP_V1_FRAG_MAXLEN_IPv6) &&
-	    (   (resending &&
-			(st->st_connection->policy & POLICY_IKE_FRAG_ALLOW) &&
-			st->st_seen_fragvid) ||
-		(st->st_connection->policy & POLICY_IKE_FRAG_FORCE) ||
-		st->st_seen_fragments   );
 }
 
 bool ev_before(struct pluto_event *pev, deltatime_t delay) {

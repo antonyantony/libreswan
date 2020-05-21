@@ -25,7 +25,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include <libreswan.h>
 #include "libreswan/pfkeyv2.h"
 
 #include "sysdep.h"
@@ -59,10 +58,20 @@
 #include "ip_endpoint.h"
 #include "nat_traversal.h"
 
-#ifdef HAVE_LABELED_IPSEC
 
+#ifndef USE_LABELED_IPSEC
+
+static bool parse_secctx_attr(pb_stream *pbs UNUSED, struct state *st UNUSED)
+{
+	/*
+	 * We received a security label but don't support it,
+	 * so fail the IKE negotiation
+	 */
+	loglog(RC_LOG_SERIOUS, "Received Sec Ctx Textual Label but support for labeled ipsec not compiled in");
+	return FALSE;
+}
+#else
 #include "security_selinux.h"
-
 static bool parse_secctx_attr(pb_stream *pbs, struct state *st)
 {
 	struct xfrm_user_sec_ctx_ike uctx;
@@ -72,15 +81,13 @@ static bool parse_secctx_attr(pb_stream *pbs, struct state *st)
 
 	if (pbs_left(pbs) != uctx.ctx.ctx_len) {
 		/* ??? should we ignore padding? */
-		/* ??? is this the right way to log an error? */
-		libreswan_log("Sec Ctx Textual Label length mismatch (length=%u; packet space = %u)",
+		loglog(RC_LOG_SERIOUS, "Sec Ctx Textual Label length mismatch (length=%u; packet space = %u)",
 			uctx.ctx.ctx_len, (unsigned)pbs_left(pbs));
 		return FALSE;
 	}
 
 	if (uctx.ctx.ctx_len > MAX_SECCTX_LEN) {
-		/* ??? is this the right way to log an error? */
-		libreswan_log("Sec Ctx Textual Label too long (%u > %u)",
+		loglog(RC_LOG_SERIOUS, "Sec Ctx Textual Label too long (%u > %u)",
 			uctx.ctx.ctx_len, MAX_SECCTX_LEN);
 		return FALSE;
 	}
@@ -98,38 +105,34 @@ static bool parse_secctx_attr(pb_stream *pbs, struct state *st)
 	if (uctx.ctx.ctx_len == 0 ||
 	    uctx.sec_ctx_value[uctx.ctx.ctx_len - 1] != '\0') {
 		if (uctx.ctx.ctx_len == MAX_SECCTX_LEN) {
-			/* ??? is this the right way to log an error? */
-			libreswan_log("Sec Ctx Textual Label missing terminal NUL and there is no space to add it");
+			loglog(RC_LOG_SERIOUS, "Sec Ctx Textual Label missing terminal NUL and there is no space to add it");
 			return FALSE;
 		}
-		/* ??? is this the right way to log a warning? */
-		libreswan_log("Sec Ctx Textual Label missing terminal NUL; we are adding it");
+		DBG_log("Sec Ctx Textual Label missing terminal NUL; we are adding it");
 		uctx.sec_ctx_value[uctx.ctx.ctx_len] = '\0';
 		uctx.ctx.ctx_len++;
 	}
 
 	if (strlen(uctx.sec_ctx_value) + 1 != uctx.ctx.ctx_len) {
-		/* ??? is this the right way to log a warning? */
-		libreswan_log("Error: Sec Ctx Textual Label contains embedded NUL");
+		loglog(RC_LOG_SERIOUS, "Error: Sec Ctx Textual Label contains embedded NUL");
 		return FALSE;
 	}
 
-	if (st->sec_ctx == NULL && st->st_state == STATE_QUICK_R0) {
+	if (st->sec_ctx == NULL && st->st_state->kind == STATE_QUICK_R0) {
 		DBG_log("Received sec ctx in responder state");
 
 		/*
 		 * verify that the received security label is
 		 * within range of this connection's policy's security label
 		 */
-		if (!st->st_connection->labeled_ipsec) {
-			libreswan_log("This state (connection) is not labeled ipsec enabled, so cannot proceed");
+		if (st->st_connection->policy_label == NULL) {
+			loglog(RC_LOG_SERIOUS, "This state (connection) is not labeled ipsec enabled, so cannot proceed");
 			return FALSE;
-		} else if (st->st_connection->policy_label != NULL &&
-			   within_range(uctx.sec_ctx_value,
+		} else if (within_range(uctx.sec_ctx_value,
 					 st->st_connection->policy_label)) {
 			DBG_log("security context verification succeeded");
 		} else {
-			libreswan_log("security context verification failed (perhaps policy_label is not confgured for this connection)");
+			loglog(RC_LOG_SERIOUS, "security context verification failed");
 			return FALSE;
 		}
 		/*
@@ -137,23 +140,22 @@ static bool parse_secctx_attr(pb_stream *pbs, struct state *st)
 		 * It would be reasonable to clone only the part that's used.
 		 */
 		st->sec_ctx = clone_thing(uctx, "struct xfrm_user_sec_ctx_ike");
-	} else if (st->st_state == STATE_QUICK_R0) {
+	} else if (st->st_state->kind == STATE_QUICK_R0) {
 		/* ??? can this happen? */
 		/* ??? should we check that this label and first one match? */
 		DBG_log("Received sec ctx in responder state again: ignoring this one");
-	} else if (st->st_state == STATE_QUICK_I1) {
+	} else if (st->st_state->kind == STATE_QUICK_I1) {
 		DBG(DBG_PARSING,
 		    DBG_log("Initiator state received security context from responder state, now verifying if both are same"));
 		if (streq(st->sec_ctx->sec_ctx_value, uctx.sec_ctx_value)) {
 			DBG_log("security contexts are verified in the initiator state");
 		} else {
-			libreswan_log("security context verification failed in the initiator state (shouldn't reach here unless responder (or something in between) is modifying the security context");
+			loglog(RC_LOG_SERIOUS, "security context verification failed in the initiator state (shouldn't reach here unless responder (or something in between) is modifying the security context");
 			return FALSE;
 		}
 	}
 	return TRUE;
 }
-
 #endif
 
 /** output an attribute (within an SA) */
@@ -251,7 +253,7 @@ static bool ikev1_verify_esp(const struct connection *c,
 		loglog(RC_LOG_SERIOUS,
 		       "kernel algorithm does not like: %s key_len %u is incorrect",
 		       ta->ta_encrypt->common.fqn, ta->enckeylen);
-		ip_endpoint_buf epb;
+		endpoint_buf epb;
 		loglog(RC_LOG_SERIOUS,
 		       "unsupported ESP Transform %s from %s",
 		       ta->ta_encrypt->common.fqn,
@@ -560,7 +562,7 @@ bool ikev1_out_sa(pb_stream *outs,
 
 			{
 				ipsec_spi_t *spi_ptr = NULL;
-				int proto = 0;
+				const struct ip_protocol *proto = NULL;
 				bool *spi_generated = NULL;
 
 				switch (p->protoid) {
@@ -582,7 +584,7 @@ bool ikev1_out_sa(pb_stream *outs,
 					attr_val_descs = ipsec_attr_val_descs;
 					spi_ptr = &st->st_ah.our_spi;
 					spi_generated = &ah_spi_generated;
-					proto = IPPROTO_AH;
+					proto = SA_AH;
 					break;
 
 				case PROTO_IPSEC_ESP:
@@ -594,7 +596,7 @@ bool ikev1_out_sa(pb_stream *outs,
 					attr_val_descs = ipsec_attr_val_descs;
 					spi_ptr = &st->st_esp.our_spi;
 					spi_generated = &esp_spi_generated;
-					proto = IPPROTO_ESP;
+					proto = SA_ESP;
 					break;
 
 				case PROTO_IPCOMP:
@@ -735,15 +737,13 @@ bool ikev1_out_sa(pb_stream *outs,
 						      &trans_pbs))
 						goto fail;
 
-#ifdef HAVE_LABELED_IPSEC
 					if (st->sec_ctx != NULL &&
-					    st->st_connection->labeled_ipsec) {
+					    st->st_connection->policy_label != NULL) {
 						passert(st->sec_ctx->ctx.ctx_len <= MAX_SECCTX_LEN);
 
 						pb_stream val_pbs;
 						struct isakmp_attribute attr = {
-							.isaat_af_type =
-								secctx_attr_type |
+							.isaat_af_type = secctx_attr_type |
 								ISAKMP_ATTR_AF_TLV,
 						};
 
@@ -763,7 +763,6 @@ bool ikev1_out_sa(pb_stream *outs,
 
 						close_output_pbs(&val_pbs);
 					}
-#endif
 				}
 
 				/*
@@ -1364,24 +1363,17 @@ psk_common:
 
 						if (pss == NULL)
 						{
-							char mid[IDTOA_BUF],
-							     hid[IDTOA_BUF];
-
-							idtoa(&c->spd.this.id, mid,
-							      sizeof(mid));
-							if (remote_id_was_instantiated(c)) {
-								strcpy(hid,
-								       "%any");
-							} else {
-								idtoa(&c->spd.that.id, hid,
-								      sizeof(hid));
-							}
+							id_buf mid;
+							id_buf hid;
 
 							ugh = builddiag(
 								"Can't authenticate: no preshared key found for `%s' and `%s'",
-								mid, hid);
+								str_id(&c->spd.this.id, &mid),
+								remote_id_was_instantiated(c) ?
+									"%any" :
+									str_id(&c->spd.that.id, &hid));
 						} else {
-							DBG(DBG_PRIVATE, DBG_dump_chunk("User PSK:", *pss));
+							DBG(DBG_PRIVATE, DBG_dump_hunk("User PSK:", *pss));
 						}
 						ta.auth = OAKLEY_PRESHARED_KEY;
 					}
@@ -1579,7 +1571,6 @@ rsasig_common:
 							key_size_min);
 					}
 				}
-
 			}
 
 			/*
@@ -1835,11 +1826,9 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 {
 	lset_t seen_attrs = LEMPTY,
 	       seen_durations = LEMPTY;
-#ifdef HAVE_LABELED_IPSEC
 	bool seen_secctx_attr = FALSE;
-#endif
 	uint16_t life_type = 0;	/* initialized to silence GCC */
-	const struct oakley_group_desc *pfs_group = NULL;
+	const struct dh_desc *pfs_group = NULL;
 
 	if (!in_struct(trans, trans_desc, prop_pbs, trans_pbs))
 		return FALSE;
@@ -1907,7 +1896,6 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 		ty = a.isaat_af_type & ISAKMP_ATTR_RTYPE_MASK;
 		val = a.isaat_lv;
 
-#ifdef HAVE_LABELED_IPSEC
 		if (ty == secctx_attr_type) {
 			if (seen_secctx_attr) {
 				loglog(RC_LOG_SERIOUS,
@@ -1917,9 +1905,7 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 			}
 			seen_secctx_attr = TRUE;
 			vdesc = NULL;
-		} else
-#endif
-		{
+		} else {
 			passert(ty < LELEM_ROOF);
 			if (LHAS(seen_attrs, ty)) {
 				loglog(RC_LOG_SERIOUS,
@@ -2006,10 +1992,8 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 				 * SA_LIFE_DURATION_MAXIMUM.
 				 */
 				unsigned int lifemax = IPSEC_SA_LIFETIME_MAXIMUM;
-#ifdef FIPS_CHECK
 				if (libreswan_fipsmode())
 					lifemax = FIPS_IPSEC_SA_LIFETIME_MAXIMUM;
-#endif
 				attrs->life_seconds = val > lifemax ?
 					deltatime(lifemax) :
 				    (time_t)val > deltasecs(st->st_connection->sa_ipsec_life_seconds) ?
@@ -2121,16 +2105,13 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 			break;
 
 		default:
-#ifdef HAVE_LABELED_IPSEC
 			if (a.isaat_af_type ==
 			    (secctx_attr_type | ISAKMP_ATTR_AF_TLV)) {
 				pb_stream *pbs = &attr_pbs;
 
 				if (!parse_secctx_attr(pbs, st))
 					return FALSE;
-			} else
-#endif
-			{
+			} else {
 				loglog(RC_LOG_SERIOUS,
 				       "unsupported IPsec attribute %s",
 				       enum_show(&ipsec_attr_names, a.isaat_af_type));
@@ -2272,7 +2253,7 @@ static void echo_proposal(struct isakmp_proposal r_proposal,    /* proposal to e
 	} else {
 		pi->our_spi = get_ipsec_spi(pi->attrs.spi,
 					    r_proposal.isap_protoid == PROTO_IPSEC_AH ?
-						IPPROTO_AH : IPPROTO_ESP,
+						SA_AH : SA_ESP,
 					    sr,
 					    tunnel_mode);
 		/* XXX should check for errors */
@@ -2665,7 +2646,7 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 					    !ah_seen) {
 						LSWDBGP(DBG_PARSING, buf) {
 							lswlogs(buf, "ESP from ");
-							fmt_endpoint(buf, &c->spd.that.host_addr);
+							jam_endpoint(buf, &c->spd.that.host_addr);
 							lswlogs(buf, " must either have AUTH or be combined with AH");
 						};
 						continue; /* try another */

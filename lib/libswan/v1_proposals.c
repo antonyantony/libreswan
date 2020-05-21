@@ -37,7 +37,7 @@ typedef struct v1_proposal merge_alg_default_t(struct v1_proposal proposal,
 static struct v1_proposal merge_dh_default(struct v1_proposal proposal,
 					   const struct ike_alg *default_alg)
 {
-	proposal.dh = oakley_group_desc(default_alg);
+	proposal.dh = dh_desc(default_alg);
 	return proposal;
 }
 
@@ -116,14 +116,14 @@ static bool add_proposal(struct proposal_parser *parser,
 {
 	struct proposal *new = alloc_proposal(parser);
 	if (proposal->encrypt != NULL) {
-		append_algorithm(parser, new, PROPOSAL_encrypt,
+		append_algorithm(parser, new,
 				 &proposal->encrypt->common,
 				 proposal->enckeylen);
 	}
 #define A(NAME)								\
 	if (proposal->NAME != NULL) {					\
-		append_algorithm(parser, new, PROPOSAL_##NAME,		\
-				 &proposal->NAME->common, 0);		\
+		append_algorithm(parser, new, &proposal->NAME->common,	\
+				 0/*enckeylen*/);			\
 	}
 	A(prf);
 	A(integ);
@@ -238,39 +238,6 @@ static bool merge_default_proposals(struct proposal_parser *parser,
 				     proposals, proposal);
 }
 
-static const struct ike_alg *lookup_byname(struct proposal_parser *parser,
-					   alg_byname_fn *alg_byname,
-					   shunk_t name,
-					   size_t key_bit_length,
-					   shunk_t print_name,
-					   const char *what)
-{
-	if (name.len > 0) {
-		if (alg_byname != NULL) {
-			const struct ike_alg *alg = alg_byname(parser, name, key_bit_length,
-							       print_name);
-			if (alg == NULL) {
-				DBG(DBG_PROPOSAL_PARSER,
-				    DBG_log("%s_byname('"PRI_SHUNK"') failed: %s",
-					    what, PRI_shunk(name),
-					    parser->error));
-				passert(parser->error[0] != '\0');
-				return NULL;
-			}
-			DBG(DBG_PROPOSAL_PARSER,
-			    DBG_log("%s_byname('"PRI_SHUNK"') returned '%s'",
-				    what, PRI_shunk(name), alg->name));
-			return alg;
-		} else {
-			DBG(DBG_PROPOSAL_PARSER,
-			    DBG_log("ignoring %s '"PRI_SHUNK"'",
-				    what, PRI_shunk(name)));
-			return NULL;
-		}
-	}
-	return NULL;
-}
-
 static int parse_eklen(struct proposal_parser *parser, shunk_t buf)
 {
 	/* convert -<eklen> if present */
@@ -278,12 +245,12 @@ static int parse_eklen(struct proposal_parser *parser, shunk_t buf)
 	long eklen = strtol(buf.ptr, &end, 10);
 	if (buf.ptr + buf.len != end) {
 		proposal_error(parser, "encryption key length '"PRI_SHUNK"' contains a non-numeric character",
-			       PRI_shunk(buf));
+			       pri_shunk(buf));
 		return 0;
 	}
 	if (eklen >= INT_MAX) {
 		proposal_error(parser, "encryption key length '"PRI_SHUNK"' WAY too big",
-			       PRI_shunk(buf));
+			       pri_shunk(buf));
 		return 0;
 	}
 	if (eklen == 0) {
@@ -311,7 +278,7 @@ static bool parse_encrypt(struct proposal_parser *parser,
 {
 	shunk_t ealg = (*tokens)[0].alg;
 	shunk_t eklen = (*tokens)[1].alg;
-	if (eklen.len > 0 && isdigit(eklen.ptr[0])) {
+	if (eklen.len > 0 && shunk_isdigit(eklen, 0)) {
 		/* assume <ealg>-<eklen> */
 		int enckeylen = parse_eklen(parser, eklen);
 		if (enckeylen <= 0) {
@@ -322,10 +289,9 @@ static bool parse_encrypt(struct proposal_parser *parser,
 		shunk_t print_name = shunk2(ealg.ptr, eklen.ptr + eklen.len - ealg.ptr);
 		proposal->enckeylen = enckeylen;
 		proposal->encrypt =
-			encrypt_desc(lookup_byname(parser,
-						   encrypt_alg_byname,
-						   ealg, proposal->enckeylen,
-						   print_name, "encryption"));
+			encrypt_desc(encrypt_alg_byname(parser,
+							ealg, proposal->enckeylen,
+							print_name));
 		/* Was <ealg>-<eklen> rejected? */
 		if (parser->error[0] != '\0') {
 			return false;
@@ -336,29 +302,30 @@ static bool parse_encrypt(struct proposal_parser *parser,
 	/* try <ealg> */
 	shunk_t print_name = ealg;
 	proposal->encrypt =
-		encrypt_desc(lookup_byname(parser,
-					   encrypt_alg_byname,
-					   ealg, proposal->enckeylen,
-					   print_name, "encryption"));
+		encrypt_desc(encrypt_alg_byname(parser,
+						ealg, proposal->enckeylen,
+						print_name));
 	if (parser->error[0] != '\0') {
 		/*
 		 * Could it be <ealg><eklen> or <ealg>_<eklen>?  Work
 		 * backwards skipping any digits.
 		 */
-		shunk_t end = shunk2(ealg.ptr + ealg.len, 0);
-		while (end.ptr > ealg.ptr && isdigit(end.ptr[-1])) {
-			end.ptr--;
-			end.len++;
+		size_t end = ealg.len;
+		while (end > 0 && shunk_isdigit(ealg, end-1)) {
+			end--;
 		}
-		if (end.len == 0) {
+		if (end == ealg.len) {
 			/*
-			 * no trailing <eklen> and <ealg> was rejected
+			 * no trailing <eklen> digits and <ealg> was
+			 * rejected by above); error still contains
+			 * message from not finding just <ealg>.
 			 */
 			passert(parser->error[0] != '\0');
 			return false;
 		}
 		/* try to convert */
-		int enckeylen = parse_eklen(parser, end);
+		shunk_t eklen = shunk_slice(ealg, end, ealg.len);
+		int enckeylen = parse_eklen(parser, eklen);
 		if (enckeylen <= 0) {
 			passert(parser->error[0] != '\0');
 			return false;
@@ -368,17 +335,16 @@ static bool parse_encrypt(struct proposal_parser *parser,
 		 * trim <eklen> from <ealg>; and then trim any
 		 * trailing '_'
 		 */
-		ealg.len = end.ptr - ealg.ptr;
-		if (end.ptr > ealg.ptr && end.ptr[-1] == '_') {
-			ealg.len -= 1;
+		ealg = shunk_slice(ealg, 0, end);
+		if (shunk_ischar(ealg, ealg.len-1, "_")) {
+			ealg = shunk_slice(ealg, 0, end-1);
 		}
 		/* try again */
 		parser->error[0] = '\0';
 		proposal->encrypt =
-			encrypt_desc(lookup_byname(parser,
-						   encrypt_alg_byname,
-						   ealg, proposal->enckeylen,
-						   print_name, "encryption"));
+			encrypt_desc(encrypt_alg_byname(parser,
+							ealg, proposal->enckeylen,
+							print_name));
 		if (parser->error[0] != '\0') {
 			return false;
 		}
@@ -395,11 +361,11 @@ static bool parser_proposals_add(struct proposal_parser *parser,
 		lswlogs(buf, "algs:");
 		for (struct token *token = tokens; token->alg.ptr != NULL; token++) {
 			lswlogf(buf, " algs[%tu] = '"PRI_SHUNK"'",
-				token - tokens, PRI_shunk(token->alg));
+				token - tokens, pri_shunk(token->alg));
 		}
 	}
 
-	bool lookup_encrypt = parser->protocol->encrypt_alg_byname != NULL;
+	bool lookup_encrypt = parser->protocol->encrypt;
 	if (!lookup_encrypt && IMPAIR(PROPOSAL_PARSER)) {
 		/* Force lookup, will discard any error. */
 		lookup_encrypt = true;
@@ -416,7 +382,7 @@ static bool parser_proposals_add(struct proposal_parser *parser,
 		}
 	}
 
-	bool lookup_prf = parser->protocol->prf_alg_byname != NULL;
+	bool lookup_prf = parser->protocol->prf;
 	if (!lookup_prf && IMPAIR(PROPOSAL_PARSER)) {
 		/*
 		 * When impaired, only force PRF lookup when the the
@@ -428,17 +394,14 @@ static bool parser_proposals_add(struct proposal_parser *parser,
 		shunk_t prf = tokens[0].alg;
 		shunk_t integ = tokens[1].alg;
 		if (prf.ptr != NULL && integ.ptr != NULL) {
-			lookup_prf = (lookup_byname(parser, integ_alg_byname,
-						    integ, 0, integ, "integrity")
+			lookup_prf = (alg_byname(parser, IKE_ALG_INTEG, integ, integ)
 				      != NULL);
 			parser->error[0] = '\0';
 		}
 	}
 	if (lookup_prf && tokens->alg.ptr != NULL && tokens->sep != ';') {
 		shunk_t prf = tokens[0].alg;
-		proposal.prf = prf_desc(lookup_byname(parser,
-						      prf_alg_byname,
-						      prf, 0, prf, "PRF"));
+		proposal.prf = prf_desc(alg_byname(parser, IKE_ALG_PRF, prf, prf));
 		if (parser->error[0] != '\0') {
 			return false;
 		}
@@ -456,17 +419,14 @@ static bool parser_proposals_add(struct proposal_parser *parser,
 	 * using sha1 as integrity.  ike-aes_gcm-none-sha1 would
 	 * clarify this but that makes for a fun parse.
 	 */
-	bool lookup_integ = (parser->protocol->prf_alg_byname == NULL &&
-			     parser->protocol->integ_alg_byname != NULL);
+	bool lookup_integ = (!parser->protocol->prf && parser->protocol->integ);
 	if (!lookup_integ && IMPAIR(PROPOSAL_PARSER)) {
 		/* force things */
 		lookup_integ = true;
 	}
 	if (lookup_integ && tokens->alg.ptr != NULL && tokens->sep != ';') {
 		shunk_t integ = tokens[0].alg;
-		proposal.integ = integ_desc(lookup_byname(parser,
-							  integ_alg_byname,
-							  integ, 0, integ, "integrity"));
+		proposal.integ = integ_desc(alg_byname(parser, IKE_ALG_INTEG, integ, integ));
 		if (parser->error[0] != '\0') {
 			if (tokens[1].alg.ptr != NULL) {
 				/*
@@ -478,9 +438,9 @@ static bool parser_proposals_add(struct proposal_parser *parser,
 				return false;
 			}
 			if (tokens[1].alg.ptr == NULL &&
-			    parser->protocol->prf_alg_byname == NULL) {
+			    !parser->protocol->prf) {
 				/*
-				 * Only one arg, integrity is prefered
+				 * Only one arg, integrity is preferred
 				 * to DH (and no PRF); error applies.
 				 */
 				passert(parser->error[0] != '\0');
@@ -493,13 +453,10 @@ static bool parser_proposals_add(struct proposal_parser *parser,
 		}
 	}
 
-	bool lookup_dh = parser->protocol->dh_alg_byname || IMPAIR(PROPOSAL_PARSER);
+	bool lookup_dh = parser->protocol->dh || IMPAIR(PROPOSAL_PARSER);
 	if (lookup_dh && tokens->alg.ptr != NULL) {
 		shunk_t dh = tokens[0].alg;
-		proposal.dh = oakley_group_desc(lookup_byname(parser,
-							      dh_alg_byname,
-							      dh, 0,
-							      dh, "DH"));
+		proposal.dh = dh_desc(alg_byname(parser, IKE_ALG_DH, dh, dh));
 		if (parser->error[0] != '\0') {
 			return false;
 		}
@@ -508,7 +465,7 @@ static bool parser_proposals_add(struct proposal_parser *parser,
 
 	if (tokens->alg.ptr != NULL) {
 		proposal_error(parser, "'"PRI_SHUNK"' unexpected",
-			       PRI_shunk(tokens[0].alg));
+			       pri_shunk(tokens[0].alg));
 		return false;
 	}
 
@@ -525,15 +482,7 @@ bool v1_proposals_parse_str(struct proposal_parser *parser,
 {
 	DBG(DBG_PROPOSAL_PARSER,
 	    DBG_log("parsing '"PRI_SHUNK"' for %s",
-		    PRI_shunk(alg_str), parser->protocol->name));
-
-	/* use default if no string */
-	if (alg_str.ptr == NULL) {
-		const struct v1_proposal proposal = {
-			.protocol = parser->protocol,
-		};
-		return merge_default_proposals(parser, proposals, &proposal);
-	}
+		    pri_shunk(alg_str), parser->protocol->name));
 
 	if (alg_str.len == 0) {
 		/* XXX: hack to keep testsuite happy */
@@ -544,13 +493,13 @@ bool v1_proposals_parse_str(struct proposal_parser *parser,
 	shunk_t prop_ptr = alg_str;
 	do {
 		/* find the next proposal */
-		shunk_t prop = shunk_strsep(&prop_ptr, ",");
+		shunk_t prop = shunk_token(&prop_ptr, NULL, ",");
 		/* parse it */
 		struct token tokens[8];
 		zero(&tokens);
 		struct token *token = tokens;
-		char last_sep = '\0';
 		shunk_t alg_ptr = prop;
+		char last_sep = '\0';
 		do {
 			if (token + 1 >= tokens+elemsof(tokens)) {
 				/* space for NULL? */
@@ -558,12 +507,13 @@ bool v1_proposals_parse_str(struct proposal_parser *parser,
 				return false;
 			}
 			/* find the next alg */
-			shunk_t alg = shunk_strsep(&alg_ptr, "-;,");
+			char alg_sep;
+			shunk_t alg = shunk_token(&alg_ptr, &alg_sep, "-;,");
 			*token++ = (struct token) {
 				.alg = alg,
 				.sep = last_sep,
 			};
-			last_sep = alg.ptr[alg.len]; /* save separator */
+			last_sep = alg_sep; /* separator before this token */
 		} while (alg_ptr.len > 0);
 		struct v1_proposal proposal = {
 			.protocol = parser->protocol,

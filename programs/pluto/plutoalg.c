@@ -21,7 +21,6 @@
 
 #include <sys/types.h>
 #include <stdlib.h>
-#include <libreswan.h>
 #include <libreswan/pfkeyv2.h>
 #include <libreswan/passert.h>
 
@@ -208,15 +207,15 @@ static struct db_context *kernel_alg_db_new(struct child_proposals proposals,
 	return ctx_new;
 }
 
-void kernel_alg_show_status(void)
+void kernel_alg_show_status(struct fd *whackfd)
 {
-	whack_log(RC_COMMENT, "Kernel algorithms supported:");
-	whack_log(RC_COMMENT, " "); /* spacer */
+	whack_comment(whackfd, "Kernel algorithms supported:");
+	whack_comment(whackfd, " "); /* spacer */
 
 	for (const struct encrypt_desc **alg_p = next_kernel_encrypt_desc(NULL);
 	     alg_p != NULL; alg_p = next_kernel_encrypt_desc(alg_p)) {
 		const struct encrypt_desc *alg = *alg_p;
-		whack_log(RC_COMMENT,
+		whack_comment(whackfd,
 			  "algorithm ESP encrypt: name=%s, keysizemin=%d, keysizemax=%d",
 			  alg->common.fqn,
 			  encrypt_min_key_bit_length(alg),
@@ -226,16 +225,18 @@ void kernel_alg_show_status(void)
 	for (const struct integ_desc **alg_p = next_kernel_integ_desc(NULL);
 	     alg_p != NULL; alg_p = next_kernel_integ_desc(alg_p)) {
 		const struct integ_desc *alg = *alg_p;
-		whack_log(RC_COMMENT,
+		whack_comment(whackfd,
 			  "algorithm AH/ESP auth: name=%s, key-length=%zu",
 			  alg->common.fqn,
 			  alg->integ_keymat_size * BITS_PER_BYTE);
 	}
 
-	whack_log(RC_COMMENT, " "); /* spacer */
+	whack_comment(whackfd, " "); /* spacer */
 }
 
-void kernel_alg_show_connection(const struct connection *c, const char *instance)
+void kernel_alg_show_connection(struct fd *whackfd,
+				const struct connection *c,
+				const char *instance)
 {
 	const char *satype;
 
@@ -267,7 +268,7 @@ void kernel_alg_show_connection(const struct connection *c, const char *instance
 		 * If this is NULL and PFS is required then callers fall back to using
 		 * the parent's DH algorithm.
 		 */
-		const struct oakley_group_desc *dh = ikev1_quick_pfs(c->child_proposals);
+		const struct dh_desc *dh = ikev1_quick_pfs(c->child_proposals);
 		if (dh != NULL) {
 			pfsbuf = dh->common.fqn;
 		} else {
@@ -277,7 +278,13 @@ void kernel_alg_show_connection(const struct connection *c, const char *instance
 		pfsbuf = "<N/A>";
 	}
 
-	if (c->child_proposals.p != NULL) {
+	/*
+	 * XXX: don't show the default proposal suite (assuming it is
+	 * known).  Mainly so that test output doesn't get churned
+	 * (originally it wasn't shown because it wasn't known).
+	 */
+	if (c->child_proposals.p != NULL &&
+	    !default_proposals(c->child_proposals.p)) {
 		LSWLOG_WHACK(RC_COMMENT, buf) {
 			/*
 			 * If DH (PFS) was specified in the esp= or
@@ -305,7 +312,7 @@ void kernel_alg_show_connection(const struct connection *c, const char *instance
 	const struct state *st = state_with_serialno(c->newest_ipsec_sa);
 
 	if (st != NULL && st->st_esp.present) {
-		whack_log(RC_COMMENT,
+		whack_comment(whackfd,
 			  "\"%s\"%s:   %s algorithm newest: %s_%03d-%s; pfsgroup=%s",
 			  c->name,
 			  instance, satype,
@@ -316,7 +323,7 @@ void kernel_alg_show_connection(const struct connection *c, const char *instance
 	}
 
 	if (st != NULL && st->st_ah.present) {
-		whack_log(RC_COMMENT,
+		whack_comment(whackfd,
 			  "\"%s\"%s:   %s algorithm newest: %s; pfsgroup=%s",
 			  c->name,
 			  instance, satype,

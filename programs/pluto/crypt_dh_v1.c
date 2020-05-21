@@ -49,7 +49,6 @@ void cancelled_v1_dh(struct pcr_v1_dh *dh)
 	release_symkey("cancelled IKEv1 DH", "skeyid_a", &dh->skeyid_a);
 	release_symkey("cancelled IKEv1 DH", "skeyid_e", &dh->skeyid_e);
 	release_symkey("cancelled IKEv1 DH", "enc_key", &dh->enc_key);
-	freeanychunk(dh->new_iv);
 }
 
 /*
@@ -57,7 +56,7 @@ void cancelled_v1_dh(struct pcr_v1_dh *dh)
  */
 void start_dh_v1_secretiv(crypto_req_cont_func fn, const char *name,
 			  struct state *st, enum original_role role,
-			  const struct oakley_group_desc *oakley_group2)
+			  const struct dh_desc *oakley_group2)
 {
 	const chunk_t *pss = get_psk(st->st_connection);
 
@@ -114,18 +113,14 @@ bool finish_dh_secretiv(struct state *st,
 	if (st->st_shared_nss == NULL) {
 		return FALSE;
 	} else {
-		passert(dhr->new_iv.len <= MAX_DIGEST_LEN);
-		passert(dhr->new_iv.len > 0);
-		memcpy(st->st_new_iv, dhr->new_iv.ptr, dhr->new_iv.len);
-		st->st_new_iv_len = dhr->new_iv.len;
-		freeanychunk(dhr->new_iv);
-		return TRUE;
+		st->st_v1_new_iv = dhr->new_iv;
+		return true;
 	}
 }
 
 void start_dh_v1_secret(crypto_req_cont_func fn, const char *name,
 			struct state *st, enum original_role role,
-			const struct oakley_group_desc *oakley_group2)
+			const struct dh_desc *oakley_group2)
 {
 	const chunk_t *pss = get_psk(st->st_connection);
 	struct pluto_crypto_req_cont *cn = new_pcrc(fn, name);
@@ -163,13 +158,13 @@ void start_dh_v1_secret(crypto_req_cont_func fn, const char *name,
 /* MUST BE THREAD-SAFE */
 void calc_dh(struct pcr_v1_dh *dh)
 {
-	const struct oakley_group_desc *group = dh->oakley_group;
+	const struct dh_desc *group = dh->oakley_group;
 	passert(group != NULL);
 
 	/* now calculate the (g^x)(g^y) */
 	chunk_t g;
 	setchunk_from_wire(g, dh, dh->role == ORIGINAL_RESPONDER ? &dh->gi : &dh->gr);
-	DBG(DBG_CRYPT, DBG_dump_chunk("peer's g: ", g));
+	DBG(DBG_CRYPT, DBG_dump_hunk("peer's g: ", g));
 
 	dh->shared = calc_dh_shared(dh->secret, g);
 }
@@ -193,7 +188,7 @@ static void calc_skeyids_iv(struct pcr_v1_dh *skq,
 			    PK11SymKey **skeyid_d_out,	/* output */
 			    PK11SymKey **skeyid_a_out,	/* output */
 			    PK11SymKey **skeyid_e_out,	/* output */
-			    chunk_t *new_iv,	/* output */
+			    struct crypt_mac *new_iv,	/* output */
 			    PK11SymKey **enc_key_out	/* output */
 			    )
 {
@@ -252,8 +247,8 @@ static void calc_skeyids_iv(struct pcr_v1_dh *skq,
 	PK11SymKey *skeyid_e = ikev1_skeyid_e(prf_desc, skeyid, skeyid_a,
 					      shared, icookie, rcookie);
 
-	PK11SymKey *enc_key = appendix_b_keymat_e(prf_desc, encrypter,
-						  skeyid_e, keysize);
+	PK11SymKey *enc_key = ikev1_appendix_b_keymat_e(prf_desc, encrypter,
+							skeyid_e, keysize);
 
 	*skeyid_out = skeyid;
 	*skeyid_d_out = skeyid_d;
@@ -267,20 +262,20 @@ static void calc_skeyids_iv(struct pcr_v1_dh *skq,
 	/* generate IV */
 	{
 		DBG(DBG_CRYPT, {
-			    DBG_dump_chunk("DH_i:", gi);
-			    DBG_dump_chunk("DH_r:", gr);
+			    DBG_dump_hunk("DH_i:", gi);
+			    DBG_dump_hunk("DH_r:", gr);
 		    });
 		struct crypt_hash *ctx = crypt_hash_init("new IV", hasher);
-		crypt_hash_digest_chunk(ctx, "GI", gi);
-		crypt_hash_digest_chunk(ctx, "GR", gr);
-		*new_iv = crypt_hash_final_chunk(&ctx);
+		crypt_hash_digest_hunk(ctx, "GI", gi);
+		crypt_hash_digest_hunk(ctx, "GR", gr);
+		*new_iv = crypt_hash_final_mac(&ctx);
 	}
 }
 
 /* MUST BE THREAD-SAFE */
 void calc_dh_iv(struct pcr_v1_dh *dh)
 {
-	const struct oakley_group_desc *group = dh->oakley_group;
+	const struct dh_desc *group = dh->oakley_group;
 	passert(group != NULL);
 
 	/*
@@ -292,7 +287,7 @@ void calc_dh_iv(struct pcr_v1_dh *dh)
 	setchunk_from_wire(g, dh,
 		dh->role == ORIGINAL_RESPONDER ? &dh->gi : &dh->gr);
 
-	DBG(DBG_CRYPT, DBG_dump_chunk("peer's g: ", g));
+	DBG(DBG_CRYPT, DBG_dump_hunk("peer's g: ", g));
 
 	dh->shared = calc_dh_shared(dh->secret, g);
 

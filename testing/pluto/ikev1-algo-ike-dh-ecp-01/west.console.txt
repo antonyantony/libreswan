@@ -14,11 +14,10 @@ west #
  # confirm clear text does not get through
 west #
  ../../pluto/bin/ping-once.sh --down -I 192.0.1.254 192.0.2.254
-[ 00.00] IN=eth1 OUT= MAC=12:00:00:64:64:45:12:00:00:64:64:23:08:00 SRC=192.0.2.254 DST=192.0.1.254 LEN=XXXX TOS=0x00 PREC=0x00 TTL=64 ID=XXXXX PROTO=ICMP TYPE=0 CODE=0 ID=XXXX SEQ=1 
 down
 west #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
@@ -30,13 +29,13 @@ west #
  ../bin/libreswan-up-down.sh ikev1-ike=aes128-sha1-dh19 -I 192.0.1.254 192.0.2.254
 002 added connection description "ikev1-ike=aes128-sha1-dh19"
 002 "ikev1-ike=aes128-sha1-dh19" #1: initiating Main Mode
-1v1 "ikev1-ike=aes128-sha1-dh19" #1: STATE_MAIN_I1: initiate
+1v1 "ikev1-ike=aes128-sha1-dh19" #1: STATE_MAIN_I1: sent MI1, expecting MR1
 1v1 "ikev1-ike=aes128-sha1-dh19" #1: STATE_MAIN_I2: sent MI2, expecting MR2
 1v1 "ikev1-ike=aes128-sha1-dh19" #1: STATE_MAIN_I3: sent MI3, expecting MR3
 002 "ikev1-ike=aes128-sha1-dh19" #1: Peer ID is ID_FQDN: '@east'
 004 "ikev1-ike=aes128-sha1-dh19" #1: STATE_MAIN_I4: ISAKMP SA established {auth=PRESHARED_KEY cipher=AES_CBC_128 integ=HMAC_SHA1 group=DH19}
 002 "ikev1-ike=aes128-sha1-dh19" #2: initiating Quick Mode PSK+ENCRYPT+TUNNEL+PFS+UP+IKEV1_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO
-1v1 "ikev1-ike=aes128-sha1-dh19" #2: STATE_QUICK_I1: initiate
+1v1 "ikev1-ike=aes128-sha1-dh19" #2: STATE_QUICK_I1: sent QI1, expecting QR1
 004 "ikev1-ike=aes128-sha1-dh19" #2: STATE_QUICK_I2: sent QI2, IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive}
 destination -I 192.0.1.254 192.0.2.254 is alive
 002 "ikev1-ike=aes128-sha1-dh19": terminating SAs using this connection
@@ -48,13 +47,13 @@ west #
  ../bin/libreswan-up-down.sh ikev1-ike=aes128-sha1-dh20 -I 192.0.1.254 192.0.2.254
 002 added connection description "ikev1-ike=aes128-sha1-dh20"
 002 "ikev1-ike=aes128-sha1-dh20" #3: initiating Main Mode
-1v1 "ikev1-ike=aes128-sha1-dh20" #3: STATE_MAIN_I1: initiate
+1v1 "ikev1-ike=aes128-sha1-dh20" #3: STATE_MAIN_I1: sent MI1, expecting MR1
 1v1 "ikev1-ike=aes128-sha1-dh20" #3: STATE_MAIN_I2: sent MI2, expecting MR2
 1v1 "ikev1-ike=aes128-sha1-dh20" #3: STATE_MAIN_I3: sent MI3, expecting MR3
 002 "ikev1-ike=aes128-sha1-dh20" #3: Peer ID is ID_FQDN: '@east'
 004 "ikev1-ike=aes128-sha1-dh20" #3: STATE_MAIN_I4: ISAKMP SA established {auth=PRESHARED_KEY cipher=AES_CBC_128 integ=HMAC_SHA1 group=DH20}
 002 "ikev1-ike=aes128-sha1-dh20" #4: initiating Quick Mode PSK+ENCRYPT+TUNNEL+PFS+UP+IKEV1_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO
-1v1 "ikev1-ike=aes128-sha1-dh20" #4: STATE_QUICK_I1: initiate
+1v1 "ikev1-ike=aes128-sha1-dh20" #4: STATE_QUICK_I1: sent QI1, expecting QR1
 004 "ikev1-ike=aes128-sha1-dh20" #4: STATE_QUICK_I2: sent QI2, IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive}
 destination -I 192.0.1.254 192.0.2.254 is alive
 002 "ikev1-ike=aes128-sha1-dh20": terminating SAs using this connection
@@ -66,13 +65,13 @@ west #
  ../bin/libreswan-up-down.sh ikev1-ike=aes128-sha1-dh21 -I 192.0.1.254 192.0.2.254
 002 added connection description "ikev1-ike=aes128-sha1-dh21"
 002 "ikev1-ike=aes128-sha1-dh21" #5: initiating Main Mode
-1v1 "ikev1-ike=aes128-sha1-dh21" #5: STATE_MAIN_I1: initiate
+1v1 "ikev1-ike=aes128-sha1-dh21" #5: STATE_MAIN_I1: sent MI1, expecting MR1
 1v1 "ikev1-ike=aes128-sha1-dh21" #5: STATE_MAIN_I2: sent MI2, expecting MR2
 1v1 "ikev1-ike=aes128-sha1-dh21" #5: STATE_MAIN_I3: sent MI3, expecting MR3
 002 "ikev1-ike=aes128-sha1-dh21" #5: Peer ID is ID_FQDN: '@east'
 004 "ikev1-ike=aes128-sha1-dh21" #5: STATE_MAIN_I4: ISAKMP SA established {auth=PRESHARED_KEY cipher=AES_CBC_128 integ=HMAC_SHA1 group=DH21}
 002 "ikev1-ike=aes128-sha1-dh21" #6: initiating Quick Mode PSK+ENCRYPT+TUNNEL+PFS+UP+IKEV1_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO
-1v1 "ikev1-ike=aes128-sha1-dh21" #6: STATE_QUICK_I1: initiate
+1v1 "ikev1-ike=aes128-sha1-dh21" #6: STATE_QUICK_I1: sent QI1, expecting QR1
 004 "ikev1-ike=aes128-sha1-dh21" #6: STATE_QUICK_I2: sent QI2, IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive}
 destination -I 192.0.1.254 192.0.2.254 is alive
 002 "ikev1-ike=aes128-sha1-dh21": terminating SAs using this connection
@@ -94,12 +93,11 @@ NEW_IPSEC_CONN mangle TABLES
 ROUTING TABLES
 default via 192.1.2.254 dev eth1
 192.0.1.0/24 dev eth0 proto kernel scope link src 192.0.1.254
+192.0.2.0/24 via 192.1.2.23 dev eth1
 192.1.2.0/24 dev eth1 proto kernel scope link src 192.1.2.45
-192.9.4.0/24 dev eth2 proto kernel scope link src 192.9.4.45
 NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
-west #
 west #
  ../bin/check-for-core.sh
 west #

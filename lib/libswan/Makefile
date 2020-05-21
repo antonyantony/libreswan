@@ -4,7 +4,7 @@
 # Copyright (C) 2003, 2004 Xelerance Corporation
 # Copyright (C) 2012 Paul Wouters <pwouters@redhat.com>
 # Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
-# Copyright (C) 2015-2018 Andrew Cagney
+# Copyright (C) 2015-2019 Andrew Cagney
 # Copyright (C) 2019 Tuomo Soini <tis@foobar.fi>
 #
 # This program is free software; you can redistribute it and/or modify it
@@ -41,13 +41,13 @@ OBJS += x509dn.o asn1.o oid.o
 
 OBJS += constants.o \
 	alloc.o diag.o \
-	id.o initaddr.o initsaid.o initsubnet.o \
+	id.o initaddr.o initsubnet.o \
         keyblobtoid.o \
 	lex.o \
 	lswconf.o \
 	lswfips.o \
 	rangetosubnet.o sameaddr.o \
-	secrets.o subnettot.o \
+	secrets.o \
 	subnettypeof.o ttoaddr.o ttodata.o ttoprotoport.o \
 	ttosa.o ttosubnet.o ttoul.o \
 	secitem_chunk.o \
@@ -56,14 +56,19 @@ OBJS += constants.o \
 	lsw_passert_fail.o \
 	alg_byname.o
 
+OBJS += nss_cert_load.o
 OBJS += certs.o
+OBJS += reqid.o
 
 ifeq ($(USE_NETKEY),true)
 OBJS += addr_lookup.o
+OBJS += kernel_xfrm_reply.o
+ifeq ($(USE_XFRM_INTERFACE), true)
+ OBJS += netlink_attrib.o
+endif
 endif
 
 OBJS += log_ip.o
-OBJS += af_info.o
 OBJS += fd.o
 OBJS += kernel_alg.o
 OBJS += kernel_sadb.o
@@ -73,8 +78,6 @@ OBJS += addrtot.o
 OBJS += addrtypeof.o
 OBJS += anyaddr.o
 OBJS += datatot.o
-OBJS += goodmask.o
-OBJS += satot.o
 OBJS += ultot.o
 
 OBJS += proposals.o
@@ -91,7 +94,10 @@ OBJS += shunk.o
 
 OBJS += ip_address.o
 OBJS += ip_endpoint.o
+OBJS += ip_info.o
+OBJS += ip_protocol.o
 OBJS += ip_range.o
+OBJS += ip_said.o
 OBJS += ip_subnet.o
 
 OBJS += lmod.o
@@ -100,42 +106,32 @@ OBJS += deltatime.o
 OBJS += realtime.o
 OBJS += monotime.o
 
+OBJS += refcnt.o
 OBJS += debug.o
 OBJS += impair.o
 OBJS += keywords.o
 
-OBJS += dbg.o
-
 OBJS += DBG_dump.o
 OBJS += DBG_log.o
 
-OBJS += log_to_log.o
 OBJS += libreswan_exit_log_errno.o
 OBJS += libreswan_log_errno.o
-OBJS += libreswan_pexpect.o
-OBJS += libreswan_pexpect_log.o
 OBJS += libreswan_bad_case.o
-
-OBJS += rate_log.o
 
 OBJS += libreswan_log.o
 OBJS += libreswan_log_rc.o
 
-OBJS += fmtbuf.o
+OBJS += log_pexpect.o
+
+OBJS += jambuf.o
+OBJS += jam_bytes.o
 OBJS += lswlog.o
-OBJS += lswlog_dbg.o
 OBJS += lswlog_nss_error.o
 OBJS += lswlog_nss_ckm.o
 OBJS += lswlog_nss_ckf.o
 OBJS += lswlog_nss_cka.o
 OBJS += lswlog_nss_secitem.o
-OBJS += lswlog_source_line.o
-OBJS += lswlog_sanitized.o
-OBJS += lswlog_errno.o
-OBJS += lswlog_bytes.o
 OBJS += lswlog_enum_lset_short.o
-OBJS += lswlog_realtime.o
-OBJS += lswlog_monotime.o
 OBJS += lswlog_to_file_stream.o
 OBJS += lswlog_pexpect.o
 OBJS += lswlog_passert.o
@@ -150,6 +146,18 @@ CFLAGS += -I$(top_srcdir)/lib/libcrypto
 
 OBJS += ike_alg.o
 OBJS += ike_alg_test.o
+OBJS += ike_alg_dh_nss_ecp_ops.o
+OBJS += ike_alg_dh_nss_modp_ops.o
+OBJS += ike_alg_hash_nss_ops.o
+OBJS += ike_alg_prf_mac_hmac_ops.o
+OBJS += ike_alg_prf_mac_nss_ops.o
+OBJS += ike_alg_prf_mac_xcbc_ops.o
+OBJS += ike_alg_prf_ikev1_mac_ops.o
+OBJS += ike_alg_prf_ikev2_mac_ops.o
+ifeq ($(USE_NSS_PRF),true)
+OBJS += ike_alg_prf_ikev1_nss_ops.o
+OBJS += ike_alg_prf_ikev2_nss_ops.o
+endif
 OBJS += ike_alg_encrypt_chacha20_poly1305.o
 OBJS += ike_alg_encrypt_nss_aead_ops.o
 OBJS += ike_alg_encrypt_nss_cbc_ops.o
@@ -179,6 +187,8 @@ ifeq ($(USE_TWOFISH),true)
 OBJS += ike_alg_twofish.o
 endif
 
+OBJS += crypt_mac.o
+
 ifeq ($(USE_NSS_AVA_COPY),true)
 OBJS += nss_copies.o
 endif
@@ -191,15 +201,13 @@ ifeq ($(USE_DNSSEC),true)
 OBJS += unbound.o
 endif
 
-OBJS += sanitizestring.o
-OBJS += pfkey_sock.o pfkey_error.o
-
 ifeq ($(USE_KLIPS),true)
 CFLAGS += -DKLIPS
 endif
 
-ifeq ($(USE_PFKEYv2),true)
+ifeq ($(USE_KLIPS),true)
 CFLAGS += -DPFKEYV2
+OBJS += pfkey_sock.o pfkey_error.o
 OBJS += pfkey_v2_build.o pfkey_v2_ext_bits.o pfkey_v2_parse.o
 OBJS += pfkey_v2_debug.o
 endif

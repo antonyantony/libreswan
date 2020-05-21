@@ -15,7 +15,9 @@
  * License for more details.
  */
 
-#include "internal.h"
+#include <string.h>
+#include <ctype.h>		/* for tolower() */
+
 #include "libreswan.h"
 
 /* converters and misc */
@@ -678,8 +680,6 @@ char *pgm;
 					ttodatav(r->ascii + 2, 0, xbase, buf,
 						sizeof(buf), &n, NULL, 0,
 						TTODATAV_IGNORESPACE), &status);
-
-
 		} else {
 			check(r, buf, n,
 				ttodata(r->ascii, 0, base, buf, sizeof(buf),

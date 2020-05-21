@@ -24,6 +24,7 @@
  * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
  * for more details.
  */
+
 #include <pthread.h>	/* pthread.h must be first include file */
 #include <stddef.h>
 #include <stdlib.h>
@@ -41,7 +42,6 @@
 #define GLOB_ABORTED GLOB_ABEND        /* fix for old versions */
 #endif
 
-#include <libreswan.h>
 
 #include "sysdep.h"
 #include "lswlog.h"
@@ -60,6 +60,7 @@
 #include <keyhi.h>
 #include "lswconf.h"
 #include "lswnss.h"
+#include "ip_info.h"
 
 /* this does not belong here, but leave it here for now */
 const struct id empty_id;	/* ID_NONE */
@@ -111,22 +112,6 @@ static const struct fld RSA_private_field[] = {
 
 static void lsw_process_secrets_file(struct secret **psecrets,
 				const char *file_pat);
-
-void DBG_log_RSA_public_key(const struct RSA_public_key *k)
-{
-	DBG_log(" keyid: *%s", k->keyid);
-	DBG_dump_chunk("n", k->n);
-	DBG_dump_chunk("e", k->e);
-	DBG_log_ckaid("CKAID", k->ckaid);
-}
-
-void DBG_log_ECDSA_public_key(const struct ECDSA_public_key *k)
-{
-	DBG_log(" keyid: *%s", k->keyid);
-	DBG_log(" key size: *%s", k->keyid);
-	DBG_dump_chunk("pub", k->pub);
-	DBG_log_ckaid("CKAID", k->ckaid);
-}
 
 static err_t RSA_public_key_sanity(const struct RSA_private_key *k)
 {
@@ -240,10 +225,101 @@ static void free_RSA_public_content(struct RSA_public_key *rsa)
 	freeanyckaid(&rsa->ckaid);
 }
 
+static void free_RSA_pubkey_content(union pubkey_content *u)
+{
+	free_RSA_public_content(&u->rsa);
+}
+
+static err_t unpack_RSA_pubkey_content(union pubkey_content *u, chunk_t pubkey)
+{
+	return unpack_RSA_public_key(&u->rsa, &pubkey);
+}
+
+const struct pubkey_type pubkey_type_rsa = {
+	.alg = PUBKEY_ALG_RSA,
+	.name = "RSA",
+	.private_key_kind = PKK_RSA,
+	.free_pubkey_content = free_RSA_pubkey_content,
+	.unpack_pubkey_content = unpack_RSA_pubkey_content,
+};
+
 static void free_ECDSA_public_content(struct ECDSA_public_key *ecdsa)
 {
 	freeanychunk(ecdsa->pub);
 	/* ??? what about ecdsa->pub.{ecParams,version,ckaid}? */
+}
+
+static void free_ECDSA_pubkey_content(union pubkey_content *u)
+{
+	free_ECDSA_public_content(&u->ecdsa);
+}
+
+static err_t unpack_ECDSA_pubkey_content(union pubkey_content *u, chunk_t pubkey)
+{
+	return unpack_ECDSA_public_key(&u->ecdsa, &pubkey);
+}
+
+const struct pubkey_type pubkey_type_ecdsa = {
+	.alg = PUBKEY_ALG_ECDSA,
+	.name = "ECDSA",
+	.private_key_kind = PKK_ECDSA,
+	.free_pubkey_content = free_ECDSA_pubkey_content,
+	.unpack_pubkey_content = unpack_ECDSA_pubkey_content,
+
+};
+
+const struct pubkey_type *pubkey_alg_type(enum pubkey_alg alg)
+{
+	static const struct pubkey_type *pubkey_types[] = {
+		[PUBKEY_ALG_RSA] = &pubkey_type_rsa,
+		[PUBKEY_ALG_ECDSA] = &pubkey_type_ecdsa,
+	};
+	passert(alg < elemsof(pubkey_types));
+	const struct pubkey_type *type = pubkey_types[alg];
+	pexpect(type != NULL);
+	return type;
+}
+
+/*
+ * XXX: Go for a simplicity - a switch is easier than adding to
+ * pubkey_type - especially when the fields could end up moving to
+ * struct pubkey proper (we can but dream).
+ */
+
+const char *pubkey_keyid(const struct pubkey *pk)
+{
+	switch (pk->type->alg) {
+	case PUBKEY_ALG_RSA:
+		return pk->u.rsa.keyid;
+	case PUBKEY_ALG_ECDSA:
+		return pk->u.ecdsa.keyid;
+	default:
+		bad_case(pk->type->alg);
+	}
+}
+
+const ckaid_t *pubkey_ckaid(const struct pubkey *pk)
+{
+	switch (pk->type->alg) {
+	case PUBKEY_ALG_RSA:
+		return &pk->u.rsa.ckaid;
+	case PUBKEY_ALG_ECDSA:
+		return &pk->u.ecdsa.ckaid;
+	default:
+		bad_case(pk->type->alg);
+	}
+}
+
+unsigned pubkey_size(const struct pubkey *pk)
+{
+	switch (pk->type->alg) {
+	case PUBKEY_ALG_RSA:
+		return pk->u.rsa.k;
+	case PUBKEY_ALG_ECDSA:
+		return pk->u.ecdsa.k;
+	default:
+		bad_case(pk->type->alg);
+	}
 }
 
 /*
@@ -253,18 +329,8 @@ void free_public_key(struct pubkey *pk)
 {
 	free_id_content(&pk->id);
 	freeanychunk(pk->issuer);
-
 	/* algorithm-specific freeing */
-	switch (pk->alg) {
-	case PUBKEY_ALG_RSA:
-		free_RSA_public_content(&pk->u.rsa);
-		break;
-	case PUBKEY_ALG_ECDSA:
-		free_ECDSA_public_content(&pk->u.ecdsa);
-		break;
-	default:
-		bad_case(pk->alg);
-	}
+	pk->type->free_pubkey_content(&pk->u);
 	pfree(pk);
 }
 
@@ -333,10 +399,10 @@ struct secret *lsw_find_secret_by_public_key(struct secret *secrets,
 }
 
 struct secret *lsw_find_secret_by_id(struct secret *secrets,
-				enum PrivateKeyKind kind,
-				const struct id *my_id,
-				const struct id *his_id,
-				bool asym)
+				     enum PrivateKeyKind kind,
+				     const struct id *local_id,
+				     const struct id *remote_id,
+				     bool asym)
 {
 	enum {
 		match_none = 000,
@@ -344,34 +410,21 @@ struct secret *lsw_find_secret_by_id(struct secret *secrets,
 		/* bits */
 		match_default = 001,
 		match_any = 002,
-		match_him = 004,
-		match_me = 010
+		match_remote = 004,
+		match_local = 010
 	};
 	unsigned int best_match = match_none;
 	struct secret *best = NULL;
 
-	char
-		idme[IDTOA_BUF],
-		idhim[IDTOA_BUF],
-		idhim2[IDTOA_BUF];
-
-	idtoa(my_id,  idme,  IDTOA_BUF);
-
-	idhim[0] = '\0';
-	idhim2[0] = '\0';
-	if (his_id != NULL) {
-		idtoa(his_id, idhim, IDTOA_BUF);
-		strcpy(idhim2, idhim);
-	}
-
 	for (struct secret *s = secrets; s != NULL; s = s->next) {
-		DBG(DBG_CONTROLMORE,
+		if (DBGP(DBG_BASE)) {
+			id_buf idl;
 			DBG_log("line %d: key type %s(%s) to type %s",
 				s->pks.line,
 				enum_name(&pkk_names, kind),
-				idme,
+				str_id(local_id, &idl),
 				enum_name(&pkk_names, s->pks.kind));
-			);
+		}
 
 		if (s->pks.kind == kind) {
 			unsigned int match = match_none;
@@ -388,36 +441,44 @@ struct secret *lsw_find_secret_by_id(struct secret *secrets,
 				int idnum = 0;
 
 				for (i = s->ids; i != NULL; i = i->next) {
-					char idstr1[IDTOA_BUF];
-
 					idnum++;
-					idtoa(&i->id, idstr1, IDTOA_BUF);
-
 					if (any_id(&i->id)) {
 						/*
-						 * match any will automatically
-						 * match me and him so treat it
-						 * as its own match type so
-						 * that specific matches get
-						 * a higher "match" value and
-						 * are used in preference to
-						 * "any" matches.
+						 * match any will
+						 * automatically match
+						 * local and remote so
+						 * treat it as its own
+						 * match type so that
+						 * specific matches
+						 * get a higher
+						 * "match" value and
+						 * are used in
+						 * preference to "any"
+						 * matches.
 						 */
 						match |= match_any;
 					} else {
-						if (same_id(&i->id, my_id))
-							match |= match_me;
+						if (same_id(&i->id, local_id)) {
+							match |= match_local;
+						}
 
-						if (his_id != NULL &&
-						    same_id(&i->id, his_id))
-							match |= match_him;
+						if (remote_id != NULL &&
+						    same_id(&i->id, remote_id)) {
+							match |= match_remote;
+						}
 					}
 
-					DBG(DBG_CONTROL,
+					if (DBGP(DBG_BASE)) {
+						id_buf idi;
+						id_buf idl;
+						id_buf idr;
 						DBG_log("%d: compared key %s to %s / %s -> 0%02o",
-							idnum, idstr1, idme,
-							idhim, match);
-						);
+							idnum,
+							str_id(&i->id, &idi),
+							str_id(local_id, &idl),
+							(remote_id == NULL ? "" : str_id(remote_id, &idr)),
+							match);
+					}
 				}
 
 				/*
@@ -425,8 +486,8 @@ struct secret *lsw_find_secret_by_id(struct secret *secrets,
 				 * default to matching any peer.
 				 * A more specific match will trump this.
 				 */
-				if (match == match_me &&
-					s->ids->next == NULL)
+				if (match == match_local &&
+				    s->ids->next == NULL)
 					match |= match_default;
 			}
 
@@ -436,27 +497,22 @@ struct secret *lsw_find_secret_by_id(struct secret *secrets,
 				);
 
 			switch (match) {
-			case match_me:
+			case match_local:
 				/*
-				 * if this is an asymmetric (eg. public key)
-				 * system, allow this-side-only match to count,
-				 * even if there are other ids in the list.
+				 * if this is an asymmetric
+				 * (eg. public key) system, allow
+				 * this-side-only match to count, even
+				 * if there are other ids in the list.
 				 */
 				if (!asym)
 					break;
 				/* FALLTHROUGH */
 			case match_default:	/* default all */
 			case match_any:	/* a wildcard */
-			case match_me | match_default:	/* default peer */
-			case match_me | match_any:	/*
-							 * %any/0.0.0.0 and
-							 * me
-							 */
-			case match_him | match_any:	/*
-							 * %any/0.0.0.0 and
-							 * peer
-							 */
-			case match_me | match_him:	/* explicit */
+			case match_local | match_default:	/* default peer */
+			case match_local | match_any: /* %any/0.0.0.0 and local */
+			case match_remote | match_any: /* %any/0.0.0.0 and remote */
+			case match_local | match_remote:	/* explicit */
 				if (match == best_match) {
 					/*
 					 * two good matches are equally good:
@@ -470,7 +526,7 @@ struct secret *lsw_find_secret_by_id(struct secret *secrets,
 						break;
 					case PKK_PSK:
 						same = chunk_eq(s->pks.u.preshared_secret,
-							best->pks.u.preshared_secret);
+								best->pks.u.preshared_secret);
 						break;
 					case PKK_RSA:
 						/*
@@ -610,7 +666,7 @@ static err_t lsw_process_psk_secret(chunk_t *psk)
 		if (len < 8) {
 			loglog(RC_LOG_SERIOUS, "WARNING: using a weak secret (PSK)");
 		}
-		clonetochunk(*psk, flp->tok + 1, len, "PSK");
+		*psk = clone_bytes_as_chunk(flp->tok + 1, len, "PSK");
 		(void) shift();
 	} else {
 		char buf[RSA_MAX_ENCODING_BYTES];	/*
@@ -631,7 +687,7 @@ static err_t lsw_process_psk_secret(chunk_t *psk)
 			ugh = builddiag("PSK data malformed (%s): %s", ugh,
 					flp->tok);
 		} else {
-			clonetochunk(*psk, buf, sz, "PSK");
+			*psk = clone_bytes_as_chunk(buf, sz, "PSK");
 			(void) shift();
 		}
 	}
@@ -650,8 +706,8 @@ static err_t lsw_process_xauth_secret(chunk_t *xauth)
 	err_t ugh = NULL;
 
 	if (*flp->tok == '"' || *flp->tok == '\'') {
-		clonetochunk(*xauth, flp->tok + 1, flp->cur - flp->tok  - 2,
-			"XAUTH");
+		*xauth = clone_bytes_as_chunk(flp->tok + 1, flp->cur - flp->tok  - 2,
+					      "XAUTH");
 		(void) shift();
 	} else {
 		char buf[RSA_MAX_ENCODING_BYTES];	/*
@@ -672,7 +728,7 @@ static err_t lsw_process_xauth_secret(chunk_t *xauth)
 			ugh = builddiag("PSK data malformed (%s): %s", ugh,
 					flp->tok);
 		} else {
-			clonetochunk(*xauth, buf, sz, "XAUTH");
+			*xauth = clone_bytes_as_chunk(buf, sz, "XAUTH");
 			(void) shift();
 		}
 	}
@@ -693,7 +749,7 @@ static err_t lsw_process_ppk_static_secret(chunk_t *ppk, chunk_t *ppk_id)
 	if (*flp->tok == '"' || *flp->tok == '\'') {
 		size_t len = flp->cur - flp->tok - 2;
 
-		clonetochunk(*ppk_id, flp->tok + 1, len, "PPK ID");
+		*ppk_id = clone_bytes_as_chunk(flp->tok + 1, len, "PPK ID");
 	} else {
 		ugh = "No quotation marks found. PPK ID should be in quotation marks";
 		return ugh;
@@ -708,7 +764,7 @@ static err_t lsw_process_ppk_static_secret(chunk_t *ppk, chunk_t *ppk_id)
 	if (*flp->tok == '"' || *flp->tok == '\'') {
 		size_t len = flp->cur - flp->tok - 2;
 
-		clonetochunk(*ppk, flp->tok + 1, len, "PPK");
+		*ppk = clone_bytes_as_chunk(flp->tok + 1, len, "PPK");
 		(void) shift();
 	} else {
 		char buf[RSA_MAX_ENCODING_BYTES];	/*
@@ -730,7 +786,7 @@ static err_t lsw_process_ppk_static_secret(chunk_t *ppk, chunk_t *ppk_id)
 					flp->tok);
 			freeanychunk(*ppk_id);
 		} else {
-			clonetochunk(*ppk, buf, sz, "PPK");
+			*ppk = clone_bytes_as_chunk(buf, sz, "PPK");
 			(void) shift();
 		}
 	}
@@ -815,8 +871,8 @@ static err_t lsw_process_rsa_secret(struct RSA_private_key *rsak)
 			DBG(DBG_CONTROLMORE, DBG_log("saving %s", p->name));
 			DBG(DBG_PRIVATE, DBG_dump(p->name, bv, bvlen));
 			chunk_t *n = (chunk_t*) ((char *)rsak + p->offset);
-			clonetochunk(*n, bv, bvlen, p->name);
-			DBG(DBG_PRIVATE, DBG_dump_chunk(p->name, *n));
+			*n = clone_bytes_as_chunk(bv, bvlen, p->name);
+			DBG(DBG_PRIVATE, DBG_dump_hunk(p->name, *n));
 		} else {
 			DBG(DBG_CONTROL, DBG_log("ignoring %s", p->name));
 		}
@@ -866,9 +922,7 @@ static pthread_mutex_t certs_and_keys_mutex = PTHREAD_MUTEX_INITIALIZER;
 static void lock_certs_and_keys(const char *who)
 {
 	pthread_mutex_lock(&certs_and_keys_mutex);
-	DBG(DBG_CONTROLMORE,
-		DBG_log("certs and keys locked by '%s'", who);
-		);
+	dbg("certs and keys locked by '%s'", who);
 }
 
 /*
@@ -876,9 +930,7 @@ static void lock_certs_and_keys(const char *who)
  */
 static void unlock_certs_and_keys(const char *who)
 {
-	DBG(DBG_CONTROLMORE,
-		DBG_log("certs and keys unlocked by '%s'", who);
-		);
+	dbg("certs and keys unlocked by '%s'", who);
 	pthread_mutex_unlock(&certs_and_keys_mutex);
 }
 
@@ -892,13 +944,13 @@ static void add_secret(struct secret **slist,
 		idl->next = NULL;
 		idl->id = empty_id;
 		idl->id.kind = ID_NONE;
-		(void)anyaddr(AF_INET, &idl->id.ip_addr);
+		idl->id.ip_addr = address_any(&ipv4_info);
 
 		struct id_list *idl2 = alloc_bytes(sizeof(struct id_list), "id list");
 		idl2->next = idl;
 		idl2->id = empty_id;
 		idl2->id.kind = ID_NONE;
-		(void)anyaddr(AF_INET, &idl2->id.ip_addr);
+		idl2->id.ip_addr = address_any(&ipv4_info);
 
 		s->ids = idl2;
 	}
@@ -934,8 +986,7 @@ static void process_secret(struct secret **psecrets,
 			ugh = "ERROR: bad RSA key syntax";
 		} else if (tokeq("{")) {
 			/* raw RSA key in NSS */
-			ugh = lsw_process_rsa_secret(
-					&s->pks.u.RSA_private_key);
+			ugh = lsw_process_rsa_secret(&s->pks.u.RSA_private_key);
 		} else {
 			/* RSA key in certificate in NSS */
 			ugh = "WARNING: The :RSA secrets entries for X.509 certificates are no longer needed";
@@ -1069,11 +1120,13 @@ static void lsw_process_secret_records(struct secret **psecrets)
 				if (tokeq("%any")) {
 					id = empty_id;
 					id.kind = ID_IPV4_ADDR;
-					ugh = anyaddr(AF_INET, &id.ip_addr);
+					id.ip_addr = address_any(&ipv4_info);
+					ugh = NULL;
 				} else if (tokeq("%any6")) {
 					id = empty_id;
 					id.kind = ID_IPV6_ADDR;
-					ugh = anyaddr(AF_INET6, &id.ip_addr);
+					id.ip_addr = address_any(&ipv6_info);
+					ugh = NULL;
 				} else {
 					ugh = atoid(flp->tok, &id, FALSE);
 				}
@@ -1088,20 +1141,18 @@ static void lsw_process_secret_records(struct secret **psecrets)
 					struct id_list *i = alloc_thing(
 						struct id_list,
 						"id_list");
-					char idb[IDTOA_BUF];
 
-					i->id = id;
-					unshare_id_content(&i->id);
+					i->id = clone_id(&id, "parsed id");
 					i->next = s->ids;
 					s->ids = i;
-					idtoa(&id, idb, IDTOA_BUF);
-					DBG(DBG_CONTROL,
+					DBG(DBG_CONTROL, {
+						id_buf b;
 						DBG_log("id type added to secret(%p) %s: %s",
 							s,
 							enum_name(&pkk_names,
 								s->pks.kind),
-							idb);
-						);
+							str_id(&id, &b));
+					});
 				}
 				if (!shift()) {
 					/* unexpected Record Boundary or EOF */
@@ -1250,12 +1301,12 @@ void unreference_key(struct pubkey **pkp)
 
 	/* print stuff */
 	DBG(DBG_CONTROLMORE, {
-			char b[IDTOA_BUF];
-
-			idtoa(&pk->id, b, sizeof(b));
-			DBG_log("unreference key: %p %s cnt %d--", pk, b,
-				pk->refcnt);
-		});
+		id_buf b;
+		DBG_log("unreference key: %p %s cnt %d--",
+			pk,
+			str_id(&pk->id, &b),
+			pk->refcnt);
+	});
 
 	/* cancel out the pointer */
 	*pkp = NULL;
@@ -1335,12 +1386,11 @@ void install_public_key(struct pubkey *pk, struct pubkey_list **head)
 	struct pubkey_list *p =
 		alloc_thing(struct pubkey_list, "pubkey entry");
 
-	unshare_id_content(&pk->id);
+	/* XXX: how screwed up is this? */
+	pk->id = clone_id(&pk->id, "install public key id");
 
-	/* copy issuer dn */
-	if (pk->issuer.ptr != NULL)
-		pk->issuer.ptr = clone_bytes(pk->issuer.ptr, pk->issuer.len,
-					"issuer dn");
+	/* copy issuer dn; XXX: how screwed up is this? */
+	pk->issuer = clone_hunk(pk->issuer, "install public key issuer");
 
 	/* store the time the public key was installed */
 	pk->installed_time = realnow();
@@ -1352,14 +1402,15 @@ void install_public_key(struct pubkey *pk, struct pubkey_list **head)
 }
 
 void delete_public_keys(struct pubkey_list **head,
-			const struct id *id, enum pubkey_alg alg)
+			const struct id *id,
+			const struct pubkey_type *type)
 {
 	struct pubkey_list **pp, *p;
 
 	for (pp = head; (p = *pp) != NULL; ) {
 		struct pubkey *pk = p->key;
 
-		if (same_id(id, &pk->id) && pk->alg == alg)
+		if (same_id(id, &pk->id) && pk->type == type)
 			*pp = free_public_keyentry(p);
 		else
 			pp = &p->next;
@@ -1401,13 +1452,13 @@ struct pubkey *allocate_RSA_public_key_nss(CERTCertificate *cert)
 			freeanyckaid(&ckaid);
 			return NULL;
 		}
-		e = clone_secitem_as_chunk(nsspk->u.rsa.publicExponent, "e");
-		n = clone_secitem_as_chunk(nsspk->u.rsa.modulus, "n");
+		e = clone_secitem_as_chunk(nsspk->u.rsa.publicExponent, "RSA e");
+		n = clone_secitem_as_chunk(nsspk->u.rsa.modulus, "RSA n");
 		SECKEY_DestroyPublicKey(nsspk);
 	}
 	/* free: ckaid, n, e */
 
-	struct pubkey *pk = alloc_thing(struct pubkey, "pubkey");
+	struct pubkey *pk = alloc_thing(struct pubkey, "RSA pubkey");
 	pk->u.rsa.e = e;
 	pk->u.rsa.n = n;
 	pk->u.rsa.ckaid = ckaid;
@@ -1420,7 +1471,7 @@ struct pubkey *allocate_RSA_public_key_nss(CERTCertificate *cert)
 
 	/* DBG(DBG_PRIVATE, RSA_show_public_key(&pk->u.rsa)); */
 
-	pk->alg = PUBKEY_ALG_RSA;
+	pk->type = &pubkey_type_rsa;
 	pk->id  = empty_id;
 	pk->issuer = EMPTY_CHUNK;
 
@@ -1444,8 +1495,8 @@ struct pubkey *allocate_ECDSA_public_key_nss(CERTCertificate *cert)
 			return NULL;
 		}
 
-		pub = clone_secitem_as_chunk(nsspk->u.ec.publicValue, "pub");
-		ecParams = clone_secitem_as_chunk(nsspk->u.ec.DEREncodedParams, "ecParams");
+		pub = clone_secitem_as_chunk(nsspk->u.ec.publicValue, "ECDSA pub");
+		ecParams = clone_secitem_as_chunk(nsspk->u.ec.DEREncodedParams, "ECDSA ecParams");
 
 		DBG_dump("pub", nsspk->u.ec.publicValue.data, nsspk->u.ec.publicValue.len);
 		DBG_dump("ecParams", nsspk->u.ec.DEREncodedParams.data, nsspk->u.ec.DEREncodedParams.len);
@@ -1459,7 +1510,7 @@ struct pubkey *allocate_ECDSA_public_key_nss(CERTCertificate *cert)
 	}
 
 
-	struct pubkey *pk = alloc_thing(struct pubkey, "pubkey");
+	struct pubkey *pk = alloc_thing(struct pubkey, "ECDSA pubkey");
 	pk->u.ecdsa.pub = pub;
 	pk->u.ecdsa.k = k;
 	pk->u.ecdsa.ecParams = ecParams;
@@ -1469,9 +1520,11 @@ struct pubkey *allocate_ECDSA_public_key_nss(CERTCertificate *cert)
 		    pk->u.ecdsa.keyid, KEYID_BUF);
 
 	/* ckaid */
-	err_t err =form_ckaid_ecdsa(pub, &ckaid);
-	if (err != NULL)
+	err_t err = form_ckaid_ecdsa(pub, &ckaid);
+	if (err != NULL) {
+		pfree(pk);
 		return NULL;
+	}
 
 	pk->u.ecdsa.ckaid = ckaid;
 	/*
@@ -1483,7 +1536,7 @@ struct pubkey *allocate_ECDSA_public_key_nss(CERTCertificate *cert)
 
 	/* DBG(DBG_PRIVATE, RSA_show_public_key(&pk->u.rsa)); */
 
-	pk->alg = PUBKEY_ALG_ECDSA;
+	pk->type = &pubkey_type_ecdsa;
 	pk->id  = empty_id;
 	pk->issuer = EMPTY_CHUNK;
 
@@ -1535,10 +1588,10 @@ static err_t add_ckaid_to_rsa_privkey(struct RSA_private_key *rsak,
 		goto out;
 	}
 
-	clonetochunk(rsak->pub.e, pubk->u.rsa.publicExponent.data,
-		     pubk->u.rsa.publicExponent.len, "e");
-	clonetochunk(rsak->pub.n, pubk->u.rsa.modulus.data,
-		     pubk->u.rsa.modulus.len, "n");
+	rsak->pub.e = clone_bytes_as_chunk(pubk->u.rsa.publicExponent.data,
+					   pubk->u.rsa.publicExponent.len, "e");
+	rsak->pub.n = clone_bytes_as_chunk(pubk->u.rsa.modulus.data,
+					   pubk->u.rsa.modulus.len, "n");
 	ugh = form_ckaid_nss(certCKAID, &rsak->pub.ckaid);
 	if (ugh != NULL) {
 		/* let caller clean up mess */
@@ -1606,16 +1659,20 @@ static err_t add_ckaid_to_ecdsa_privkey(struct ECDSA_private_key *ecdsak,
 		goto out;
 	}
 
-	clonetochunk(ecdsak->pub.pub, pubk->u.ec.publicValue.data,
-             pubk->u.ec.publicValue.len, "pub");
+	ecdsak->pub.pub = clone_bytes_as_chunk(pubk->u.ec.publicValue.data,
+					       pubk->u.ec.publicValue.len, "pub");
 	ugh = form_ckaid_nss(certCKAID, &ecdsak->pub.ckaid);
 	if (ugh != NULL) {
 		/* let caller clean up mess */
 		goto out;
 	}
 	/* keyid */
-	memset(ecdsak->pub.keyid,0,KEYID_BUF);
-        memcpy(ecdsak->pub.keyid, pubk->u.ec.publicValue.data, KEYID_BUF-1);
+	char keyid[KEYID_BUF];
+	memset(keyid, 0, KEYID_BUF);
+	memcpy(keyid, pubk->u.ec.publicValue.data, KEYID_BUF-1);
+	memset(ecdsak->pub.keyid, 0, KEYID_BUF);
+	keyblobtoid((const unsigned char *)keyid, KEYID_BUF,
+		    ecdsak->pub.keyid, KEYID_BUF);
 
 	/*size */
 	ecdsak->pub.k = pubk->u.ec.size;
@@ -1632,8 +1689,7 @@ out:
 static err_t lsw_extract_nss_cert_privkey_RSA(struct RSA_private_key *rsak,
 					  CERTCertificate *cert)
 {
-	DBG(DBG_CRYPT,
-	    DBG_log("extracting the RSA private key for %s", cert->nickname));
+	dbg("extracting the RSA private key for %s", cert->nickname);
 
 	err_t ugh = add_ckaid_to_rsa_privkey(rsak, cert);
 
@@ -1644,7 +1700,7 @@ static err_t lsw_extract_nss_cert_privkey_RSA(struct RSA_private_key *rsak,
 }
 
 static err_t lsw_extract_nss_cert_privkey_ECDSA(struct ECDSA_private_key *ecdsak,
-                                          CERTCertificate *cert)
+						CERTCertificate *cert)
 {
 	DBG(DBG_CRYPT,
 		DBG_log("extracting the ECDSA private key for %s", cert->nickname));
@@ -1680,7 +1736,7 @@ static const struct RSA_private_key *get_nss_cert_privkey_RSA(struct secret *sec
 }
 
 static const struct ECDSA_private_key *get_nss_cert_privkey_ECDSA(struct secret *secrets,
-                                                          CERTCertificate *cert)
+								CERTCertificate *cert)
 {
 	struct pubkey *pub = allocate_ECDSA_public_key_nss(cert);
 
@@ -1705,10 +1761,10 @@ static const struct ECDSA_private_key *get_nss_cert_privkey_ECDSA(struct secret 
 err_t lsw_add_rsa_secret(struct secret **secrets, CERTCertificate *cert)
 {
 	if (get_nss_cert_privkey_RSA(*secrets, cert) != NULL) {
-		DBG(DBG_CONTROL, DBG_log("secrets entry for %s already exists",
-					 cert->nickname));
+		dbg("secrets entry for certificate already exists: %s", cert->nickname);
 		return NULL;
 	}
+	dbg("adding RSA secret for certificate: %s", cert->nickname);
 
 	struct secret *s = alloc_thing(struct secret, "RSA secret");
 	s->pks.kind = PKK_RSA;

@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -17,7 +17,6 @@ packet from 192.1.2.45:500: responding to IKE_SA_INIT (34) message (Message ID 0
 east #
  grep "INVALID_MAJOR_VERSION" /tmp/pluto.log >/dev/null && echo payload found
 payload found
-east #
 east #
  ../bin/check-for-core.sh
 east #

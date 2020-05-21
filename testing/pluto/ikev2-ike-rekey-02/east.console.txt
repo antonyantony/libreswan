@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -17,7 +17,6 @@ east #
  ipsec status |grep STATE_
 000 #4: "east":500 STATE_PARENT_R2 (received v2I2, PARENT SA established); EVENT_SA_REKEY in XXs; newest ISAKMP; idle;
 000 #5: "east":500 STATE_V2_IPSEC_R (IPsec SA established); EVENT_SA_REKEY in XXs; newest IPSEC; eroute owner; isakmp#4; idle;
-east #
 east #
  ../bin/check-for-core.sh
 east #

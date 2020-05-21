@@ -20,6 +20,104 @@
 #include "demux.h"
 #include "connections.h"
 #include "ikev2_msgid.h"
+#include "log.h"
+#include "ikev2.h"		/* for complete_v2_state_transition() */
+#include "state_db.h"		/* for ike_sa_by_serialno() */
+
+/*
+ * Logging.
+ */
+
+static const char *jam_prefix(jambuf_t *buf, struct ike_sa *ike, struct state *wip_sa)
+{
+	jam(buf, "Message ID: ");
+	const char *who;
+	if (wip_sa == NULL) {
+		who = "lost";
+		jam(buf, "CHILD #%lu.#LOST", ike->sa.st_serialno);
+	} else if (IS_CHILD_SA(wip_sa)) {
+		who = "child";
+		jam(buf, "CHILD #%lu.#%lu", ike->sa.st_serialno, wip_sa->st_serialno);
+	} else {
+		who = "ike";
+		jam(buf, "IKE #%lu", ike->sa.st_serialno);
+	}
+	return who;
+}
+
+static void jam_ike_window(jambuf_t *buf, const char *what,
+			   const struct v2_msgid_window *old,
+			   const struct v2_msgid_window *new)
+{
+	jam(buf, " ike.%s.sent=%jd", what, old->sent);
+	if (new != NULL && old->sent != new->sent) {
+		jam(buf, "->%jd", new->sent);
+	}
+	jam(buf, " ike.%s.recv=%jd", what, old->recv);
+	if (new != NULL && old->recv != new->recv) {
+		jam(buf, "->%jd", new->recv);
+	}
+}
+
+static void jam_ike_windows(jambuf_t *buf,
+			    const struct v2_msgid_windows *old,
+			    const struct v2_msgid_windows *new)
+{
+	jam_ike_window(buf, "initiator", &old->initiator,
+		       new != NULL ? &new->initiator : NULL);
+	jam_ike_window(buf, "responder", &old->responder,
+		       new != NULL ? &new->responder : NULL);
+}
+
+static void jam_wip_sa(jambuf_t *buf, const char *who,
+		       const struct v2_msgid_wip *old,
+		       const struct v2_msgid_wip *new)
+{
+	jam(buf, " %s.wip.initiator=%jd", who, old->initiator);
+	if (new != NULL && old->initiator != new->initiator) {
+		jam(buf, "->%jd", new->initiator);
+	}
+	jam(buf, " %s.wip.responder=%jd", who, old->responder);
+	if (new != NULL && old->responder != new->responder) {
+		jam(buf, "->%jd", new->responder);
+	}
+}
+
+static void jam_v2_msgid(struct lswlog *buf,
+			 struct ike_sa *ike, struct state *wip_sa,
+			 const char *fmt, va_list ap)
+{
+	const char *who = jam_prefix(buf, ike, wip_sa);
+	jam(buf, " ");
+	jam_va_list(buf, fmt, ap);
+	jam(buf, ":");
+	jam_ike_windows(buf, &ike->sa.st_v2_msgid_windows, NULL);
+	if (wip_sa != NULL) {
+		jam_wip_sa(buf, who, &wip_sa->st_v2_msgid_wip, NULL);
+	}
+}
+
+void dbg_v2_msgid(struct ike_sa *ike, struct state *wip_sa,
+		  const char *fmt, ...)
+{
+	LSWDBGP(DBG_BASE, buf) {
+		va_list ap;
+		va_start(ap, fmt);
+		jam_v2_msgid(buf, ike, wip_sa, fmt, ap);
+		va_end(ap);
+	}
+}
+
+void fail_v2_msgid(where_t where, struct ike_sa *ike, struct state *wip_sa,
+		   const char *fmt, ...)
+{
+	LSWLOG_PEXPECT_WHERE(where, buf) {
+		va_list ap;
+		va_start(ap, fmt);
+		jam_v2_msgid(buf, ike, wip_sa, fmt, ap);
+		va_end(ap);
+	}
+}
 
 /*
  * Dump the MSGIDs along with any changes.
@@ -29,42 +127,29 @@
  * between calls.
  */
 
-static void fmt_msgids(struct lswlog *buf,
-		       const char *what, enum message_role message, intmax_t msgid,
-		       struct ike_sa *ike, const struct v2_msgids *old)
-
+static void dbg_msgids_update(const char *what,
+			      enum message_role message, intmax_t msgid,
+			      struct ike_sa *ike, const struct v2_msgid_windows *old_windows,
+			      struct state *wip_sa, const struct v2_msgid_wip *old_wip)
 {
-	lswlogf(buf, "Message ID: IKE #%lu %s",
-		ike->sa.st_serialno,
-		ike->sa.st_finite_state->fs_short_name);
+	if (DBGP(DBG_BASE)) {
+		LSWLOG_DEBUG(buf) {
+			const char *who = jam_prefix(buf, ike, wip_sa);
+			jam(buf, " %s", what);
 
-	lswlogf(buf, "; %s ", what);
-	switch (message) {
-	case MESSAGE_REQUEST: lswlogf(buf, "request"); break;
-	case MESSAGE_RESPONSE: lswlogf(buf, "response"); break;
-	case NO_MESSAGE: lswlogf(buf, "no-message"); break;
-	default: bad_case(message);
-	}
-	lswlogf(buf, " msgid=%jd", msgid);
+			switch (message) {
+			case MESSAGE_REQUEST: jam(buf, " message request %jd", msgid); break;
+			case MESSAGE_RESPONSE: jam(buf, " message response %jd", msgid); break;
+			case NO_MESSAGE: break;
+			default: bad_case(message);
+			}
+			jam(buf, ":");
 
-	lswlogf(buf, "; ike.initiator:");
-	lswlogf(buf, " sent=%jd", old->initiator.sent);
-	if (old->initiator.sent != ike->sa.st_v2_msgids.initiator.sent) {
-		lswlogf(buf, "->%jd", ike->sa.st_v2_msgids.initiator.sent);
-	}
-	lswlogf(buf, " recv=%jd", old->initiator.recv);
-	if (old->initiator.recv != ike->sa.st_v2_msgids.initiator.recv) {
-		lswlogf(buf, "->%jd", ike->sa.st_v2_msgids.initiator.recv);
-	}
-
-	lswlogf(buf, "; ike.responder:");
-	lswlogf(buf, " sent=%jd", old->responder.sent);
-	if (old->responder.sent != ike->sa.st_v2_msgids.responder.sent) {
-		lswlogf(buf, "->%jd", ike->sa.st_v2_msgids.responder.sent);
-	}
-	lswlogf(buf, " recv=%jd", old->responder.recv);
-	if (old->responder.recv != ike->sa.st_v2_msgids.responder.recv) {
-		lswlogf(buf, "->%jd", ike->sa.st_v2_msgids.responder.recv);
+			jam_ike_windows(buf, old_windows, &ike->sa.st_v2_msgid_windows);
+			if (wip_sa != NULL) {
+				jam_wip_sa(buf, who, old_wip, &wip_sa->st_v2_msgid_wip);
+			}
+		}
 	}
 }
 
@@ -76,131 +161,302 @@ static void fmt_msgids(struct lswlog *buf,
  * new init request.
  */
 
-void v2_msgid_init(struct ike_sa *ike)
+static const struct v2_msgid_windows empty_v2_msgid_windows = {
+	.initiator = {
+		.sent = -1,
+		.recv = -1,
+	},
+	.responder = {
+		.sent = -1,
+		.recv = -1,
+	},
+};
+
+static const struct v2_msgid_wip empty_v2_msgid_wip = {
+	.initiator = -1,
+	.responder = -1,
+};
+
+void v2_msgid_init_ike(struct ike_sa *ike)
 {
-	intmax_t old_request = ike->sa.st_v2_msgids.current_request;
-	struct v2_msgids old = ike->sa.st_v2_msgids;
-	static const struct v2_msgids empty_v2_msgids = {
-		.current_request = -1,
-		.initiator = {
-			.sent = -1,
-			.recv = -1,
-		},
-		.responder = {
-			.sent = -1,
-			.recv = -1,
-		},
-	};
-	ike->sa.st_v2_msgids = empty_v2_msgids;
-	if (DBGP(DBG_BASE)) {
-		LSWLOG_DEBUG(buf) {
-			/* pretend there's a sender */
-			fmt_msgids(buf, "initializing", NO_MESSAGE, -1, ike, &old);
-			fmt(buf, "; ike.current_request=%jd", old_request);
-			if (old_request != ike->sa.st_v2_msgids.current_request) {
-				fmt(buf, "->%jd", ike->sa.st_v2_msgids.current_request);
-			}
-		}
+	struct v2_msgid_windows old_windows = ike->sa.st_v2_msgid_windows;
+	ike->sa.st_v2_msgid_windows = empty_v2_msgid_windows;
+	struct v2_msgid_wip old_wip = ike->sa.st_v2_msgid_wip;
+	ike->sa.st_v2_msgid_wip = empty_v2_msgid_wip;
+	/* pretend there's a sender */
+	dbg_msgids_update("initializing (IKE SA)", NO_MESSAGE, -1,
+			  ike, &old_windows,
+			  &ike->sa, &old_wip);
+}
+
+void v2_msgid_init_child(struct ike_sa *ike, struct child_sa *child)
+{
+	child->sa.st_v2_msgid_windows = empty_v2_msgid_windows;
+	struct v2_msgid_wip old_child = child->sa.st_v2_msgid_wip;
+	child->sa.st_v2_msgid_wip = empty_v2_msgid_wip;
+	/* pretend there's a sender */
+	dbg_msgids_update("initializing (CHILD SA)", NO_MESSAGE, -1,
+			  ike, &ike->sa.st_v2_msgid_windows, /* unchanged */
+			  &child->sa, &old_child);
+}
+
+void v2_msgid_start_responder(struct ike_sa *ike, struct state *responder,
+			      const struct msg_digest *md)
+{
+	enum message_role role = v2_msg_role(md);
+	if (!pexpect(role == MESSAGE_REQUEST)) {
+		return;
 	}
+	/* extend msgid */
+	intmax_t msgid = md->hdr.isa_msgid;
+	const struct v2_msgid_wip wip = responder->st_v2_msgid_wip;
+
+	if (DBGP(DBG_BASE) &&
+	    responder->st_v2_msgid_wip.responder != -1) {
+		FAIL_V2_MSGID(ike, responder,
+			      "responder->st_v2_msgid_wip.responder == -1; was %jd",
+			      responder->st_v2_msgid_wip.responder);
+	}
+	responder->st_v2_msgid_wip.responder = msgid;
+	dbg_msgids_update("responder starting", role, msgid,
+			  ike, &ike->sa.st_v2_msgid_windows,
+			  responder, &wip);
+}
+
+/*
+ * XXX: This is to hack around the broken code that switches from the
+ * IKE SA to the CHILD SA before sending the reply.  Instead, because
+ * the CHILD SA can fail, the IKE SA should be the one processing the
+ * message?
+ */
+
+void v2_msgid_switch_responder(struct ike_sa *ike, struct child_sa *child,
+			       const struct msg_digest *md)
+{
+	enum message_role role = v2_msg_role(md);
+	if (!pexpect(role == MESSAGE_REQUEST)) {
+		return;
+	}
+	intmax_t msgid = md->hdr.isa_msgid;
+	/* out with the old */
+	{
+		const struct v2_msgid_wip wip = ike->sa.st_v2_msgid_wip;
+		if (DBGP(DBG_BASE) &&
+		    ike->sa.st_v2_msgid_wip.responder != msgid) {
+			FAIL_V2_MSGID(ike, &child->sa,
+				      "ike->sa.st_v2_msgid_wip.responder == %jd(msgid); was %jd",
+				      msgid, ike->sa.st_v2_msgid_wip.responder);
+		}
+		ike->sa.st_v2_msgid_wip.responder = -1;
+		dbg_msgids_update("switching from IKE SA responder", role, msgid,
+				  ike, &ike->sa.st_v2_msgid_windows,
+				  &ike->sa, &wip);
+	}
+	/* in with the new */
+	{
+		const struct v2_msgid_wip wip = child->sa.st_v2_msgid_wip;
+		if (DBGP(DBG_BASE) &&
+		    child->sa.st_v2_msgid_wip.responder != -1) {
+			FAIL_V2_MSGID(ike, &child->sa,
+				      "child->sa.st_v2_msgid_wip.responder == -1; was %jd",
+				      child->sa.st_v2_msgid_wip.responder);
+		}
+		child->sa.st_v2_msgid_wip.responder = msgid;
+		dbg_msgids_update("switching to CHILD SA responder", role, msgid,
+				  ike, &ike->sa.st_v2_msgid_windows,
+				  &child->sa, &wip);
+	}
+}
+
+void v2_msgid_switch_initiator(struct ike_sa *ike, struct child_sa *child,
+			       const struct msg_digest *md)
+{
+	enum message_role role = v2_msg_role(md);
+	if (!pexpect(role == MESSAGE_RESPONSE)) {
+		return;
+	}
+	intmax_t msgid = md->hdr.isa_msgid;
+	/* out with the old */
+	{
+		const struct v2_msgid_wip wip = ike->sa.st_v2_msgid_wip;
+		if (DBGP(DBG_BASE) &&
+		    ike->sa.st_v2_msgid_wip.initiator != msgid) {
+			FAIL_V2_MSGID(ike, &child->sa,
+				      "ike->sa.st_v2_msgid_wip.initiator == %jd(msgid); was %jd",
+				      msgid, ike->sa.st_v2_msgid_wip.initiator);
+		}
+		ike->sa.st_v2_msgid_wip.initiator = -1;
+		dbg_msgids_update("switching from IKE SA initiator", role, msgid,
+				  ike, &ike->sa.st_v2_msgid_windows,
+				  &ike->sa, &wip);
+	}
+	/* in with the new */
+	{
+		const struct v2_msgid_wip wip = child->sa.st_v2_msgid_wip;
+		if (DBGP(DBG_BASE) &&
+		    child->sa.st_v2_msgid_wip.initiator != -1) {
+			FAIL_V2_MSGID(ike, &child->sa,
+				      "child->sa.st_v2_msgid_wip.initiator == -1; was %jd",
+				      child->sa.st_v2_msgid_wip.initiator);
+		}
+		child->sa.st_v2_msgid_wip.initiator = msgid;
+		dbg_msgids_update("switching to CHILD SA initiator", role, msgid,
+				  ike, &ike->sa.st_v2_msgid_windows,
+				  &child->sa, &wip);
+	}
+}
+
+void v2_msgid_cancel_responder(struct ike_sa *ike, struct state *responder,
+			       const struct msg_digest *md)
+{
+	enum message_role msg_role = v2_msg_role(md);
+	if (!pexpect(msg_role == MESSAGE_REQUEST)) {
+		return;
+	}
+	/* extend msgid */
+	intmax_t msgid = md->hdr.isa_msgid;
+	const struct v2_msgid_wip wip = responder->st_v2_msgid_wip;
+
+	/*
+	 * If an encrypted message is corrupt things bail before
+	 * start_responder() but then STF_IGNORE tries to clear it.
+	 */
+	if (DBGP(DBG_BASE) &&
+	    responder->st_v2_msgid_wip.responder != msgid) {
+		FAIL_V2_MSGID(ike, responder,
+			      "responder->st_v2_msgid_wip.responder == %jd(msgid); was %jd",
+			      msgid, responder->st_v2_msgid_wip.responder);
+	}
+	responder->st_v2_msgid_wip.responder = -1;
+	dbg_msgids_update("cancelling responder", msg_role, msgid,
+			  ike, &ike->sa.st_v2_msgid_windows,
+			  responder, &wip);
 }
 
 void v2_msgid_update_recv(struct ike_sa *ike, struct state *receiver,
 			  struct msg_digest *md)
 {
-	/* extend msgid */
-	intmax_t msgid = md->hdr.isa_msgid;
-	struct v2_msgids old = ike->sa.st_v2_msgids;
-	struct v2_msgids *new = &ike->sa.st_v2_msgids;
-	intmax_t old_receiver_request = receiver->st_v2_msgids.current_request;
+	/* save old value, and add shortcut to new */
+	const struct v2_msgid_windows old = ike->sa.st_v2_msgid_windows;
+	struct v2_msgid_windows *new = &ike->sa.st_v2_msgid_windows;
 
-	enum message_role role = v2_msg_role(md);
+	/*
+	 * If the receiver is known, save a copy of the old values.
+	 *
+	 * The receiver (CHILD SA) gets lost (deleted) when processing
+	 * an IKE_AUTH response and authentication fails.  When this
+	 * happens all that matters is that the IKE SA is updated.
+	 */
+	const struct v2_msgid_wip old_receiver =
+		receiver != NULL ? receiver->st_v2_msgid_wip : empty_v2_msgid_wip;
 
-	switch (role) {
+	enum message_role receiving = v2_msg_role(md);
+	intmax_t msgid;
+
+	const char *update_received_story;
+	switch (receiving) {
 	case MESSAGE_REQUEST:
+		update_received_story = "updating responder received";
+		/*
+		 * Processing request finished.  Scrub it as wip.
+		 *
+		 * XXX: should this done in update_sent() since it is
+		 * when sending the response that things really
+		 * finish?
+		 */
+		msgid = md->hdr.isa_msgid; /* zero-extended */
+		if (receiver != NULL) {
+			if (DBGP(DBG_BASE) &&
+			    receiver->st_v2_msgid_wip.responder != msgid) {
+				FAIL_V2_MSGID(ike, receiver,
+					      "wip.responder == %jd(msgid); was %jd",
+					      msgid, receiver->st_v2_msgid_wip.responder);
+			}
+			receiver->st_v2_msgid_wip.responder = -1;
+		} else {
+			FAIL_V2_MSGID(ike, NULL, "XXX: message request receiver lost!?!");
+		}
 		/* last request we received */
 		new->responder.recv = msgid;
-		/* extend st_msgid_lastrecv */
-		if (ike->sa.st_msgid_lastrecv != new->responder.recv) {
-			dbg("Message ID: XXX: IKE #%lu receiver #%lu: ike.lastrecv "PRI_MSGID" != ike.responder.recv %jd",
-			    ike->sa.st_serialno, receiver->st_serialno,
-			    ike->sa.st_msgid_lastrecv,
-			    new->responder.recv);
-		}
 		break;
 	case MESSAGE_RESPONSE:
-		/* last response we received */
-		new->initiator.recv = msgid;
-		/* extend st_msgid_lastack */
-		if (DBGP(DBG_BASE) && ike->sa.st_msgid_lastack != new->initiator.recv) {
-			PEXPECT_LOG("Message ID: IKE #%lu receiver #%lu: ike.lastack "PRI_MSGID" == ike.initiator.recv %jd",
-				    ike->sa.st_serialno, receiver->st_serialno,
-				    ike->sa.st_msgid_lastack,
-				    new->initiator.recv);
-		}
+		update_received_story = "updating initiator received";
 		/*
 		 * Since the response has been successfully processed,
-		 * clear CURRENT_REQUEST.  This way duplicate
+		 * clear WIP.INITIATOR.  This way duplicate
 		 * responses get discarded as there is no receiving
 		 * state.
 		 *
 		 * XXX: Unfortunately the record 'n' send code throws
 		 * a spanner in the works.  It calls update_send()
 		 * before update_recv() breaking the assumption that
-		 * CURRENT_REQUEST is the old MSGID.
+		 * WIP.INITIATOR is the old MSGID.
 		 */
-		if (old_receiver_request > msgid) {
-			/*
-			 * Hack around record 'n' send calling
-			 * update_sent() (setting CURRENT_REQUEST to
-			 * the next request) midway through
-			 * processing.
-			 *
-			 * Getting rid of record 'n' send will fix
-			 * this hack.
-			 */
-			dbg("Message ID: XXX: IKE #%lu receiver #%lu: receiver.current_request %jd != receiver.msgid %jd (record 'n' called update_sent() before update_recv()?)",
-			    ike->sa.st_serialno, receiver->st_serialno,
-			    old_receiver_request, msgid);
-		} else {
-			if (DBGP(DBG_BASE) && old_receiver_request != msgid) {
-				PEXPECT_LOG("Message ID: IKE #%lu receiver #%lu: receiver.current_request %jd == receiver.msgid %jd",
-					    ike->sa.st_serialno, receiver->st_serialno,
-					    old_receiver_request, msgid);
+		msgid = md->hdr.isa_msgid; /* zero-extended */
+		if (receiver != NULL) {
+			if (old_receiver.initiator > msgid) {
+				/*
+				 * Hack around record 'n' send calling
+				 * update_sent() (setting
+				 * WIP.INITIATOR to the next request)
+				 * midway through processing.
+				 *
+				 * Getting rid of record 'n' send will
+				 * fix this hack.
+				 */
+				dbg_v2_msgid(ike, receiver, "XXX: receiver.wip.initiator %jd != receiver.msgid %jd - suspect record'n'called update_sent() before update_recv()",
+					     old_receiver.initiator, msgid);
+			} else {
+				if (DBGP(DBG_BASE) && old_receiver.initiator != msgid) {
+					FAIL_V2_MSGID(ike, receiver,
+						      "receiver.wip.initiator == %jd(msgid); was %jd",
+						      msgid, old_receiver.initiator);
+				}
+				receiver->st_v2_msgid_wip.initiator = -1;
 			}
-			receiver->st_v2_msgids.current_request = -1;
+			/* this is what matters */
+			pexpect(receiver->st_v2_msgid_wip.initiator != msgid);
+		} else {
+			/*
+			 * For instance, the IKE_AUTH response is
+			 * rejected and the child (which was the
+			 * receiver) is deleted before this code is
+			 * called.
+			 *
+			 * XXX: if the IKE SA is made the receiver
+			 * this problem goes away.
+			 */
+			dbg("Message ID: IKE #%lu XXX: message response receiver lost; probably a deleted child",
+			    ike->sa.st_serialno);
 		}
-		/* this is what matters */
-		pexpect(receiver->st_v2_msgids.current_request != msgid);
+		/* last response we received */
+		new->initiator.recv = msgid;
 		break;
 	case NO_MESSAGE:
 		dbg("Message ID: IKE #%lu skipping update_recv as MD is fake",
 		    ike->sa.st_serialno);
+		msgid = -1;
 		return;
 	default:
-		bad_case(role);
+		bad_case(receiving);
 	}
 
-	if (DBGP(DBG_BASE)) {
-		LSWLOG_DEBUG(buf) {
-			fmt_msgids(buf, "receiving", role, msgid, ike, &old);
-			if (old_receiver_request != receiver->st_v2_msgids.current_request) {
-				fmt(buf, "; receiver #%lu: receiver.current_request=%jd->%jd",
-				    receiver->st_serialno, old_receiver_request,
-				    receiver->st_v2_msgids.current_request);
-			}
-		}
-	}
+	dbg_msgids_update(update_received_story, receiving, msgid,
+			  ike, &old, receiver, &old_receiver);
 }
 
 void v2_msgid_update_sent(struct ike_sa *ike, struct state *sender,
 			  struct msg_digest *md, enum message_role sending)
 {
-	struct v2_msgids old = ike->sa.st_v2_msgids;
-	struct v2_msgids *new = &ike->sa.st_v2_msgids;
-	intmax_t old_sender_request = sender->st_v2_msgids.current_request;
+	struct v2_msgid_windows old = ike->sa.st_v2_msgid_windows;
+	struct v2_msgid_windows *new = &ike->sa.st_v2_msgid_windows;
+	struct v2_msgid_wip old_sender = sender->st_v2_msgid_wip;
+
 	intmax_t msgid;
+	const char *update_sent_story;
 	switch (sending) {
 	case MESSAGE_REQUEST:
+		update_sent_story = "updating initiator sent";
 		/*
 		 * pluto is initiating a new exchange.
 		 *
@@ -208,41 +464,27 @@ void v2_msgid_update_sent(struct ike_sa *ike, struct state *sender,
 		 * used by the code emitting the message request)
 		 */
 		msgid = new->initiator.sent + 1;
-		sender->st_v2_msgids.current_request = new->initiator.sent = msgid;
-		/* extend st_msgid */
-		if (DBGP(DBG_BASE) && sender->st_msgid != sender->st_v2_msgids.current_request) {
-			PEXPECT_LOG("Message ID: IKE #%lu sender #%lu: sender.msgid "PRI_MSGID" == sender.current_request %jd",
-				    ike->sa.st_serialno, sender->st_serialno,
-				    sender->st_msgid,
-				    sender->st_v2_msgids.current_request);
-		}
-		/* extend st_msgid_nextuse */
-		if (DBGP(DBG_BASE) && ike->sa.st_msgid_nextuse != new->initiator.sent + 1) {
-			PEXPECT_LOG("Message ID: IKE #%lu sender #%lu: ike.nextuse "PRI_MSGID" == ike.initiator.sent %jd+1",
-				    ike->sa.st_serialno, sender->st_serialno,
-				    ike->sa.st_msgid_nextuse,
-				    new->initiator.sent);
-		}
+		sender->st_v2_msgid_wip.initiator = new->initiator.sent = msgid;
 #if 0
 		/*
 		 * XXX: The record 'n' send code calls update_send()
-		 * before update_recv() breaking CURRENT_REQUEST's
+		 * before update_recv() breaking WIP.INITIATOR's
 		 * expected sequence OLD-MSGID -> -1 -> NEW-MSGID.
 		 */
-		if (DBGP(DBG_BASE) && old_sender_request != -1) {
-			PEXPECT_LOG("Message ID: IKE #%lu sender #%lu: sender.current_request %jd == -1",
-				    ike->sa.st_serialno, sender->st_serialno,
-				    old_sender_request);
+		if (DBGP(DBG_BASE) && old_sender.initiator != -1) {
+			FAIL_V2_MSGID(ike, sender,
+				      "sender.wip.initiator == -1; was %jd",
+				      old_sender.initiator);
 		}
 #else
-		if (old_sender_request != -1) {
-			dbg("Message ID: XXX: IKE #%lu sender #%lu: expecting sender.current_request %jd == -1 (record 'n' send out-of-order?)",
-			    ike->sa.st_serialno, sender->st_serialno,
-			    old_sender_request);
+		if (old_sender.initiator != -1) {
+			dbg_v2_msgid(ike, sender, "XXX: expecting sender.wip.initiator %jd == -1 - suspect record'n'send out-of-order?)",
+				     old_sender.initiator);
 		}
 #endif
 		break;
 	case MESSAGE_RESPONSE:
+		update_sent_story = "updating responder sent";
 		/*
 		 * pluto is responding to MD.
 		 *
@@ -256,123 +498,102 @@ void v2_msgid_update_sent(struct ike_sa *ike, struct state *sender,
 		/* extend isa_msgid */
 		msgid = md->hdr.isa_msgid;
 		new->responder.sent = msgid;
-		/* extend st_msgid_lastreplied */
-		if (DBGP(DBG_BASE) && ike->sa.st_msgid_lastreplied != new->responder.sent) {
-			PEXPECT_LOG("Message ID: IKE #%lu sender #%lu: ike.lastreplied "PRI_MSGID" == ike.responder.sent %jd",
-				    ike->sa.st_serialno, sender->st_serialno,
-				    ike->sa.st_msgid_lastreplied,
-				    new->responder.sent);
-		}
 		break;
 	case NO_MESSAGE:
-		dbg("Message ID: IKE #%lu sender #%lu: skipping update_send as nothing to send",
-		    ike->sa.st_serialno, sender->st_serialno);
+		dbg_v2_msgid(ike, sender, "skipping update_send as nothing to send");
 		return;
 	default:
 		bad_case(sending);
 	}
 
-	if (DBGP(DBG_BASE)) {
-		LSWLOG_DEBUG(buf) {
-			fmt_msgids(buf, "sending", sending, msgid, ike, &old);
-			if (old_sender_request != sender->st_v2_msgids.current_request) {
-				fmt(buf, "; sender #%lu current_request=%jd->%jd",
-				    sender->st_serialno, old_sender_request,
-				    sender->st_v2_msgids.current_request);
-			}
-		}
+	dbg_msgids_update(update_sent_story, sending, msgid,
+			  ike, &old, sender, &old_sender);
+}
+
+void v2_msgid_free(struct state *st)
+{
+	/* find the end; small list? */
+	struct v2_msgid_pending **pp = &st->st_v2_msgid_windows.initiator.pending;
+	while (*pp != NULL) {
+		struct v2_msgid_pending *tbd = *pp;
+		*pp = tbd->next;
+		pfree(tbd);
 	}
 }
 
-#if 0
-static void schedule_next_send(struct ike_sa *ike)
+void v2_msgid_queue_initiator(struct ike_sa *ike, struct state *st,
+			      v2_msgid_pending_cb *callback)
 {
-	msgid_t unack = (ike->sa.st_v2_msgids.initiator.sent -
-			 ike->sa.st_v2_msgids.initiator.recv);
-	while (unack < ike->sa.st_connection->ike_window) {
-		if (ike->sa.send_next_ix == NULL) {
-			break;
-		}
-		/* get next from list */
-		so_serial_t child_so = ike->sa.send_next_ix->st_serialno;
-		{
-			struct initiate_list *p = ike->sa.send_next_ix;
-			ike->sa.send_next_ix = p->next;
-			pfree(p);
-		}
-		struct state *child = state_with_serialno(child_so);
-		if (child == NULL) {
-			dbg("can't send for #%lu using parent #%lu as it disappeared",
-			    child_so, ike->sa.st_serialno);
+	struct v2_msgid_window *initiator = &ike->sa.st_v2_msgid_windows.initiator;
+	/*
+	 * Always append the task.
+	 */
+	delete_event(st);
+	event_schedule_s(EVENT_SA_REPLACE, MAXIMUM_RESPONDER_WAIT, st);
+	/* find the end; small list? */
+	struct v2_msgid_pending **pp = &initiator->pending;
+	while (*pp != NULL)
+		pp = &(*pp)->next;
+	/* append */
+	struct v2_msgid_pending new =  {
+		.st_serialno = st->st_serialno,
+		.cb = callback,
+	};
+	*pp = clone_thing(new, "struct initiate_list");
+	v2_msgid_schedule_next_initiator(ike);
+}
+
+static void initiate_next(struct state *st, void *context UNUSED)
+{
+	struct ike_sa *ike = pexpect_ike_sa(st);
+	if (ike == NULL) {
+		dbg("IKE SA with pending initiates disappeared");
+		return;
+	}
+	struct v2_msgid_window *initiator = &ike->sa.st_v2_msgid_windows.initiator;
+	for (intmax_t unack = (initiator->sent - initiator->recv);
+	     unack < ike->sa.st_connection->ike_window && initiator->pending != NULL;
+	     unack++) {
+		/* make a copy of head, and drop from list */
+		struct v2_msgid_pending pending = *initiator->pending;
+		pfree(initiator->pending);
+		initiator->pending = pending.next;
+		/* find that state */
+		struct state *st = state_with_serialno(pending.st_serialno);
+		if (st == NULL) {
+			dbg_v2_msgid(ike, NULL,
+				     "can't resume CHILD SA #%lu exchange as child disappeared (unack %jd)",
+				     pending.st_serialno, unack);
 			continue;
 		}
-		dbg("Message ID: scheduling CHILD SA #%lu send using IKE SA #%lu next message id="PRI_MSGID", unack="PRI_MSGID,
-		    child->st_serialno, ike->sa.st_serialno,
-		    ike->sa.st_v2_msgids.initiator.sent + 1,
-		    unack);
-		event_force(EVENT_v2_SEND_NEXT_IKE, child);
-		unack++;
+		dbg_v2_msgid(ike, st, "resuming SA using IKE SA (unack %jd)", unack);
+		so_serial_t old_state = push_cur_state(st);
+		struct msg_digest *md = unsuspend_md(st);
+		complete_v2_state_transition(st, &md, pending.cb(ike, st, &md));
+		release_any_md(&md);
+		pop_cur_state(old_state);
 	}
 }
-#endif
 
-void schedule_next_send(struct state *st)
+void v2_msgid_schedule_next_initiator(struct ike_sa *ike)
 {
-	struct initiate_list *p;
-	struct state *cst = NULL;
-	int i = 1;
-
-	if (st->send_next_ix != NULL) {
-		p = st->send_next_ix;
-		cst = state_with_serialno(p->st_serialno);
-		if (cst != NULL) {
-			event_force(EVENT_v2_SEND_NEXT_IKE, cst);
-			dbg("Message ID: #%lu send next using parent #%lu next message id=%u, waiting to send %d",
-			    cst->st_serialno, st->st_serialno,
-			    st->st_msgid_nextuse, i);
+	struct v2_msgid_window *initiator = &ike->sa.st_v2_msgid_windows.initiator;
+	/*
+	 * If there appears to be space and there's a pending
+	 * initiate, poke the IKE SA so it tries to initiate things.
+	 */
+	if (initiator->pending != NULL) {
+		intmax_t unack = (initiator->sent - initiator->recv);
+		/* if this returns NULL, thats ok; will log "LOST" */
+		struct state *wip_sa = state_by_serialno(initiator->pending->st_serialno);
+		if (unack < ike->sa.st_connection->ike_window) {
+			dbg_v2_msgid(ike, wip_sa, "wakeing IKE SA for next initiator (unack %jd)", unack);
+			schedule_callback(__func__, ike->sa.st_serialno,
+					  initiate_next, NULL);
+		} else {
+			dbg_v2_msgid(ike, wip_sa, "next initiator blocked by outstanding response (unack %jd)", unack);
 		}
-		st->send_next_ix = st->send_next_ix->next;
-		pfree(p);
+	} else {
+		dbg_v2_msgid(ike, &ike->sa, "no pending message initiators to schedule");
 	}
-}
-
-stf_status add_st_to_ike_sa_send_list(struct state *st, struct ike_sa *ike)
-{
-	msgid_t unack = ike->sa.st_msgid_nextuse - ike->sa.st_msgid_lastack - 1;
-	intmax_t unack2 = ike->sa.st_v2_msgids.initiator.sent - ike->sa.st_v2_msgids.initiator.recv;
-	if (unack != unack2) {
-		dbg("Message ID: XXX: IKE #%lu expecting unack "PRI_MSGID", got %jd for #%lu",
-		    ike->sa.st_serialno, unack, unack2,
-		    st->st_serialno);
-	}
-	stf_status e = STF_OK;
-	const char *what;
-
-	if (unack < st->st_connection->ike_window) {
-		what  =  "send new exchange now";
-	} else  {
-		e = STF_SUSPEND;
-		what = "wait sending, add to send next list";
-		delete_event(st);
-		event_schedule_s(EVENT_SA_REPLACE, MAXIMUM_RESPONDER_WAIT, st);
-		loglog(RC_LOG_SERIOUS, "message id deadlock? %s using parent #%lu unacknowledged %u next message id=%u ike exchange window %u",
-			what, ike->sa.st_serialno, unack,
-			ike->sa.st_msgid_nextuse,
-			ike->sa.st_connection->ike_window);
-
-		struct initiate_list **pp = &ike->sa.send_next_ix;
-		while (*pp != NULL)
-			pp = &(*pp)->next;
-		*pp = alloc_thing(struct initiate_list, "struct initiate_list");
-		**pp = (struct initiate_list) {
-			.st_serialno = st->st_serialno,
-			.next = NULL };
-
-	}
-	dbg("Message ID: #%lu %s using parent #%lu unacknowledged %u next message id=%u ike exchange window %u",
-	    st->st_serialno,
-	    what, ike->sa.st_serialno, unack,
-	    ike->sa.st_msgid_nextuse,
-	    ike->sa.st_connection->ike_window);
-	return e;
 }

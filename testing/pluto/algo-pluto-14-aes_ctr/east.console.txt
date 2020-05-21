@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -13,14 +13,13 @@ initdone
 east #
  grep -A 1 KEY_LENGTH /tmp/pluto.log
 |    af+type: AF+OAKLEY_KEY_LENGTH (0x800e)
-|    length/value: 256 (0x100)
+|    length/value: 256 (01 00)
 --
 |    af+type: AF+KEY_LENGTH (0x8006)
-|    length/value: 128 (0x80)
+|    length/value: 128 (00 80)
 --
 |    af+type: AF+KEY_LENGTH (0x8006)
-|    length/value: 128 (0x80)
-east #
+|    length/value: 128 (00 80)
 east #
  ../bin/check-for-core.sh
 east #

@@ -18,17 +18,21 @@ west #
 west #
  # $ git diff
 west #
- ipsec enumcheck | cmp ../../enumcheck/OUTPUT.enumcheck.txt - || echo "Does the file OUTPUT.enumcheck.txt need updating?"
+ ipsec enumcheck | cmp ../../check/enum/OUTPUT.enumcheck.txt - || echo "Does the file OUTPUT.enumcheck.txt need updating?"
 enumcheck: leak detective found no leaks
 west #
  # other checks
 west #
- ipsec fmtcheck > /dev/null || echo failed
+ ipsec jambufcheck > /dev/null || echo failed
 west #
  ipsec timecheck > /dev/null || echo failed
 west #
- # XXX: Don't enable for now as ipcheck tries to talk to DNS :-(
+ ipsec shunkcheck > /dev/null || echo failed
 west #
- #ipsec ipcheck > /dev/null || echo failed
+ ipsec dncheck > /dev/null || echo failed
+west #
+ # Need to disable DNS tests
+west #
+ ipsec ipcheck --nodns > /dev/null || echo failed
 west #
  

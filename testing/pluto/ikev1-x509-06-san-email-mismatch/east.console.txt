@@ -4,7 +4,7 @@ east #
  certutil -D -n west -d sql:/etc/ipsec.d
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -20,7 +20,6 @@ east #
 east #
  grep "ID type" /tmp/pluto.log | sort | uniq
 |    ID type: ID_USER_FQDN (0x3)
-east #
 east #
  ../bin/check-for-core.sh
 east #

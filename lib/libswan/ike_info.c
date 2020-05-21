@@ -72,7 +72,7 @@ static bool ike_proposal_ok(struct proposal_parser *parser,
 	impaired_passert(PROPOSAL_PARSER,
 			 next_algorithm(proposal, PROPOSAL_dh, NULL) != NULL);
 	FOR_EACH_ALGORITHM(proposal, dh, alg) {
-		const struct oakley_group_desc *dh = dh_desc(alg->desc);
+		const struct dh_desc *dh = dh_desc(alg->desc);
 		passert(ike_alg_is_ike(&dh->common));
 		if (dh == &ike_alg_dh_none) {
 			proposal_error(parser, "IKE DH algorithm 'none' not permitted");
@@ -86,6 +86,11 @@ static bool ike_proposal_ok(struct proposal_parser *parser,
 }
 
 /*
+ * IKEv1:
+ *
+ * since ike= must have an encryption algorithm this is normally
+ * ignored.
+ *
  * "ike_info" proposals are built built by first parsing the ike=
  * line, and second merging it with the below defaults when an
  * algorithm wasn't specified.
@@ -93,38 +98,11 @@ static bool ike_proposal_ok(struct proposal_parser *parser,
  * Do not assume that these hard wired algorithms are actually valid.
  */
 
-static const struct ike_alg *default_ikev1_groups[] = {
-	&oakley_group_modp2048.common,
-	&oakley_group_modp1536.common,
-	NULL,
-};
-static const struct ike_alg *default_ikev2_groups[] = {
-	&oakley_group_modp2048.common,
-	&oakley_group_modp3072.common,
-	&oakley_group_modp4096.common,
-	&oakley_group_modp8192.common,
-	&oakley_group_dh19.common,
-	&oakley_group_dh20.common,
-	&oakley_group_dh21.common,
-#ifdef USE_DH31
-	&oakley_group_dh31.common,
-#endif
-	NULL,
-};
-
-/*
- * since ike= must have an encryption algorithm this is normally
- * ignored.
- */
-static const struct ike_alg *default_ike_ealgs[] = {
-#ifdef USE_AES
-	&ike_alg_encrypt_aes_cbc.common,
-#endif
-#ifdef USE_3DES
-	&ike_alg_encrypt_3des_cbc.common,
-#endif
-	NULL,
-};
+const char default_v1_ike_proposals[] =
+	"AES_CBC"
+	","
+	"3DES"
+	;
 
 static const struct ike_alg *default_v1_ike_prfs[] = {
 #ifdef USE_SHA2
@@ -137,6 +115,47 @@ static const struct ike_alg *default_v1_ike_prfs[] = {
 	NULL,
 };
 
+static const struct ike_alg *default_v1_groups[] = {
+	&ike_alg_dh_modp2048.common,
+	&ike_alg_dh_modp1536.common,
+	NULL,
+};
+
+const struct proposal_defaults v1_ike_defaults = {
+	.proposals = default_v1_ike_proposals,
+	.dh = default_v1_groups,
+	.prf = default_v1_ike_prfs,
+};
+
+/*
+ * IKEv2:
+ *
+ * since ike= must have an encryption algorithm this is normally
+ * ignored.
+ *
+ * "ike_info" proposals are built built by first parsing the ike=
+ * line, and second merging it with the below defaults when an
+ * algorithm wasn't specified.
+ *
+ * Do not assume that these hard wired algorithms are actually valid.
+ *
+ * The proposals expanded using the default algorithms.
+ *
+ * Note: Strongswan cherry-picks proposals (for instance will
+ * pick AES_128 over AES_256 when both are in the same
+ * proposal) so, for moment, don't merge things.
+ */
+
+static const char default_v2_ike_proposals[] =
+	"AES_GCM_16_256"
+	","
+	"AES_GCM_16_128"
+	","
+	"AES_CBC_256"
+	","
+	"AES_CBC_128"
+	;
+
 static const struct ike_alg *default_v2_ike_prfs[] = {
 #ifdef USE_SHA2
 	&ike_alg_prf_sha2_512.common,
@@ -145,31 +164,42 @@ static const struct ike_alg *default_v2_ike_prfs[] = {
 	NULL,
 };
 
-const struct proposal_defaults ikev1_ike_defaults = {
-	.dh = default_ikev1_groups,
-	.encrypt = default_ike_ealgs,
-	.prf = default_v1_ike_prfs,
+static const struct ike_alg *default_v2_groups[] = {
+	&ike_alg_dh_modp2048.common,
+	&ike_alg_dh_modp3072.common,
+	&ike_alg_dh_modp4096.common,
+	&ike_alg_dh_modp8192.common,
+	&ike_alg_dh_dh19.common,
+	&ike_alg_dh_dh20.common,
+	&ike_alg_dh_dh21.common,
+#ifdef USE_DH31
+	&ike_alg_dh_dh31.common,
+#endif
+	NULL,
 };
 
-const struct proposal_defaults ikev2_ike_defaults = {
-	.dh = default_ikev2_groups,
-	.encrypt = default_ike_ealgs,
+const struct proposal_defaults v2_ike_defaults = {
+	.proposals = default_v2_ike_proposals,
 	.prf = default_v2_ike_prfs,
+	/* INTEG is derived from PRF when applicable */
+	.dh = default_v2_groups,
 };
 
+/*
+ * All together now ...
+ */
 const struct proposal_protocol ike_proposal_protocol = {
 	.name = "IKE",
 	.ikev1_alg_id = IKEv1_OAKLEY_ID,
-	.protoid = PROTO_ISAKMP,
 	.defaults = {
-		[IKEv1] = &ikev1_ike_defaults,
-		[IKEv2] = &ikev2_ike_defaults,
+		[IKEv1] = &v1_ike_defaults,
+		[IKEv2] = &v2_ike_defaults,
 	},
 	.proposal_ok = ike_proposal_ok,
-	.encrypt_alg_byname = encrypt_alg_byname,
-	.prf_alg_byname = prf_alg_byname,
-	.integ_alg_byname = integ_alg_byname,
-	.dh_alg_byname = dh_alg_byname,
+	.encrypt = true,
+	.prf = true,
+	.integ = true,
+	.dh = true,
 };
 
 struct proposal_parser *ike_proposal_parser(const struct proposal_policy *policy)

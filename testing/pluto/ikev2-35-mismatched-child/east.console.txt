@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -23,7 +23,6 @@ east #
 |    exchange type: ISAKMP_v2_IKE_AUTH (0x23)
 |    exchange type: ISAKMP_v2_IKE_AUTH (0x23)
 |    exchange type: ISAKMP_v2_IKE_AUTH (0x23)
-east #
 east #
  ../bin/check-for-core.sh
 east #

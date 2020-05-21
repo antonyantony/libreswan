@@ -14,7 +14,7 @@ east #
  restorecon -R /etc/ipsec.d
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -29,15 +29,20 @@ initdone
 east #
  # A tunnel should have established with non-zero byte counters
 east #
- ipsec whack --trafficstatus
+ hostname | grep nic > /dev/null || ipsec whack --trafficstatus
 006 #2: "clear-or-private#192.1.2.0/24"[1] ...192.1.2.254===10.0.10.1/32, type=ESP, add_time=1234567890, inBytes=252, outBytes=252, id='ID_NULL', lease=10.0.10.1/32
 east #
  # you should see both RSA and NULL
 east #
  grep IKEv2_AUTH_ /tmp/pluto.log
+| emitting 2 raw bytes of hash algorithm identifier IKEv2_AUTH_HASH_SHA2_256 into IKEv2 Notify Payload
+| hash algorithm identifier IKEv2_AUTH_HASH_SHA2_256: 00 02
+| emitting 2 raw bytes of hash algorithm identifier IKEv2_AUTH_HASH_SHA2_384 into IKEv2 Notify Payload
+| hash algorithm identifier IKEv2_AUTH_HASH_SHA2_384: 00 03
+| emitting 2 raw bytes of hash algorithm identifier IKEv2_AUTH_HASH_SHA2_512 into IKEv2 Notify Payload
+| hash algorithm identifier IKEv2_AUTH_HASH_SHA2_512: 00 04
 |    auth method: IKEv2_AUTH_NULL (0xd)
-|    auth method: IKEv2_AUTH_RSA (0x1)
-east #
+|    auth method: IKEv2_AUTH_DIGSIG (0xe)
 east #
  ../bin/check-for-core.sh
 east #

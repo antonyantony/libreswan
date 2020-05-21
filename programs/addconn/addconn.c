@@ -37,7 +37,6 @@
 #ifdef NETKEY_SUPPORT
 #include "addr_lookup.h"
 #endif
-
 #ifdef USE_DNSSEC
 # include "dnssec.h"
 #endif
@@ -47,7 +46,6 @@
 #include "lswseccomp.h"
 #endif
 
-const char *progname;
 static int verbose = 0;
 
 /*
@@ -77,7 +75,7 @@ static void resolve_defaultroute(struct starter_conn *conn UNUSED)
 	if (resolve_defaultroute_one(&conn->right, &conn->left, verbose != 0) == 1)
 		resolve_defaultroute_one(&conn->right, &conn->left, verbose != 0);
 #else /* !defined(NETKEY_SUPPORT) */
-	fprintf(stderr, "addcon: without NETKEY, cannot resolve_defaultroute()\n");
+	fprintf(stderr, "addcon: without XFRM/NETKEY, cannot resolve_defaultroute()\n");
 	exit(7);	/* random code */
 #endif
 }
@@ -209,6 +207,8 @@ static const struct option longopts[] =
 
 int main(int argc, char *argv[])
 {
+	tool_init_log(argv[0]);
+
 	int opt;
 	bool autoall = FALSE;
 	bool configsetup = FALSE;
@@ -236,9 +236,6 @@ int main(int argc, char *argv[])
 	EF_PROTECT_BELOW = 1;
 	EF_PROTECT_FREE = 1;
 #endif
-
-	tool_init_log(argv[0]);
-
 	while ((opt = getopt_long(argc, argv, "", longopts, 0)) != EOF) {
 		switch (opt) {
 		case 'h':
@@ -690,10 +687,11 @@ int main(int argc, char *argv[])
 	unbound_ctx_free();
 #endif
 	/*
-	 * Only RC_ codes between RC_DUPNAME and RC_NEW_STATE are errors
-	 * Some starter code above can also return -1 which is not a valid RC_ code
+	 * Only RC_ codes between RC_EXIT_FLOOR (RC_DUPNAME) and
+	 * RC_EXIT_ROOF (RC_NEW_V1_STATE) are errors Some starter code
+	 * above can also return -1 which is not a valid RC_ code
 	 */
-	if (exit_status > 0 && (exit_status < RC_DUPNAME || exit_status >= RC_NEW_STATE))
+	if (exit_status > 0 && (exit_status < RC_EXIT_FLOOR || exit_status >= RC_EXIT_ROOF))
 		exit_status = 0;
 	exit(exit_status);
 }

@@ -20,33 +20,10 @@
 
 #include "err.h"
 
-#include <stdint.h>
-#include <stdbool.h> /* for 'bool' */
+#include <stdbool.h>
 
-/*
- * Libreswan was written before <stdbool.h> was standardized.
- *
- * (Contradicting the kernel coding style) TRUE and FALSE continue to
- * be used because some think that it is clearer than true or false.
- */
-
-#ifndef TRUE
-# define TRUE true
-#endif
-
-#ifndef FALSE
-# define FALSE false
-#endif
-
-#include <stddef.h>
-
-/* Some constants code likes to use. Useful? */
-
-enum {
-	secs_per_minute = 60,
-	secs_per_hour = 60 * secs_per_minute,
-	secs_per_day = 24 * secs_per_hour
-};
+#include <sys/types.h>
+#include <netinet/in.h>
 
 /*
  * When using uclibc, malloc(0) returns NULL instead of success. This is
@@ -58,15 +35,6 @@ enum {
 #  warning Please compile uclibc with GLIBC_COMPATIBILITY defined
 # endif
 #endif
-
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <string.h>
-#include <ctype.h>
-#include <assert.h>
-#define user_assert(foo) assert(foo)
-#include <stdio.h>
-#include <stdint.h>
 
 #define DEBUG_NO_STATIC static
 
@@ -85,13 +53,6 @@ enum {
 
 /* and the SA ID stuff */
 typedef uint32_t ipsec_spi_t;
-
-/* misc */
-struct prng {                   /* pseudo-random-number-generator guts */
-	unsigned char sbox[256];
-	int i, j;
-	unsigned long count;
-};
 
 /*
  * definitions for user space, taken linux/include/libreswan/ipsec_sa.h
@@ -117,14 +78,6 @@ typedef uint32_t IPsecSAref_t;
 /* Not representable as an nfmark */
 #define IPSEC_SAREF_NA   ((IPsecSAref_t)0xffff0001)
 
-#include "lswcdefs.h"
-
-/*
- * function to log stuff from libraries that may be used in multiple
- * places.
- */
-typedef int (*libreswan_keying_debug_func_t)(const char *message, ...) PRINTF_LIKE(1);
-
 /*
  * new IPv6-compatible functions
  */
@@ -137,7 +90,6 @@ extern size_t ultot(unsigned long src, int format, char *buf, size_t buflen);
 #define ULTOT_BUF       (22 + 1)  /* holds 64 bits in octal */
 
 extern size_t sin_addrtot(const void *sin, int format, char *dst, size_t dstlen);
-#define SUBNETPROTOTOT_BUF      (SUBNETTOTO_BUF + ULTOT_BUF)
 #define SAMIGTOT_BUF    (16 + SATOT_BUF + ADDRTOT_BUF)
 extern err_t ttodata(const char *src, size_t srclen, int base, char *buf,
 	      size_t buflen, size_t *needed);
@@ -159,12 +111,6 @@ extern size_t splitkeytoid(const unsigned char *e, size_t elen,
 extern err_t ttoprotoport(char *src, size_t src_len, u_int8_t *proto, u_int16_t *port,
 			  bool *has_port_wildcard);
 
-/* PRNG */
-extern void prng_init(struct prng *prng, const unsigned char *key, size_t keylen);
-extern void prng_bytes(struct prng *prng, unsigned char *dst, size_t dstlen);
-extern unsigned long prng_count(struct prng *prng);
-extern void prng_final(struct prng *prng);
-
 /* odds and ends */
 extern const char *ipsec_version_code(void);
 extern const char *ipsec_version_vendorid(void);
@@ -185,13 +131,6 @@ extern struct in_addr hostof(struct in_addr addr,
 extern struct in_addr broadcastof(struct in_addr addr,
 			   struct in_addr mask
 			   );
-
-/* mask handling */
-extern int goodmask(struct in_addr mask);
-extern int masktobits(struct in_addr mask);
-extern int mask6tobits(struct in6_addr *mask);
-extern struct in_addr  bitstomask(int n);
-extern struct in6_addr bitstomask6(int n);
 
 /*
  * ENUM of klips debugging values. Not currently used in klips.

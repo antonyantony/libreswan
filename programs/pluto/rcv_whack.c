@@ -37,7 +37,6 @@
 #include <fcntl.h>
 #include <unistd.h>		/* for gethostname() */
 
-#include <libreswan.h>
 #include "libreswan/pfkeyv2.h"
 
 #include <event2/event.h>
@@ -76,6 +75,11 @@
 #include "ip_address.h" /* for setportof() */
 #include "crl_queue.h"
 #include "pluto_sd.h"
+#include "initiate.h"
+
+#ifdef USE_XFRM_INTERFACE
+# include "kernel_xfrm_interface.h"
+#endif
 
 #include "pluto_stats.h"
 
@@ -104,17 +108,19 @@ struct key_add_continuation {
 static int whack_route_connection(struct connection *c,
 				  UNUSED void *arg)
 {
-	set_cur_connection(c);
+	struct connection *old = push_cur_connection(c);
 
-	if (!oriented(*c))
-		whack_log(RC_ORIENT,
-			"we cannot identify ourselves with either end of this connection");
-	else if (c->policy & POLICY_GROUP)
+	if (!oriented(*c)) {
+		/* XXX: why whack only? */
+		log_connection(RC_ORIENT|WHACK_STREAM, c,
+			       "we cannot identify ourselves with either end of this connection");
+	} else if (c->policy & POLICY_GROUP) {
 		route_group(c);
-	else if (!trap_connection(c))
-		whack_log(RC_ROUTE, "could not route");
-
-	reset_cur_connection();
+	} else if (!trap_connection(c)) {
+		/* XXX: why whack only? */
+		log_connection(RC_ROUTE|WHACK_STREAM, c, "could not route");
+	}
+	pop_cur_connection(old);
 	return 1;
 }
 
@@ -155,6 +161,9 @@ static void do_whacklisten(void)
 	libreswan_log("listening for IKE messages");
 	listening = TRUE;
 	find_ifaces(TRUE /* remove dead interfaces */);
+#ifdef USE_XFRM_INTERFACE
+	stale_xfrmi_interfaces();
+#endif
 	load_preshared_secrets();
 	load_groups();
 #ifdef USE_SYSTEMD_WATCHDOG
@@ -164,7 +173,7 @@ static void do_whacklisten(void)
 
 static void key_add_request(const struct whack_message *msg)
 {
-	log_to_log("add keyid %s", msg->keyid);
+	plog_global("add keyid %s", msg->keyid);
 	struct id keyid;
 	err_t ugh = atoid(msg->keyid, &keyid, FALSE);
 
@@ -173,12 +182,12 @@ static void key_add_request(const struct whack_message *msg)
 	} else {
 		if (!msg->whack_addkey)
 			delete_public_keys(&pluto_pubkeys, &keyid,
-					   msg->pubkey_alg);
+					   pubkey_alg_type(msg->pubkey_alg));
 
 		if (msg->keyval.len != 0) {
-			DBG_dump_chunk("add pubkey", msg->keyval);
+			DBG_dump_hunk("add pubkey", msg->keyval);
 			ugh = add_public_key(&keyid, PUBKEY_LOCAL,
-					     msg->pubkey_alg,
+					     pubkey_alg_type(msg->pubkey_alg),
 					     &msg->keyval, &pluto_pubkeys);
 			if (ugh != NULL)
 				loglog(RC_LOG_SERIOUS, "%s", ugh);
@@ -187,82 +196,11 @@ static void key_add_request(const struct whack_message *msg)
 		}
 	}
 }
-static char whackrecordname[PATH_MAX];
-static FILE *whackrecordfile = NULL;
-
-/*
- * writewhackrecord must match readwhackmsg.
- * Writes out 64 bits for time, even if we only have 32-bit time_t.
- */
-static bool writewhackrecord(char *buf, size_t buflen)
-{
-	uint32_t header[3];	/* length, high time, low time */
-	time_t now = time(NULL);
-
-	/* round up buffer length */
-	size_t abuflen = (buflen + sizeof(header[0]) - 1) & ~(sizeof(header[0]) - 1);
-
-	/* bail if we aren't writing anything */
-	if (whackrecordfile == NULL)
-		return TRUE;
-
-	header[0] = buflen + sizeof(header);
-	header[1] = (now >> 16) >> 16;	/* >> 32 not legal on 32-bit systems */
-	header[2] = now;	/* bottom 32 bits */
-
-	/* DBG_log("buflen: %zu abuflen: %zu", buflen, abuflen); */
-
-	if (fwrite(header, sizeof(header), 1, whackrecordfile) < 1)
-		DBG_log("writewhackrecord: fwrite error when writing header");
-
-	if (fwrite(buf, abuflen, 1, whackrecordfile) < 1)
-		DBG_log("writewhackrecord: fwrite error when writing buf");
-
-	return TRUE;
-}
-
-/*
- * we write out an empty record with the right WHACK magic.
- * this should permit a later mechanism to figure out the
- * endianness of the file, since we will get records from
- * other systems for analysis eventually.
- */
-static bool openwhackrecordfile(char *file)
-{
-	char when[256];
-	char FQDN[SWAN_MAX_DOMAIN_LEN];
-	const uint32_t magic = WHACK_BASIC_MAGIC;
-
-	strcpy(FQDN, "unknown host");
-	gethostname(FQDN, sizeof(FQDN));
-
-	jam_str(whackrecordname, sizeof(whackrecordname), file);
-	whackrecordfile = fopen(whackrecordname, "w");
-	if (whackrecordfile == NULL) {
-		libreswan_log("Failed to open whack record file: '%s'",
-			      whackrecordname);
-		return FALSE;
-	}
-
-	struct realtm now = local_realtime(realnow());
-	strftime(when, sizeof(when), "%F %T", &now.tm);
-
-	fprintf(whackrecordfile, "#!-pluto-whack-file- recorded on %s on %s",
-		FQDN, when);
-
-	writewhackrecord((char *)&magic, sizeof(magic));
-
-	DBG(DBG_CONTROL,
-	    DBG_log("started recording whack messages to %s",
-		    whackrecordname));
-	return TRUE;
-}
-
 
 /*
  * handle a whack message.
  */
-void whack_process(fd_t whackfd, const struct whack_message *const m)
+static bool whack_process(struct fd *whackfd, const struct whack_message *const m)
 {
 	/*
 	 * May be needed in future:
@@ -271,14 +209,12 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 	if (m->whack_options) {
 		switch (m->opt_set) {
 		case WHACK_ADJUSTOPTIONS:
-#ifdef FIPS_CHECK
 			if (libreswan_fipsmode()) {
 				if (lmod_is_set(m->debugging, DBG_PRIVATE)) {
 					whack_log(RC_FATAL, "FIPS: --debug-private is not allowed in FIPS mode, aborted");
-					goto done;
+					return false; /*don't shutdown*/
 				}
 			}
-#endif
 			if (m->name == NULL) {
 				/*
 				 * This is done in two two-steps so
@@ -303,7 +239,7 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 						    "+", m->debugging);
 				}
 				LSWDBGP(DBG_CONTROL, buf) {
-					lswlogs(buf, "base debugging = ");
+					lswlogs(buf, "new debugging = ");
 					lswlog_enum_lset_short(buf, &debug_names,
 							       "+", new_debugging);
 				}
@@ -316,18 +252,18 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 						    "+", m->impairing);
 				}
 				LSWDBGP(DBG_CONTROL, buf) {
-					lswlogs(buf, "base impairing = ");
+					lswlogs(buf, "new impairing = ");
 					lswlog_enum_lset_short(buf, &impair_names,
 							       "+", new_impairing);
 				}
-				base_debugging = new_debugging | new_impairing;
-				set_debugging(base_debugging);
+				set_debugging(new_debugging | new_impairing);
 				process_impair(&m->impairment);
 			} else if (!m->whack_connection) {
-				struct connection *c = conn_by_name(m->name,
-								   TRUE, FALSE);
-
-				if (c != NULL) {
+				struct connection *c = conn_by_name(m->name, true/*strict*/);
+				if (c == NULL) {
+					whack_log(RC_UNKNOWN_NAME,
+						  "no connection named \"%s\"", m->name);
+				} else if (c != NULL) {
 					c->extra_debugging = m->debugging;
 					LSWDBGP(DBG_CONTROL, buf) {
 						lswlogf(buf, "\"%s\" extra_debugging = ",
@@ -351,32 +287,21 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 			/* XXX */
 			break;
 
-		case WHACK_STARTWHACKRECORD:
-			/* close old filename */
-			if (whackrecordfile != NULL) {
-				DBG(DBG_CONTROL,
-				    DBG_log("stopped recording whack messages to %s",
-					    whackrecordname));
-				fclose(whackrecordfile);
-			}
-			whackrecordfile = NULL;
-
-			openwhackrecordfile(m->string1);
-
-			/* do not do any other processing for these */
-			goto done;
-
-		case WHACK_STOPWHACKRECORD:
-			if (whackrecordfile != NULL) {
-				DBG(DBG_CONTROL,
-				    DBG_log("stopped recording whack messages to %s",
-					    whackrecordname));
-				fclose(whackrecordfile);
-			}
-			whackrecordfile = NULL;
-			/* do not do any other processing for these */
-			goto done;
 		}
+	}
+
+	if (m->whack_rekey_ike) {
+		if (m->name == NULL)
+			whack_log(RC_FATAL, "received whack command to rekey IKE SA of connection, but did not receive the connection name or state number - ignored");
+		else
+			rekey_now(m->name, IKE_SA);
+	}
+
+	if (m->whack_rekey_ipsec) {
+		if (m->name == NULL)
+			whack_log(RC_FATAL, "received whack command to rekey IPsec SA of connection, but did not receive the connection name or state number - ignored");
+		else
+			rekey_now(m->name, IPSEC_SA);
 	}
 
 	/* Deleting combined with adding a connection works as replace.
@@ -396,10 +321,10 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 		if (m->name == NULL ) {
 			whack_log(RC_FATAL, "received whack command to delete a connection by username, but did not receive the username - ignored");
 		} else {
-			log_to_log("received whack to delete connection by user %s",
-				m->name);
-			dbg("FOR_EACH_STATE_... via for_each_state in %s", __func__);
-			for_each_state(v1_delete_state_by_username, m->name);
+			plog_global("received whack to delete connection by user %s",
+				    m->name);
+			for_each_state(v1_delete_state_by_username, m->name,
+				       __func__);
 		}
 	}
 
@@ -407,10 +332,9 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 		if (m->name == NULL ) {
 			whack_log(RC_FATAL, "received whack command to delete a connection by id, but did not receive the id - ignored");
 		} else {
-			log_to_log("received whack to delete connection by id %s",
-				m->name);
-			dbg("FOR_EACH_STATE_... via for_each_state in %s", __func__);
-			for_each_state(delete_state_by_id_name, m->name);
+			plog_global("received whack to delete connection by id %s",
+				    m->name);
+			for_each_state(delete_state_by_id_name, m->name, __func__);
 		}
 	}
 
@@ -423,13 +347,13 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 					m->whack_deletestateno);
 		} else {
 			set_cur_state(st);
-			log_to_log("received whack to delete %s state #%lu %s",
+			plog_state(st, "received whack to delete %s state #%lu %s",
 				   enum_name(&ike_version_names, st->st_ike_version),
 				   st->st_serialno,
-				   st->st_state_name);
+				   st->st_state->name);
 
 			if ((st->st_ike_version == IKEv2) && !IS_CHILD_SA(st)) {
-				log_to_log("Also deleting any corresponding CHILD_SAs");
+				plog_state(st, "Also deleting any corresponding CHILD_SAs");
 				delete_my_family(st, FALSE);
 				/* note: no md->st to clear */
 			} else {
@@ -460,7 +384,6 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 			/* we are redirecting all peers of one connection */
 			find_states_and_redirect(m->name, m->active_redirect_peer, redirect_gw);
 		}
-
 	}
 
 	/* update any socket buffer size before calling listen */
@@ -488,11 +411,17 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 	if (m->whack_ddos != DDOS_undefined)
 		set_whack_pluto_ddos(m->whack_ddos);
 
+	if (m->whack_ddns) {
+		libreswan_log("updating pending dns lookups");
+		connection_check_ddns();
+	}
+
 	if (m->whack_reread & REREAD_SECRETS)
 		load_preshared_secrets();
 
 	if (m->whack_list & LIST_PUBKEYS)
-		list_public_keys(m->whack_utc, m->whack_check_pub_keys);
+		list_public_keys(whackfd, m->whack_utc,
+				 m->whack_check_pub_keys);
 
 	if (m->whack_purgeocsp)
 		clear_ocsp_cache();
@@ -506,23 +435,23 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 #endif
 
 	if (m->whack_list & LIST_PSKS)
-		list_psks();
+		list_psks(whackfd);
 
 	if (m->whack_list & LIST_CERTS)
-		list_certs();
+		list_certs(whackfd);
 
 	if (m->whack_list & LIST_CACERTS)
-		list_authcerts();
+		list_authcerts(whackfd);
 
 	if (m->whack_list & LIST_CRLS) {
-		list_crls();
+		list_crls(whackfd);
 #if defined(LIBCURL) || defined(LIBLDAP)
-		list_crl_fetch_requests(m->whack_utc);
+		list_crl_fetch_requests(whackfd, m->whack_utc);
 #endif
 	}
 
 	if (m->whack_list & LIST_EVENTS)
-		timer_list();
+		timer_list(whackfd);
 
 	if (m->whack_key) {
 		/* add a public key */
@@ -533,8 +462,7 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 		if (!listening) {
 			whack_log(RC_DEAF, "need --listen before --route");
 		} else {
-			struct connection *c = conn_by_name(m->name,
-							TRUE, TRUE);
+			struct connection *c = conn_by_name(m->name, true/*strict*/);
 
 			if (c != NULL) {
 				whack_route_connection(c, NULL);
@@ -551,7 +479,7 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 	if (m->whack_unroute) {
 		passert(m->name != NULL);
 
-		struct connection *c = conn_by_name(m->name, TRUE, TRUE);
+		struct connection *c = conn_by_name(m->name, true/*strict*/);
 
 		if (c != NULL) {
 			whack_unroute_connection(c, NULL);
@@ -582,13 +510,8 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 					pass_remote = TRUE;
 				}
 			}
-			initiate_connection(m->name,
-					    (m->whack_async ?
-					     null_fd :
-					     dup_any(whackfd)),
-					    m->debugging,
-					    m->impairing,
-					    pass_remote ? m->remote_host : NULL);
+			initiate_connections_by_name(m->name, (m->whack_async ? null_fd : whackfd),
+						     pass_remote ? m->remote_host : NULL);
 		}
 	}
 
@@ -600,12 +523,8 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 			initiate_ondemand(&m->oppo_my_client,
 						&m->oppo_peer_client, m->oppo_proto,
 						FALSE,
-						m->whack_async ?
-						  null_fd :
-						  dup_any(whackfd),
-#ifdef HAVE_LABELED_IPSEC
+					  (m->whack_async ? null_fd : whackfd),
 						NULL,
-#endif
 						"whack");
 		}
 	}
@@ -616,10 +535,10 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 	}
 
 	if (m->whack_status)
-		show_status();
+		show_status(whackfd);
 
 	if (m->whack_global_status)
-		show_global_status();
+		show_global_status(whackfd);
 
 	if (m->whack_clear_stats)
 		clear_pluto_stats();
@@ -628,13 +547,13 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 		show_traffic_status(m->name);
 
 	if (m->whack_shunt_status)
-		show_shunt_status();
+		show_shunt_status(whackfd);
 
 	if (m->whack_fips_status)
-		show_fips_status();
+		show_fips_status(whackfd);
 
 	if (m->whack_brief_status)
-		show_states_status(TRUE);
+		show_states_status(whackfd, TRUE);
 
 #ifdef HAVE_SECCOMP
 	if (m->whack_seccomp_crashtest) {
@@ -690,158 +609,107 @@ void whack_process(fd_t whackfd, const struct whack_message *const m)
 
 	if (m->whack_shutdown) {
 		libreswan_log("shutting down");
-		exit_pluto(PLUTO_EXIT_OK); /* delete lock and leave, with 0 status */
+		return true; /* shutting down */
 	}
 
-done:
-	whack_log_fd = null_fd;
-	close_any(&whackfd);
+	return false; /* don't shut down */
 }
 
-static void whack_handle(int kernelfd);
+static bool whack_handle(struct fd *whackfd);
 
 void whack_handle_cb(evutil_socket_t fd, const short event UNUSED,
-		void *arg UNUSED)
+		     void *arg UNUSED)
 {
-		whack_handle(fd);
+	threadtime_t start = threadtime_start();
+	{
+		struct fd *whackfd = fd_accept(fd, HERE);
+		if (whackfd == NULL) {
+			/* already logged */
+			return;
+		}
+		whack_log_fd = whackfd;
+		bool shutdown = whack_handle(whackfd);
+		whack_log_fd = null_fd;
+		if (shutdown) {
+			/*
+			 * Leak the whack FD, when pluto finally exits
+			 * it will be closed and whack released.
+			 *
+			 * Note that the above killed off whack_log_fd
+			 * which means that the entire exit process is
+			 * radio silent.
+			 */
+			fd_leak(&whackfd, HERE);
+			/* XXX: shutdown the event loop */
+			exit_pluto(PLUTO_EXIT_OK);
+		} else {
+			close_any(&whackfd);
+		}
+	}
+	threadtime_stop(&start, SOS_NOBODY, "whack");
 }
 
 /*
  * Handle a whack request.
  */
-static void whack_handle(int whackctlfd)
+static bool whack_handle(struct fd *whackfd)
 {
-	struct whack_message msg, msg_saved;
-	struct sockaddr_un whackaddr;
-	socklen_t whackaddrlen = sizeof(whackaddr);
-	fd_t whackfd = NEW_FD(accept(whackctlfd, (struct sockaddr *)&whackaddr,
-				     &whackaddrlen));
-	/* Note: actual value in n should fit in int.  To print, cast to int. */
-	ssize_t n;
-
-	/* static int msgnum=0; */
-
-	if (!fd_p(whackfd)) {
-		LOG_ERRNO(errno, "accept() failed in whack_handle()");
-		return;
-	}
-	if (fcntl(whackfd.fd, F_SETFD, FD_CLOEXEC) < 0) {
-		LOG_ERRNO(errno, "failed to set CLOEXEC in whack_handle()");
-		close_any(&whackfd);
-		return;
-	}
-
 	/*
-	 * properly initialize msg
-	 *
-	 * - needed because short reads are sometimes OK
-	 *
-	 * - although struct whack_msg has pointer fields
-	 *   they don't appear on the wire so zero() should work.
+	 * properly initialize msg - needed because short reads are
+	 * sometimes OK
 	 */
-	zero(&msg);
+	struct whack_message msg = { .magic = 0, };
 
-	n = read(whackfd.fd, &msg, sizeof(msg));
+	ssize_t n = fd_read(whackfd, &msg, sizeof(msg), HERE);
 	if (n <= 0) {
 		LOG_ERRNO(errno, "read() failed in whack_handle()");
-		close_any(&whackfd);
-		return;
+		return false; /* don't shutdown */
 	}
-
-	whack_log_fd = whackfd;
-
-	msg_saved = msg;
 
 	/* DBG_log("msg %d size=%u", ++msgnum, n); */
 
 	/* sanity check message */
 	{
-		err_t ugh = NULL;
-		struct whackpacker wp;
+		if ((size_t)n < offsetof(struct whack_message,
+					 whack_shutdown) + sizeof(msg.whack_shutdown)) {
+			loglog(RC_BADWHACKMESSAGE, "ignoring runt message from whack: got %zd bytes", n);
+			return false; /* don't shutdown */
+		}
 
-		wp.msg = &msg;
-		wp.n   = n;
-		wp.str_next = msg.string;
-		wp.str_roof = (unsigned char *)&msg + n;
+		if (msg.magic != WHACK_MAGIC) {
 
-		if ((size_t)n <
-		    offsetof(struct whack_message,
-			     whack_shutdown) + sizeof(msg.whack_shutdown)) {
-			ugh = builddiag(
-				"ignoring runt message from whack: got %d bytes",
-				(int)n);
-		} else if (msg.magic != WHACK_MAGIC) {
 			if (msg.whack_shutdown) {
 				libreswan_log("shutting down%s",
 				    (msg.magic != WHACK_BASIC_MAGIC) ?  " despite whacky magic" : "");
-				exit_pluto(PLUTO_EXIT_OK);  /* delete lock and leave, with 0 status */
+				return true; /* force shutting down */
 			}
+
 			if (msg.magic == WHACK_BASIC_MAGIC) {
 				/* Only basic commands.  Simpler inter-version compatibility. */
 				if (msg.whack_status)
-					show_status();
-
-				ugh = "";               /* bail early, but without complaint */
-			} else {
-				ugh = builddiag(
-					"ignoring message from whack with bad magic %d; should be %d; Mismatched versions of userland tools.",
-					msg.magic, WHACK_MAGIC);
+					show_status(whackfd);
+				/* bail early, but without complaint */
+				return false; /* don't shutdown */
 			}
-		} else {
-			ugh = unpack_whack_msg(&wp);
-		}
 
-		if (ugh != NULL) {
-			if (*ugh != '\0')
-				loglog(RC_BADWHACKMESSAGE, "%s", ugh);
-			whack_log_fd = null_fd;
-			close_any(&whackfd);
-			return;
+			loglog(RC_BADWHACKMESSAGE, "ignoring message from whack with bad magic %d; should be %d; Mismatched versions of userland tools.",
+			       msg.magic, WHACK_MAGIC);
+			return false; /* bail (but don't shutdown) */
 		}
 	}
 
-	/* dump record if necessary */
-	writewhackrecord((char *)&msg_saved, n);
-
-	whack_process(whackfd, &msg);
-}
-
-/*
- * interactive input from the whack user, using current whack_fd
- */
-bool whack_prompt_for(fd_t whackfd,
-		      const char *prompt1,
-		      const char *prompt2,
-		      bool echo,
-		      char *ansbuf, size_t ansbuf_len)
-{
-	fd_t savewfd = whack_log_fd;
-	ssize_t n;
-
-	whack_log_fd = whackfd;
-
-	DBG(DBG_CONTROLMORE, DBG_log("prompting for %s:", prompt2));
-
-	whack_log(echo ? RC_USERPROMPT : RC_ENTERSECRET,
-		  "%s prompt for %s:",
-		  prompt1, prompt2);
-
-	whack_log_fd = savewfd;
-
-	n = read(whackfd.fd, ansbuf, ansbuf_len);
-
-	if (n == -1) {
-		whack_log(RC_LOG_SERIOUS, "read(whackfd) failed: %s",
-			  strerror(errno));
-		return FALSE;
+	struct whackpacker wp = {
+		.msg = &msg,
+		.n = n,
+		.str_next = msg.string,
+		.str_roof = (unsigned char *)&msg + n,
+	};
+	const char *ugh = unpack_whack_msg(&wp);
+	if (ugh != NULL) {
+		if (*ugh != '\0')
+			loglog(RC_BADWHACKMESSAGE, "%s", ugh);
+		return false; /* don't shutdown */
 	}
 
-	if (n == 0) {
-		whack_log(RC_LOG_SERIOUS, "no %s entered, aborted", prompt2);
-		return FALSE;
-	}
-
-	ansbuf[ansbuf_len - 1] = '\0'; /* ensure buffer is NULL terminated */
-
-	return TRUE;
+	return whack_process(whackfd, &msg);
 }

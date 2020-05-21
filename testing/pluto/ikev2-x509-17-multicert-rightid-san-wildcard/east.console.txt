@@ -11,7 +11,7 @@ east #
 pk12util: PKCS12 IMPORT SUCCESSFUL
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -32,7 +32,6 @@ east #
  hostname | grep east && grep switched /tmp/pluto.log
 east
 "main-north"[1] 192.1.2.45 #1: switched from "main-north"[1] 192.1.2.45 to "main-east"
-east #
 east #
  ../bin/check-for-core.sh
 east #

@@ -1,5 +1,5 @@
 /*
- * misc. universal things
+ * Misc. universal things
  *
  * Copyright (C) 1997 Angelos D. Keromytis.
  * Copyright (C) 1998-2001, 2013 D. Hugh Redelmeier <hugh@mimosa.com>
@@ -30,7 +30,7 @@ extern void pfree(void *ptr);
 extern void *alloc_bytes(size_t size, const char *name);
 extern void *clone_bytes(const void *orig, size_t size,
 			  const char *name);
-void resize_bytes(void **ptr, size_t new_size);
+void realloc_bytes(void **ptr, size_t old_size, size_t new_size, const char *name);
 
 extern bool leak_detective;
 extern void report_leaks(void);
@@ -70,6 +70,16 @@ extern void report_leaks(void);
 
 #define alloc_things(THING, COUNT, NAME) ((THING*) alloc_bytes(sizeof(THING) * (COUNT), (NAME)))
 
+#define realloc_things(THINGS, OLD_COUNT, NEW_COUNT, NAME)		\
+	{								\
+		void *things_ = THINGS;					\
+		realloc_bytes(&things_,					\
+			      OLD_COUNT * sizeof((THINGS)[0]),		\
+			      NEW_COUNT * sizeof((THINGS)[0]),		\
+			      NAME);					\
+		THINGS = things_;					\
+	}
+
 #define clone_thing(orig, name)						\
 	((__typeof__(&(orig))) clone_bytes((const void *)&(orig),	\
 					   sizeof(orig), (name)))
@@ -90,7 +100,10 @@ extern void report_leaks(void);
 
 #define replace(p, q) { pfreeany(p); (p) = (q); }
 
-typedef void (*exit_log_func_t)(const char *message, ...);
-extern void set_alloc_exit_log_func(exit_log_func_t func);
+/*
+ * Memory primitives, should only be used by libevent.
+ */
+void *uninitialized_malloc(size_t size, const char *name);
+void *uninitialized_realloc(void *ptr, size_t size, const char *name);
 
 #endif /* _LSW_ALLOC_H_ */

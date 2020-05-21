@@ -27,25 +27,25 @@
 #include <stdlib.h>
 #include <errno.h>
 
-#include <libreswan.h>
 
 #include "sysdep.h"
 #include "constants.h"
 #include "lswfips.h"
 #include "lswlog.h"
 #include "lswalloc.h"
+#include "proposals.h"
 #include "ike_alg.h"
 #include "ike_alg_integ.h"
 #include "ike_alg_encrypt.h"
-#include "proposals.h"
+#include "ike_alg_encrypt_ops.h"
 #include "ike_alg_prf.h"
-#include "ike_alg_prf_hmac_ops.h"
-#include "ike_alg_prf_nss_ops.h"
+#include "ike_alg_prf_mac_ops.h"
+#include "ike_alg_prf_ikev1_ops.h"
+#include "ike_alg_prf_ikev2_ops.h"
 #include "ike_alg_hash.h"
-#include "ike_alg_hash_nss_ops.h"
+#include "ike_alg_hash_ops.h"
 #include "ike_alg_dh.h"
-#include "ike_alg_dh_nss_modp_ops.h"
-#include "ike_alg_dh_nss_ecp_ops.h"
+#include "ike_alg_dh_ops.h"
 
 /*==========================================================
 *
@@ -60,10 +60,10 @@ des*       - lookup
 	     (A) < (TYPE)->algorithms->end;				\
 	     (A)++)
 
-#define FOR_EACH_IKE_ALG_NAMEP(ALG, NAMEP)				\
-	for (const char *const *(NAMEP) = (ALG)->names;			\
-	     (NAMEP) < (ALG)->names + elemsof((ALG)->names) && *(NAMEP); \
-	     (NAMEP)++)
+#define FOR_EACH_IKE_ALG_NAME(ALG, NAME)				\
+	for (shunk_t NAME##input = shunk1((ALG)->names),		\
+		     NAME = shunk_token(&NAME##input, NULL, ",");	\
+	     NAME.len > 0; NAME = shunk_token(&NAME##input, NULL, ","))
 
 struct algorithm_table {
 	const struct ike_alg **start;
@@ -146,10 +146,10 @@ const struct integ_desc **next_integ_desc(const struct integ_desc **last)
 						   (const struct ike_alg**)last);
 }
 
-const struct oakley_group_desc **next_oakley_group(const struct oakley_group_desc **last)
+const struct dh_desc **next_dh_desc(const struct dh_desc **last)
 {
-	return (const struct oakley_group_desc**)next_alg(&ike_alg_dh,
-							  (const struct ike_alg**)last);
+	return (const struct dh_desc**)next_alg(&ike_alg_dh,
+						(const struct ike_alg**)last);
 }
 
 const struct ike_alg *ike_alg_byname(const struct ike_alg_type *type,
@@ -158,9 +158,8 @@ const struct ike_alg *ike_alg_byname(const struct ike_alg_type *type,
 	passert(type != NULL);
 	for (const struct ike_alg **alg = next_alg(type, NULL);
 	     alg != NULL; alg = next_alg(type, alg)) {
-		FOR_EACH_IKE_ALG_NAMEP(*alg, namep) {
-			if (strlen(*namep) == name.len &&
-			    strncaseeq(*namep, name.ptr, name.len)) {
+		FOR_EACH_IKE_ALG_NAME(*alg, alg_name) {
+			if (shunk_caseeq(alg_name, name)) {
 				return *alg;
 			}
 		}
@@ -258,7 +257,7 @@ const struct prf_desc *ikev1_get_ike_prf_desc(enum ikev1_auth_attribute id)
 	return prf_desc(ikev1_oakley_lookup(&ike_alg_prf, id));
 }
 
-const struct oakley_group_desc *ikev1_get_ike_dh_desc(enum ike_trans_type_dh id)
+const struct dh_desc *ikev1_get_ike_dh_desc(enum ike_trans_type_dh id)
 {
 	return dh_desc(ikev1_oakley_lookup(&ike_alg_dh, id));
 }
@@ -293,7 +292,7 @@ const struct integ_desc *ikev2_get_integ_desc(enum ikev2_trans_type_integ id)
 	return integ_desc(ikev2_lookup(&ike_alg_integ, id));
 }
 
-const struct oakley_group_desc *ikev2_get_dh_desc(enum ike_trans_type_dh id)
+const struct dh_desc *ikev2_get_dh_desc(enum ike_trans_type_dh id)
 {
 	return dh_desc(ikev2_lookup(&ike_alg_dh, id));
 }
@@ -338,16 +337,14 @@ static bool ike_alg_in_table(const struct ike_alg *alg)
 	return false;
 }
 
-static void pexpect_ike_alg_base_in_table(const struct ike_alg *alg,
+static void pexpect_ike_alg_base_in_table(where_t where,
+					  const struct ike_alg *alg,
 					  const struct ike_alg *base_alg)
 {
 	if (!ike_alg_in_table(base_alg)) {
-		LSWLOG_PEXPECT(buf) {
-			lswlog_ike_alg(buf, alg);
-			lswlogs(buf, " base ");
-			lswlog_ike_alg(buf, base_alg);
-			lswlogs(buf, " missing from algorithm table");
-		}
+		log_pexpect(where,
+			    PRI_IKE_ALG" base "PRI_IKE_ALG" missing from algorithm table",
+			    pri_ike_alg(alg), pri_ike_alg(base_alg));
 	}
 }
 
@@ -355,31 +352,28 @@ static void pexpect_ike_alg_base_in_table(const struct ike_alg *alg,
  * Check that name appears in alg->names
  */
 
-static bool ike_alg_has_name(const struct ike_alg *alg, const char *name)
+static bool ike_alg_has_name(const struct ike_alg *alg, shunk_t name)
 {
-	FOR_EACH_IKE_ALG_NAMEP(alg, namep) {
-		if (strcaseeq(name, *namep)) {
+	FOR_EACH_IKE_ALG_NAME(alg, alg_name) {
+		if (shunk_caseeq(alg_name, name)) {
 			return true;
 		}
 	}
 	return false;
 }
 
-static bool pexpect_ike_alg_has_name(const struct ike_alg *alg,
+static bool pexpect_ike_alg_has_name(where_t where,
+				     const struct ike_alg *alg,
 				     const char *name,
 				     const char *description)
 {
 	if (name == NULL) {
-		LSWLOG_PEXPECT(buf) {
-			lswlog_ike_alg(buf, alg);
-			lswlogf(buf, " %s name is NULL", description);
-		}
+		log_pexpect(where, PRI_IKE_ALG" %s name is NULL",
+			    pri_ike_alg(alg), description);
 		return false;
-	} else if (!ike_alg_has_name(alg, name)) {
-		LSWLOG_PEXPECT(buf) {
-			lswlog_ike_alg(buf, alg);
-			lswlogf(buf, " missing %s name %s", description, name);
-		}
+	} else if (!ike_alg_has_name(alg, shunk1(name))) {
+		log_pexpect(where, PRI_IKE_ALG" missing %s name %s",
+			    pri_ike_alg(alg), description, name);
 		return false;
 	}
 	return true;
@@ -391,19 +385,17 @@ static bool pexpect_ike_alg_has_name(const struct ike_alg *alg,
  * For instance, a PRF implemented using a HASH must have all the
  * shorter HASH names in the PRF name table.
  */
-static void pexpect_ike_alg_has_base_names(const struct ike_alg *alg,
+static void pexpect_ike_alg_has_base_names(where_t where,
+					   const struct ike_alg *alg,
 					   const struct ike_alg *base_alg)
 {
-	FOR_EACH_IKE_ALG_NAMEP(base_alg, namep) {
-		const char *name = *namep;
-		if (!ike_alg_has_name(alg, name)) {
-			LSWLOG_PEXPECT(buf) {
-				lswlog_ike_alg(buf, alg);
-				lswlogf(buf, " missing name %s in base ", name);
-				lswlog_ike_alg(buf, base_alg);
-			}
+	FOR_EACH_IKE_ALG_NAME(base_alg, alg_name) {
+		if (!ike_alg_has_name(alg, alg_name)) {
+			log_pexpect(where,
+				    PRI_IKE_ALG" missing name "PRI_SHUNK" in base "PRI_IKE_ALG,
+				    pri_ike_alg(alg), pri_shunk(alg_name),
+				    pri_ike_alg(base_alg));
 		}
-
 	}
 }
 
@@ -429,13 +421,15 @@ static void hash_desc_check(const struct ike_alg *alg)
 {
 	const struct hash_desc *hash = hash_desc(alg);
 	pexpect_ike_alg(alg, hash->hash_digest_size > 0);
+	struct crypt_mac mac;
+	pexpect_ike_alg(alg, hash->hash_digest_size <= sizeof(mac.ptr/*an array*/));
 	pexpect_ike_alg(alg, hash->hash_block_size > 0);
 	if (hash->hash_ops != NULL) {
+		pexpect_ike_alg(alg, hash->hash_ops->backend != NULL);
 		pexpect_ike_alg(alg, hash->hash_ops->check != NULL);
 		pexpect_ike_alg(alg, hash->hash_ops->digest_symkey != NULL);
 		pexpect_ike_alg(alg, hash->hash_ops->digest_bytes != NULL);
 		pexpect_ike_alg(alg, hash->hash_ops->final_bytes != NULL);
-		pexpect_ike_alg(alg, hash->hash_ops->symkey_to_symkey != NULL);
 		hash->hash_ops->check(hash);
 	}
 }
@@ -468,7 +462,7 @@ const struct ike_alg_type ike_alg_hash = {
 
 static const struct prf_desc *prf_descriptors[] = {
 #ifdef USE_MD5
-	&ike_alg_prf_md5,
+	&ike_alg_prf_hmac_md5,
 #endif
 #ifdef USE_SHA1
 	&ike_alg_prf_sha1,
@@ -478,7 +472,7 @@ static const struct prf_desc *prf_descriptors[] = {
 	&ike_alg_prf_sha2_384,
 	&ike_alg_prf_sha2_512,
 #endif
-#ifdef USE_XCBC
+#ifdef USE_PRF_AES_XCBC
 	&ike_alg_prf_aes_xcbc,
 #endif
 };
@@ -488,37 +482,65 @@ static void prf_desc_check(const struct ike_alg *alg)
 	const struct prf_desc *prf = prf_desc(alg);
 	pexpect_ike_alg(alg, prf->prf_key_size > 0);
 	pexpect_ike_alg(alg, prf->prf_output_size > 0);
-	pexpect_ike_alg_has_name(alg, prf->prf_ike_audit_name, ".prf_ike_audit_name");
-	if (prf->prf_ops != NULL) {
-		pexpect_ike_alg(alg, prf->prf_ops->check != NULL);
-		pexpect_ike_alg(alg, prf->prf_ops->init_symkey != NULL);
-		pexpect_ike_alg(alg, prf->prf_ops->init_bytes != NULL);
-		pexpect_ike_alg(alg, prf->prf_ops->digest_symkey != NULL);
-		pexpect_ike_alg(alg, prf->prf_ops->digest_bytes != NULL);
-		pexpect_ike_alg(alg, prf->prf_ops->final_symkey != NULL);
-		pexpect_ike_alg(alg, prf->prf_ops->final_bytes != NULL);
+	struct crypt_mac mac;
+	pexpect_ike_alg(alg, prf->prf_output_size <= sizeof(mac.ptr/*an array*/));
+	pexpect_ike_alg_has_name(HERE, alg, prf->prf_ike_audit_name, ".prf_ike_audit_name");
+	/* all or none */
+	pexpect_ike_alg(alg, (prf->prf_mac_ops != NULL) == (prf->prf_ikev1_ops != NULL));
+	pexpect_ike_alg(alg, (prf->prf_mac_ops != NULL) == (prf->prf_ikev2_ops != NULL));
+
+	if (prf->prf_mac_ops != NULL) {
+		pexpect_ike_alg(alg, prf->prf_mac_ops->backend != NULL);
+		pexpect_ike_alg(alg, prf->prf_mac_ops->check != NULL);
+		pexpect_ike_alg(alg, prf->prf_mac_ops->init_symkey != NULL);
+		pexpect_ike_alg(alg, prf->prf_mac_ops->init_bytes != NULL);
+		pexpect_ike_alg(alg, prf->prf_mac_ops->digest_symkey != NULL);
+		pexpect_ike_alg(alg, prf->prf_mac_ops->digest_bytes != NULL);
+		pexpect_ike_alg(alg, prf->prf_mac_ops->final_symkey != NULL);
+		pexpect_ike_alg(alg, prf->prf_mac_ops->final_bytes != NULL);
 		/*
 		 * IKEv1 IKE algorithms must have a hasher - used for
 		 * things like computing IV.
 		 */
 		pexpect_ike_alg(alg, prf->common.id[IKEv1_OAKLEY_ID] < 0 ||
 				     prf->hasher != NULL);
-		prf->prf_ops->check(prf);
+		prf->prf_mac_ops->check(prf);
 	}
+
+	if (prf->prf_ikev1_ops != NULL) {
+		pexpect_ike_alg(alg, prf->prf_ikev1_ops->backend != NULL);
+		pexpect_ike_alg(alg, prf->prf_ikev1_ops->signature_skeyid != NULL);
+		pexpect_ike_alg(alg, prf->prf_ikev1_ops->pre_shared_key_skeyid != NULL);
+		pexpect_ike_alg(alg, prf->prf_ikev1_ops->skeyid_d != NULL);
+		pexpect_ike_alg(alg, prf->prf_ikev1_ops->skeyid_a != NULL);
+		pexpect_ike_alg(alg, prf->prf_ikev1_ops->skeyid_e != NULL);
+		pexpect_ike_alg(alg, prf->prf_ikev1_ops->appendix_b_keymat_e != NULL);
+	}
+
+	if (prf->prf_ikev2_ops != NULL) {
+		pexpect_ike_alg(alg, prf->prf_ikev2_ops->backend != NULL);
+		pexpect_ike_alg(alg, prf->prf_ikev2_ops->prfplus != NULL);
+		pexpect_ike_alg(alg, prf->prf_ikev2_ops->ike_sa_skeyseed != NULL);
+		pexpect_ike_alg(alg, prf->prf_ikev2_ops->ike_sa_rekey_skeyseed != NULL);
+		pexpect_ike_alg(alg, prf->prf_ikev2_ops->ike_sa_keymat != NULL);
+		pexpect_ike_alg(alg, prf->prf_ikev2_ops->child_sa_keymat != NULL);
+		pexpect_ike_alg(alg, prf->prf_ikev2_ops->psk_auth != NULL);
+	}
+
 	if (prf->hasher != NULL) {
 		/*
 		 * Check for dangling pointer.
 		 */
-		pexpect_ike_alg_base_in_table(&prf->common, &prf->hasher->common);
+		pexpect_ike_alg_base_in_table(HERE, &prf->common, &prf->hasher->common);
 		pexpect_ike_alg(alg, prf->prf_output_size == prf->hasher->hash_digest_size);
-		pexpect_ike_alg_has_base_names(&prf->common, &prf->hasher->common);
+		pexpect_ike_alg_has_base_names(HERE, &prf->common, &prf->hasher->common);
 	}
 }
 
 static bool prf_desc_is_ike(const struct ike_alg *alg)
 {
 	const struct prf_desc *prf = prf_desc(alg);
-	return prf->prf_ops != NULL;
+	return prf->prf_mac_ops != NULL;
 }
 
 static struct algorithm_table prf_algorithms = ALGORITHM_TABLE(prf_descriptors);
@@ -542,7 +564,7 @@ const struct ike_alg_type ike_alg_prf = {
 
 static const struct integ_desc *integ_descriptors[] = {
 #ifdef USE_MD5
-	&ike_alg_integ_md5,
+	&ike_alg_integ_hmac_md5_96,
 #endif
 #ifdef USE_SHA1
 	&ike_alg_integ_sha1,
@@ -568,9 +590,11 @@ static void integ_desc_check(const struct ike_alg *alg)
 	const struct integ_desc *integ = integ_desc(alg);
 	pexpect_ike_alg(alg, integ->integ_keymat_size > 0);
 	pexpect_ike_alg(alg, integ->integ_output_size > 0);
-	pexpect_ike_alg_has_name(alg, integ->integ_tcpdump_name, ".integ_tcpdump_name");
-	pexpect_ike_alg_has_name(alg, integ->integ_ike_audit_name, ".integ_ike_audit_name");
-	pexpect_ike_alg_has_name(alg, integ->integ_kernel_audit_name, ".integ_kernel_audit_name");
+	struct crypt_mac mac;
+	pexpect_ike_alg(alg, integ->integ_output_size <= sizeof(mac.ptr/*an array*/));
+	pexpect_ike_alg_has_name(HERE, alg, integ->integ_tcpdump_name, ".integ_tcpdump_name");
+	pexpect_ike_alg_has_name(HERE, alg, integ->integ_ike_audit_name, ".integ_ike_audit_name");
+	pexpect_ike_alg_has_name(HERE, alg, integ->integ_kernel_audit_name, ".integ_kernel_audit_name");
 	if (integ->common.id[IKEv1_ESP_ID] >= 0) {
 		struct esb_buf esb;
 		pexpect_ike_alg_streq(alg, integ->integ_kernel_audit_name,
@@ -582,7 +606,7 @@ static void integ_desc_check(const struct ike_alg *alg)
 		pexpect_ike_alg(alg, integ->integ_keymat_size == integ->prf->prf_key_size);
 		pexpect_ike_alg(alg, integ->integ_output_size <= integ->prf->prf_output_size);
 		pexpect_ike_alg(alg, prf_desc_is_ike(&integ->prf->common));
-		pexpect_ike_alg_has_base_names(&integ->common, &integ->prf->common);
+		pexpect_ike_alg_has_base_names(HERE, &integ->common, &integ->prf->common);
 	}
 }
 
@@ -696,10 +720,10 @@ static void encrypt_desc_check(const struct ike_alg *alg)
 		pexpect_ike_alg_streq(alg, encrypt->encrypt_tcpdump_name, "aes_gcm");
 		pexpect_ike_alg_streq(alg, encrypt->encrypt_ike_audit_name, "aes_gcm");
 	} else {
-		pexpect_ike_alg_has_name(alg, encrypt->encrypt_tcpdump_name, ".encrypt_tcpdump_name");
-		pexpect_ike_alg_has_name(alg, encrypt->encrypt_ike_audit_name, ".encrypt_ike_audit_name");
+		pexpect_ike_alg_has_name(HERE, alg, encrypt->encrypt_tcpdump_name, ".encrypt_tcpdump_name");
+		pexpect_ike_alg_has_name(HERE, alg, encrypt->encrypt_ike_audit_name, ".encrypt_ike_audit_name");
 	}
-	pexpect_ike_alg_has_name(alg, encrypt->encrypt_kernel_audit_name, ".encrypt_kernel_audit_name");
+	pexpect_ike_alg_has_name(HERE, alg, encrypt->encrypt_kernel_audit_name, ".encrypt_kernel_audit_name");
 	if (encrypt->common.id[IKEv1_ESP_ID] >= 0) {
 		struct esb_buf esb;
 		pexpect_ike_alg_streq(alg, encrypt->encrypt_kernel_audit_name,
@@ -712,6 +736,7 @@ static void encrypt_desc_check(const struct ike_alg *alg)
 	 * Only implemented one way, if at all.
 	 */
 	if (encrypt->encrypt_ops != NULL) {
+		pexpect_ike_alg(alg, encrypt->encrypt_ops->backend != NULL);
 		pexpect_ike_alg(alg, encrypt->encrypt_ops->check != NULL);
 		pexpect_ike_alg(alg, ((encrypt->encrypt_ops->do_crypt == NULL)
 				      != (encrypt->encrypt_ops->do_aead == NULL)));
@@ -782,37 +807,37 @@ const struct ike_alg_type ike_alg_encrypt = {
  * DH group
  */
 
-static const struct oakley_group_desc *dh_descriptors[] = {
+static const struct dh_desc *dh_descriptors[] = {
 	&ike_alg_dh_none,
 #ifdef USE_DH2
-	&oakley_group_modp1024,
+	&ike_alg_dh_modp1024,
 #endif
-	&oakley_group_modp1536,
-	&oakley_group_modp2048,
-	&oakley_group_modp3072,
-	&oakley_group_modp4096,
-	&oakley_group_modp6144,
-	&oakley_group_modp8192,
-	&oakley_group_dh19,
-	&oakley_group_dh20,
-	&oakley_group_dh21,
+	&ike_alg_dh_modp1536,
+	&ike_alg_dh_modp2048,
+	&ike_alg_dh_modp3072,
+	&ike_alg_dh_modp4096,
+	&ike_alg_dh_modp6144,
+	&ike_alg_dh_modp8192,
+	&ike_alg_dh_dh19,
+	&ike_alg_dh_dh20,
+	&ike_alg_dh_dh21,
 #ifdef USE_DH22
-	&oakley_group_dh22,
+	&ike_alg_dh_dh22,
 #endif
 #ifdef USE_DH23
-	&oakley_group_dh23,
+	&ike_alg_dh_dh23,
 #endif
 #ifdef USE_DH24
-	&oakley_group_dh24,
+	&ike_alg_dh_dh24,
 #endif
 #ifdef USE_DH31
-	&oakley_group_dh31,
+	&ike_alg_dh_dh31,
 #endif
 };
 
 static void dh_desc_check(const struct ike_alg *alg)
 {
-	const struct oakley_group_desc *dh = oakley_group_desc(alg);
+	const struct dh_desc *dh = dh_desc(alg);
 	pexpect_ike_alg(alg, dh->group > 0);
 	pexpect_ike_alg(alg, dh->bytes > 0);
 	pexpect_ike_alg(alg, dh->common.id[IKEv2_ALG_ID] == dh->group);
@@ -820,6 +845,7 @@ static void dh_desc_check(const struct ike_alg *alg)
 	/* always implemented */
 	pexpect_ike_alg(alg, dh->dh_ops != NULL);
 	if (dh->dh_ops != NULL) {
+		pexpect_ike_alg(alg, dh->dh_ops->backend != NULL);
 		pexpect_ike_alg(alg, dh->dh_ops->check != NULL);
 		pexpect_ike_alg(alg, dh->dh_ops->calc_secret != NULL);
 		pexpect_ike_alg(alg, dh->dh_ops->calc_shared != NULL);
@@ -836,7 +862,7 @@ static void dh_desc_check(const struct ike_alg *alg)
 
 static bool dh_desc_is_ike(const struct ike_alg *alg)
 {
-	const struct oakley_group_desc *dh = oakley_group_desc(alg);
+	const struct dh_desc *dh = dh_desc(alg);
 	return dh->dh_ops != NULL;
 }
 
@@ -872,7 +898,7 @@ static void check_enum_name(const char *what,
 		DBG(DBG_CRYPT,
 		    DBG_log("%s id: %d enum name: %s",
 			    what, id, enum_name));
-		pexpect_ike_alg_has_name(alg, enum_name, "enum table name");
+		pexpect_ike_alg_has_name(HERE, alg, enum_name, "enum table name");
 	} else {
 		DBG(DBG_CRYPT, DBG_log("%s id: %d enum name: N/A", what, id));
 	}
@@ -907,7 +933,7 @@ static void check_algorithm_table(const struct ike_alg_type *type)
 		 * Check the FQN first; and require upper case.  If
 		 * this one fails abort as things are really broken.
 		 */
-		passert(pexpect_ike_alg_has_name(alg, alg->fqn, ".fqn"));
+		passert(pexpect_ike_alg_has_name(HERE, alg, alg->fqn, ".fqn"));
 		pexpect_ike_alg(alg, (strlen(alg->fqn) ==
 				      strspn(alg->fqn, "ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789")));
 
@@ -917,7 +943,7 @@ static void check_algorithm_table(const struct ike_alg_type *type)
 		 * Requiring this is easier than trying to ensure that
 		 * changes to NAME don't break NAMES.
 		 */
-		pexpect_ike_alg_has_name(alg, alg->name, ".name");
+		pexpect_ike_alg_has_name(HERE, alg, alg->name, ".name");
 
 		/*
 		 * Don't allow 0 as an algorithm ID.
@@ -1120,11 +1146,10 @@ static void lswlog_ike_alg_details(struct lswlog *buf, const struct ike_alg *alg
 	{
 		const char *sep = "  ";
 
-		FOR_EACH_IKE_ALG_NAMEP(alg, name) {
+		FOR_EACH_IKE_ALG_NAME(alg, alg_name) {
 			/* filter out NAME */
-			if (!strcaseeq(*name, alg->fqn)) {
-				lswlogs(buf, sep);
-				lswlogs(buf, *name);
+			if (!shunk_strcaseeq(alg_name, alg->fqn)) {
+				jam(buf, "%s"PRI_SHUNK, sep, pri_shunk(alg_name));
 				sep = ", ";
 			}
 		}

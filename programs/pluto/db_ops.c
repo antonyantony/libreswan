@@ -55,7 +55,6 @@
 #include <stdlib.h>
 #include <sys/types.h>
 
-#include <libreswan.h>
 
 #include "sysdep.h"
 #include "constants.h"
@@ -85,8 +84,9 @@ struct db_ops_stats {
 static struct db_ops_stats db_context_st = DB_OPS_ZERO;
 static struct db_ops_stats db_trans_st = DB_OPS_ZERO;
 static struct db_ops_stats db_attrs_st = DB_OPS_ZERO;
-static __inline__ void * alloc_bytes_st(size_t size, const char *str,
-					struct db_ops_stats *st)
+
+static void * alloc_bytes_st(size_t size, const char *str,
+			     struct db_ops_stats *st)
 {
 	void *ptr = alloc_bytes(size, str);
 
@@ -96,6 +96,7 @@ static __inline__ void * alloc_bytes_st(size_t size, const char *str,
 		st->st_maxsz = size;
 	return ptr;
 }
+
 #define ALLOC_BYTES_ST(z, s, st) alloc_bytes_st(z, s, &(st));
 #define PFREE_ST(p, st)         { st.st_curr_cnt--; pfree(p);  }
 
@@ -249,19 +250,24 @@ static void db_attr_add(struct db_context *ctx, const struct db_attr *a)
  * Add attr copy (by value) to current transform,
  * expanding attrs0 if needed, just calls db_attr_add().
  */
-void db_attr_add_values(struct db_context *ctx,  enum ikev1_oakley_attr type, uint16_t val)
+void db_attr_add_values(struct db_context *ctx,  enum ikev1_ipsec_attr type, uint16_t val)
 {
 	struct db_attr attr;
 
 	/* ??? is this always an Oakley (IKEv1 Phase 1) attribute? */
-	attr.type.oakley = type;
+	attr.type.ipsec = type;
 	attr.val = val;
 	db_attr_add(ctx, &attr);
 }
 
-void db_ops_show_status(void)
+struct db_prop *db_prop_get(struct db_context *ctx)
 {
-	whack_log(RC_COMMENT, "stats db_ops: "
+	return &ctx->prop;
+}
+
+void db_ops_show_status(struct fd *whackfd)
+{
+	whack_comment(whackfd, "stats db_ops: "
 		  DB_OPS_STATS_DESC " :"
 		  DB_OPS_STATS_STR("context")
 		  DB_OPS_STATS_STR("trans")

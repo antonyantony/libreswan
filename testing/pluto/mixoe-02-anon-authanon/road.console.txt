@@ -5,7 +5,7 @@ road #
  echo "192.1.2.23/32"  >> /etc/ipsec.d/policies/private-or-clear
 road #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 road #
  /testing/pluto/bin/wait-until-pluto-started
 road #
@@ -64,7 +64,6 @@ road #
 road #
  hostname | grep nic > /dev/null || grep Authenticated /tmp/pluto.log
 "private-or-clear#192.1.2.23/32"[1] ...192.1.2.23 #2: Authenticated using authby=null
-road #
 road #
  ../bin/check-for-core.sh
 road #

@@ -6,7 +6,7 @@ west #
 destination -I 192.1.2.45 192.1.2.23 is alive
 west #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
@@ -19,14 +19,13 @@ west #
  ipsec whack --impair suppress-retransmits
 west #
  ipsec auto --up westnet-eastnet-ikev2
-002 "westnet-eastnet-ikev2" #1: initiating v2 parent SA
-1v2 "westnet-eastnet-ikev2" #1: initiate
+1v2 "westnet-eastnet-ikev2" #1: initiating IKEv2 IKE SA
 1v2 "westnet-eastnet-ikev2" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
 1v2 "westnet-eastnet-ikev2" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=AES_CBC_128 integ=HMAC_SHA1_96 prf=HMAC_SHA1 group=MODP2048}
 002 "westnet-eastnet-ikev2" #2: IKEv2 mode peer ID is ID_FQDN: '@east'
 003 "westnet-eastnet-ikev2" #2: Authenticated using authby=secret
 003 "westnet-eastnet-ikev2" #2: local policy requires Transport Mode but peer requires required Tunnel Mode
-214 "westnet-eastnet-ikev2" #2: STATE_PARENT_I2: v2N_NO_PROPOSAL_CHOSEN
+214 "westnet-eastnet-ikev2" #2: state transition 'Initiator: process IKE_AUTH response' failed with v2N_NO_PROPOSAL_CHOSEN
 031 "westnet-eastnet-ikev2" #2: STATE_PARENT_I2: 60 second timeout exceeded after 0 retransmits.  Possible authentication failure: no acceptable response to our first encrypted message
 000 "westnet-eastnet-ikev2" #2: starting keying attempt 2 of an unlimited number, but releasing whack
 west #
@@ -55,13 +54,11 @@ default via 192.1.2.254 dev eth1
 192.0.1.0/24 dev eth0 proto kernel scope link src 192.0.1.254
 192.0.2.0/24 via 192.1.2.23 dev eth1
 192.1.2.0/24 dev eth1 proto kernel scope link src 192.1.2.45
-192.9.4.0/24 dev eth2 proto kernel scope link src 192.9.4.45
 NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
 west #
- if [ -f /var/run/charon.pid ]; then strongswan statusall ; fi
-west #
+ if [ -f /var/run/charon.pid -o -f /var/run/strongswan/charon.pid ]; then strongswan statusall ; fi
 west #
  ../bin/check-for-core.sh
 west #

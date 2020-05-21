@@ -38,7 +38,6 @@
 #include <arpa/inet.h>
 #include <resolv.h>
 
-#include <libreswan.h>
 #include "libreswan/pfkeyv2.h"
 
 #include "sysdep.h"
@@ -65,19 +64,22 @@
 #include "fetch.h"
 #include "asn1.h"
 #include "pending.h"
+#include "ikev1_hash.h"
+#include "hostpair.h"
 
 #include "crypto.h"
 #include "secrets.h"
 
 #include "ike_alg.h"
+#include "ike_alg_encrypt_ops.h"	/* XXX: oops */
 #include "kernel_alg.h"
 #include "plutoalg.h"
 #include "pluto_crypt.h"
 #include "ikev1.h"
 #include "ikev1_continuations.h"
-
+#include "ikev1_message.h"
 #include "ikev1_xauth.h"
-
+#include "crypt_prf.h"
 #include "vendor.h"
 #include "nat_traversal.h"
 #include "ikev1_dpd.h"
@@ -89,44 +91,44 @@
 #include "ikev1_send.h"
 #include "nss_cert_verify.h"
 
+#ifdef USE_XFRM_INTERFACE
+# include "kernel_xfrm_interface.h"
+#endif
+
 /*
  * Initiate an Oakley Main Mode exchange.
  * --> HDR;SA
  * Note: this is not called from demux.c
  */
 /* extern initiator_function main_outI1; */	/* type assertion */
-void main_outI1(fd_t whack_sock,
+void main_outI1(struct fd *whack_sock,
 		struct connection *c,
 		struct state *predecessor,
 		lset_t policy,
-		unsigned long try
-#ifdef HAVE_LABELED_IPSEC
-		, struct xfrm_user_sec_ctx_ike *uctx
-#endif
-	)
+		unsigned long try,
+		const threadtime_t *inception,
+		struct xfrm_user_sec_ctx_ike *uctx)
 {
-	struct state *st;
-
-	st = new_v1_istate();
+	struct ike_sa *ike = new_v1_istate(whack_sock);
+	struct state *st = &ike->sa;
+	statetime_t start = statetime_backdate(st, inception);
 
 	/* set up new state */
-	initialize_new_state(st, c, policy, try, whack_sock);
+	initialize_new_state(st, c, policy, try);
+	push_cur_state(st);
+
 	change_state(st, STATE_MAIN_I1);
 
 	if (HAS_IPSEC_POLICY(policy)) {
-		add_pending(dup_any(whack_sock), st, c, policy, 1,
-			predecessor == NULL ?
-			  SOS_NOBODY : predecessor->st_serialno
-#ifdef HAVE_LABELED_IPSEC
-			, uctx
-#endif
-			);
+		add_pending(whack_sock, ike, c, policy, 1,
+			    predecessor == NULL ?
+			    SOS_NOBODY : predecessor->st_serialno,
+			    uctx,
+			    true/* part of initiate */);
 	}
 
-#ifdef HAVE_LABELED_IPSEC
 	/* For main modes states, sec ctx is always null */
 	st->sec_ctx = NULL;
-#endif
 
 	if (predecessor == NULL)
 		libreswan_log("initiating Main Mode");
@@ -176,8 +178,8 @@ void main_outI1(fd_t whack_sock,
 		passert(st->st_p1isa.ptr == NULL);
 
 		/* save initiator SA for later HASH */
-		clonetochunk(st->st_p1isa, sa_start, rbody.cur - sa_start,
-			"sa in main_outI1");
+		st->st_p1isa = clone_bytes_as_chunk(sa_start, rbody.cur - sa_start,
+						    "sa in main_outI1");
 	}
 
 	/* send Vendor IDs */
@@ -207,16 +209,17 @@ void main_outI1(fd_t whack_sock,
 	start_retransmits(st);
 
 	if (predecessor != NULL) {
-		update_pending(predecessor, st);
-		whack_log(RC_NEW_STATE + STATE_MAIN_I1,
-			"%s: initiate, replacing #%lu",
-			st->st_state_name,
-			predecessor->st_serialno);
+		update_pending(pexpect_ike_sa(predecessor), pexpect_ike_sa(st));
+		loglog(RC_NEW_V1_STATE + st->st_state->kind,
+		       "%s: %s, replacing #%lu",
+		       st->st_state->name, st->st_state->story,
+		       predecessor->st_serialno);
 	} else {
-		whack_log(RC_NEW_STATE + STATE_MAIN_I1,
-			"%s: initiate",
-			st->st_state_name);
+		loglog(RC_NEW_V1_STATE + st->st_state->kind,
+		       "%s: %s", st->st_state->name, st->st_state->story);
 	}
+
+	statetime_stop(&start, "%s()", __func__);
 	reset_cur_state();
 }
 
@@ -234,20 +237,25 @@ void main_outI1(fd_t whack_sock,
  */
 
 static void main_mode_hash_body(struct state *st,
-				bool hashi, /* Initiator? */
+				enum sa_role role,
 				const pb_stream *idpl, /* ID payload, as PBS */
-				struct hmac_ctx *ctx)
+				struct crypt_prf *ctx)
 {
-	if (hashi) {
-		hmac_update_chunk(ctx, st->st_gi);
-		hmac_update_chunk(ctx, st->st_gr);
-		hmac_update(ctx, st->st_ike_spis.initiator.bytes, COOKIE_SIZE);
-		hmac_update(ctx, st->st_ike_spis.responder.bytes, COOKIE_SIZE);
-	} else {
-		hmac_update_chunk(ctx, st->st_gr);
-		hmac_update_chunk(ctx, st->st_gi);
-		hmac_update(ctx, st->st_ike_spis.responder.bytes, COOKIE_SIZE);
-		hmac_update(ctx, st->st_ike_spis.initiator.bytes, COOKIE_SIZE);
+	switch (role) {
+	case SA_INITIATOR:
+		crypt_prf_update_hunk(ctx, "gi", st->st_gi);
+		crypt_prf_update_hunk(ctx, "gr", st->st_gr);
+		crypt_prf_update_thing(ctx, "initiator", st->st_ike_spis.initiator);
+		crypt_prf_update_thing(ctx, "responder", st->st_ike_spis.responder);
+		break;
+	case SA_RESPONDER:
+		crypt_prf_update_hunk(ctx, "gr", st->st_gr);
+		crypt_prf_update_hunk(ctx, "gi", st->st_gi);
+		crypt_prf_update_thing(ctx, "respoder", st->st_ike_spis.responder);
+		crypt_prf_update_thing(ctx, "initiator", st->st_ike_spis.initiator);
+		break;
+	default:
+		bad_case(role);
 	}
 
 	DBG(DBG_CRYPT,
@@ -255,8 +263,9 @@ static void main_mode_hash_body(struct state *st,
 			st->st_p1isa.len - sizeof(struct isakmp_generic)));
 
 	/* SA_b */
-	hmac_update(ctx, st->st_p1isa.ptr + sizeof(struct isakmp_generic),
-		st->st_p1isa.len - sizeof(struct isakmp_generic));
+	crypt_prf_update_bytes(ctx, "p1isa",
+			       st->st_p1isa.ptr + sizeof(struct isakmp_generic),
+			       st->st_p1isa.len - sizeof(struct isakmp_generic));
 
 	/*
 	 * Hash identification payload, without generic payload header.
@@ -264,26 +273,20 @@ static void main_mode_hash_body(struct state *st,
 	 * we use the bytes as they appear on the wire to avoid
 	 * "spelling problems".
 	 */
-	hmac_update(ctx,
-		idpl->start + sizeof(struct isakmp_generic),
-		pbs_offset(idpl) - sizeof(struct isakmp_generic));
-
-#undef hash_update_chunk
-#undef hash_update
+	crypt_prf_update_bytes(ctx, "idpl",
+			       idpl->start + sizeof(struct isakmp_generic),
+			       pbs_offset(idpl) - sizeof(struct isakmp_generic));
 }
 
-size_t /* length of hash */
-main_mode_hash(struct state *st,
-	u_char *hash_val, /* resulting bytes */
-	bool hashi, /* Initiator? */
-	const pb_stream *idpl) /* ID payload, as PBS; cur must be at end */
+struct crypt_mac main_mode_hash(struct state *st,
+				enum sa_role role,
+				const pb_stream *idpl) /* ID payload, as PBS; cur must be at end */
 {
-	struct hmac_ctx ctx;
-
-	hmac_init(&ctx, st->st_oakley.ta_prf, st->st_skeyid_nss);
-	main_mode_hash_body(st, hashi, idpl, &ctx);
-	hmac_final(hash_val, &ctx);
-	return ctx.hmac_digest_len;
+	struct crypt_prf *ctx = crypt_prf_init_symkey("main mode",
+						      st->st_oakley.ta_prf,
+						      "skeyid", st->st_skeyid_nss);
+	main_mode_hash_body(st, role, idpl, ctx);
+	return crypt_prf_final_mac(&ctx, NULL);
 }
 
 /*
@@ -293,23 +296,24 @@ main_mode_hash(struct state *st,
  * RSAES-PKCS1-V1_5) in PKCS#2.
  * Returns 0 on failure.
  */
-size_t RSA_sign_hash(const struct connection *c,
-		u_char sig_val[RSA_MAX_OCTETS],
-		const u_char *hash_val, size_t hash_len,
-		enum notify_payload_hash_algorithms hash_algo UNUSED /* for ikev2 only*/)
+
+size_t v1_sign_hash_RSA(const struct connection *c,
+			uint8_t *sig_val, size_t sig_size,
+			const struct crypt_mac *hash)
 {
-	size_t sz;
-	int shr;
-	const struct RSA_private_key *k = get_RSA_private_key(c);
-
-	if (k == NULL)
+	const struct private_key_stuff *pks = get_connection_private_key(c, &pubkey_type_rsa);
+	if (pks == NULL) {
 		return 0; /* failure: no key to use */
+	}
 
-	sz = k->pub.k;
+	/* XXX: merge sign_hash_{RSA,ECDSA}()? */
+	const struct RSA_private_key *k = &pks->u.RSA_private_key;
+
+	size_t sz = k->pub.k;
 	passert(RSA_MIN_OCTETS <= sz &&
-		4 + hash_len < sz &&
-		sz <= RSA_MAX_OCTETS);
-	shr = sign_hash_RSA(k, hash_val, hash_len, sig_val, sz, 0 /* for ikev2 only */);
+		4 + hash->len < sz &&
+		sz <= sig_size);
+	int shr = sign_hash_RSA(k, hash->ptr, hash->len, sig_val, sz, 0 /* for ikev2 only */);
 	passert(shr == 0 || (int)sz == shr);
 	return shr;
 }
@@ -342,8 +346,7 @@ size_t RSA_sign_hash(const struct connection *c,
  * it is not: the knowledge of the private key allows more efficient (i.e.
  * different) computation for encryption.
  */
-static err_t try_RSA_signature_v1(const u_char hash_val[MAX_DIGEST_LEN],
-				size_t hash_len,
+static err_t try_RSA_signature_v1(const struct crypt_mac *hash,
 				const pb_stream *sig_pbs, struct pubkey *kr,
 				struct state *st,
 				enum notify_payload_hash_algorithms hash_algo UNUSED /* for ikev2 only */)
@@ -358,7 +361,7 @@ static err_t try_RSA_signature_v1(const u_char hash_val[MAX_DIGEST_LEN],
 		return "1" "SIG length does not match public key length";
 	}
 
-	err_t ugh = RSA_signature_verify_nss(k, hash_val, hash_len, sig_val,
+	err_t ugh = RSA_signature_verify_nss(k, hash, sig_val,
 					sig_len, 0 /* for ikev2 only */);
 	if (ugh != NULL)
 		return ugh;
@@ -375,15 +378,12 @@ static err_t try_RSA_signature_v1(const u_char hash_val[MAX_DIGEST_LEN],
 }
 
 static stf_status RSA_check_signature(struct state *st,
-				const u_char hash_val[MAX_DIGEST_LEN],
-				size_t hash_len,
-				const pb_stream *sig_pbs,
-				enum notify_payload_hash_algorithms hash_algo
-					UNUSED /* for ikev2 only */)
+				      struct crypt_mac *hash,
+				      const pb_stream *sig_pbs,
+				      enum notify_payload_hash_algorithms hash_algo UNUSED /* for ikev2 only */)
 {
-	return RSA_check_signature_gen(st, hash_val, hash_len,
-				sig_pbs, 0 /* for ikev2 only */,
-				try_RSA_signature_v1);
+	return check_signature_gen(st, hash, sig_pbs, 0 /* for ikev2 only */,
+				   &pubkey_type_rsa, try_RSA_signature_v1);
 }
 
 notification_t accept_v1_nonce(struct msg_digest *md, chunk_t *dest,
@@ -397,8 +397,8 @@ notification_t accept_v1_nonce(struct msg_digest *md, chunk_t *dest,
 		       name, IKEv1_MINIMUM_NONCE_SIZE, IKEv1_MAXIMUM_NONCE_SIZE);
 		return PAYLOAD_MALFORMED; /* ??? */
 	}
-	free_chunk_contents(dest);
-	*dest = clone_in_pbs_left_as_chunk(nonce_pbs, "nonce");
+	free_chunk_content(dest);
+	*dest = clone_hunk(pbs_in_left_as_shunk(nonce_pbs), "nonce");
 	passert(len == dest->len);
 	return NOTHING_WRONG;
 }
@@ -417,7 +417,7 @@ bool ikev1_encrypt_message(pb_stream *pbs, struct state *st)
 
 	if (DBGP(DBG_CRYPT)) {
 		DBG_dump("encrypting:", enc_start, enc_len);
-		DBG_dump("IV:", st->st_new_iv, st->st_new_iv_len);
+		DBG_dump_hunk("IV:", st->st_v1_new_iv);
 		DBG_log("unpadded size is: %u", (unsigned int)enc_len);
 	}
 
@@ -441,8 +441,8 @@ bool ikev1_encrypt_message(pb_stream *pbs, struct state *st)
 	    DBG_log("encrypting %zu using %s", enc_len,
 		    st->st_oakley.ta_encrypt->common.fqn));
 
-	passert(st->st_new_iv_len >= e->enc_blocksize);
-	st->st_new_iv_len = e->enc_blocksize;   /* truncate */
+	passert(st->st_v1_new_iv.len >= e->enc_blocksize);
+	st->st_v1_new_iv.len = e->enc_blocksize;   /* truncate */
 
 	/* close just before encrypting so NP backpatching isn't confused */
 	if (!ikev1_close_message(pbs, st))
@@ -450,11 +450,11 @@ bool ikev1_encrypt_message(pb_stream *pbs, struct state *st)
 
 	e->encrypt_ops->do_crypt(e, enc_start, enc_len,
 				 st->st_enc_key_nss,
-				 st->st_new_iv, TRUE);
+				 st->st_v1_new_iv.ptr, TRUE);
 
 	update_iv(st);
 	if (DBGP(DBG_CRYPT)) {
-		DBG_dump("next IV:", st->st_iv, st->st_iv_len);
+		DBG_dump_hunk("next IV:", st->st_v1_iv);
 	}
 
 	return TRUE;
@@ -525,7 +525,8 @@ bool ikev1_close_message(pb_stream *pbs, const struct state *st)
  * HDR;SA --> HDR;SA
  */
 
-stf_status main_inI1_outR1(struct state *st, struct msg_digest *md)
+stf_status main_inI1_outR1(struct state *unused_st UNUSED,
+			   struct msg_digest *md)
 {
 	/* ??? this code looks a lot like the middle of ikev2_parent_inI1outR1 */
 	struct payload_digest *const sa_pd = md->chain[ISAKMP_NEXT_SA];
@@ -538,10 +539,8 @@ stf_status main_inI1_outR1(struct state *st, struct msg_digest *md)
 	}
 
 	/* random source ports are handled by find_host_connection */
-	c = find_host_connection(
-		&md->iface->ip_addr, pluto_port,
-		&md->sender, hportof(&md->sender),
-		POLICY_IKEV1_ALLOW, POLICY_AGGRESSIVE | POLICY_IKEV1_ALLOW);
+	c = find_host_connection(&md->iface->local_endpoint, &md->sender,
+				 POLICY_IKEV1_ALLOW, POLICY_AGGRESSIVE | POLICY_IKEV1_ALLOW);
 
 	if (c == NULL) {
 		lset_t policy = preparse_isakmp_sa_body(sa_pd->pbs) |
@@ -566,10 +565,8 @@ stf_status main_inI1_outR1(struct state *st, struct msg_digest *md)
 		 * but Food Groups kind of assumes one.
 		 */
 		{
-			struct connection *d = find_host_connection(
-				&md->iface->ip_addr, pluto_port,
-				(ip_address *)NULL, hportof(&md->sender),
-				policy, POLICY_XAUTH | POLICY_AGGRESSIVE | POLICY_IKEV1_ALLOW);
+			struct connection *d = find_host_connection(&md->iface->local_endpoint, NULL,
+								    policy, POLICY_XAUTH | POLICY_AGGRESSIVE | POLICY_IKEV1_ALLOW);
 
 			while (d != NULL) {
 				if (d->kind == CK_GROUP) {
@@ -604,23 +601,21 @@ stf_status main_inI1_outR1(struct state *st, struct msg_digest *md)
 		}
 
 		if (c == NULL) {
-			ipstr_buf b;
+			endpoint_buf b;
 
 			loglog(RC_LOG_SERIOUS,
-				"initial Main Mode message received on %s:%u but no connection has been authorized with policy %s",
-				ipstr(&md->iface->ip_addr, &b),
-				ntohs(portof(&md->iface->ip_addr)),
+				"initial Main Mode message received on %s but no connection has been authorized with policy %s",
+				str_endpoint(&md->iface->local_endpoint, &b),
 				bitnamesof(sa_policy_bit_names, policy));
 			/* XXX notification is in order! */
 			return STF_IGNORE;
 		} else if (c->kind != CK_TEMPLATE) {
-			ipstr_buf b;
-			char cib[CONN_INST_BUF];
-
+			endpoint_buf b;
+			connection_buf cib;
 			loglog(RC_LOG_SERIOUS,
-				"initial Main Mode message received on %s:%u but \"%s\"%s forbids connection",
-				ipstr(&md->iface->ip_addr, &b), pluto_port,
-				c->name, fmt_conn_instance(c, cib));
+				"initial Main Mode message received on %s but "PRI_CONNECTION" forbids connection",
+			       str_endpoint(&md->iface->local_endpoint, &b),
+			       pri_connection(c, &cib));
 			/* XXX notification is in order! */
 			return STF_IGNORE;
 		} else {
@@ -629,14 +624,11 @@ stf_status main_inI1_outR1(struct state *st, struct msg_digest *md)
 			 * of this one.
 			 * Their ID isn't declared yet.
 			 */
-			DBG(DBG_CONTROL, {
-				ipstr_buf b;
-				char cib[CONN_INST_BUF];
-				DBG_log("instantiating \"%s\"%s for initial Main Mode message received on %s:%u",
-					c->name, fmt_conn_instance(c, cib),
-					ipstr(&md->iface->ip_addr, &b),
-					pluto_port);
-			});
+			endpoint_buf b;
+			connection_buf cib;
+			dbg("instantiating "PRI_CONNECTION" for initial Main Mode message received on %s",
+			    pri_connection(c, &cib),
+			    str_endpoint(&md->iface->local_endpoint, &b));
 			c = rw_instantiate(c, &md->sender,
 					NULL, NULL);
 		}
@@ -658,12 +650,12 @@ stf_status main_inI1_outR1(struct state *st, struct msg_digest *md)
 	}
 
 	/* Set up state */
-	pexpect(st == NULL);
-	md->st = st = new_v1_rstate(md);
+	struct ike_sa *ike = new_v1_rstate(md);
+	struct state *st = md->st = &ike->sa;
 
 	passert(!st->st_oakley.doing_xauth);
 
-	st->st_connection = c;	/* safe: from new_state */
+	update_state_connection(st, c);
 
 	set_cur_state(st); /* (caller will reset cur_state) */
 	st->st_try = 0; /* not our job to try again from start */
@@ -677,21 +669,14 @@ stf_status main_inI1_outR1(struct state *st, struct msg_digest *md)
 
 	set_nat_traversal(st, md);
 
-	/* host_port_specific is set if our port is not pluto_port?? */
-	if ((c->kind == CK_INSTANCE) && (c->spd.that.host_port_specific)) {
-		ipstr_buf b;
+	if (DBGP(DBG_BASE)) {
+		DBG_dump_thing("  ICOOKIE-DUMP:", st->st_ike_spis.initiator);
+	}
 
-		libreswan_log(
-			"responding to Main Mode from unknown peer %s:%u",
-			sensitive_ipstr(&c->spd.that.host_addr, &b),
-			c->spd.that.host_port);
-	} else if (c->kind == CK_INSTANCE) {
-		ipstr_buf b;
-
-		libreswan_log("responding to Main Mode from unknown peer %s on port %u",
-			sensitive_ipstr(&c->spd.that.host_addr, &b),
-			hportof(&md->sender));
-		DBG(DBG_CONTROL, DBG_dump("  ICOOKIE-DUMP:", st->st_ike_spis.initiator.bytes, COOKIE_SIZE));
+	if (c->kind == CK_INSTANCE) {
+		endpoint_buf b;
+		libreswan_log("responding to Main Mode from unknown peer %s",
+			      str_sensitive_endpoint(&md->sender, &b));
 	} else {
 		libreswan_log("responding to Main Mode");
 	}
@@ -755,9 +740,8 @@ stf_status main_inI1_outR1(struct state *st, struct msg_digest *md)
 		return STF_INTERNAL_ERROR;
 
 	/* save initiator SA for HASH */
-	free_chunk_contents(&st->st_p1isa);
-	st->st_p1isa = clone_in_pbs_as_chunk(&sa_pd->pbs,
-					    "sa in main_inI1_outR1()");
+	free_chunk_content(&st->st_p1isa);
+	st->st_p1isa = clone_hunk(pbs_in_as_shunk(&sa_pd->pbs), "sa in main_inI1_outR1()");
 
 	return STF_OK;
 }
@@ -805,12 +789,10 @@ stf_status main_inR1_outI2(struct state *st, struct msg_digest *md)
 							NULL, TRUE, st));
 	}
 
-#ifdef FIPS_CHECK
 	if (libreswan_fipsmode() && st->st_oakley.ta_prf == NULL) {
 		loglog(RC_LOG_SERIOUS, "Missing prf - algo not allowed in fips mode (inR1_outI2)?");
 		return STF_FAIL + SITUATION_NOT_SUPPORTED;
 	}
-#endif
 
 	merge_quirks(st, md);
 
@@ -1032,13 +1014,11 @@ static void main_inI2_outR2_continue2(struct state *st,
 stf_status main_inI2_outR2_continue1_tail(struct state *st, struct msg_digest *md,
 					  struct pluto_crypto_req *r)
 {
-#ifdef FIPS_CHECK
 	if (libreswan_fipsmode() && st->st_oakley.ta_prf == NULL) {
 		loglog(RC_LOG_SERIOUS,
 		       "Missing prf - algo not allowed in fips mode (inI2_outR2)?");
 		return STF_FAIL + SITUATION_NOT_SUPPORTED;
 	}
-#endif
 
 	/* send CR if auth is RSA and no preloaded RSA public key exists*/
 	bool send_cr = FALSE;
@@ -1288,12 +1268,8 @@ static stf_status main_inR2_outI3_continue_tail(struct msg_digest *md,
 		 * id_hd should be struct isakmp_id, but struct isakmp_ipsec_id
 		 * allows build_id_payload() to work for both phases.
 		 */
-		struct isakmp_ipsec_id id_hd;
-		chunk_t id_b;
-
-		build_id_payload(&id_hd, &id_b, &c->spd.this);
-		id_hd.isaiid_np =
-			send_cert ? ISAKMP_NEXT_CERT : auth_payload;
+		shunk_t id_b;
+		struct isakmp_ipsec_id id_hd = build_v1_id_payload(&c->spd.this, &id_b);
 		if (!out_struct(&id_hd,
 				&isakmp_ipsec_identification_desc,
 				rbody,
@@ -1368,8 +1344,7 @@ static stf_status main_inR2_outI3_continue_tail(struct msg_digest *md,
 
 	/* HASH_I or SIG_I out */
 	{
-		u_char hash_val[MAX_DIGEST_LEN];
-		size_t hash_len = main_mode_hash(st, hash_val, TRUE, &id_pbs);
+		struct crypt_mac hash = main_mode_hash(st, SA_INITIATOR, &id_pbs);
 
 		if (auth_payload == ISAKMP_NEXT_HASH) {
 			/* HASH_I out */
@@ -1377,15 +1352,12 @@ static stf_status main_inR2_outI3_continue_tail(struct msg_digest *md,
 						ISAKMP_NEXT_NONE,
 						&isakmp_hash_desc,
 						rbody,
-						hash_val, hash_len, "HASH_I"))
+						hash.ptr, hash.len, "HASH_I"))
 				return STF_INTERNAL_ERROR;
 		} else {
 			/* SIG_I out */
-			u_char sig_val[RSA_MAX_OCTETS];
-			size_t sig_len = RSA_sign_hash(c,
-						sig_val, hash_val,
-						hash_len, 0 /* for ikev2 only */);
-
+			uint8_t sig_val[RSA_MAX_OCTETS];
+			size_t sig_len = v1_sign_hash_RSA(c, sig_val, sizeof(sig_val), &hash);
 			if (sig_len == 0) {
 				loglog(RC_LOG_SERIOUS,
 					"unable to locate my private key for RSA Signature");
@@ -1486,8 +1458,6 @@ stf_status oakley_id_and_auth(struct msg_digest *md, bool initiator,
 			bool aggrmode)
 {
 	struct state *st = md->st;
-	u_char hash_val[MAX_DIGEST_LEN];
-	size_t hash_len;
 	stf_status r = STF_OK;
 	lsw_cert_ret ret = LSW_CERT_NONE;
 
@@ -1516,12 +1486,14 @@ stf_status oakley_id_and_auth(struct msg_digest *md, bool initiator,
 	 * main_mode_hash requires idpl->cur to be at end of payload
 	 * so we temporarily set if so.
 	 */
+	struct crypt_mac hash;
 	{
 		pb_stream *idpl = &md->chain[ISAKMP_NEXT_ID]->pbs;
 		uint8_t *old_cur = idpl->cur;
 
 		idpl->cur = idpl->roof;
-		hash_len = main_mode_hash(st, hash_val, !initiator, idpl);
+		/* authenticating other end, flip role! */
+		hash = main_mode_hash(st, initiator ? SA_RESPONDER : SA_INITIATOR, idpl);
 		idpl->cur = old_cur;
 	}
 
@@ -1537,8 +1509,8 @@ stf_status oakley_id_and_auth(struct msg_digest *md, bool initiator,
 		 * function and also not magically force caller to
 		 * return.
 		 */
-		if (pbs_left(hash_pbs) != hash_len ||
-			!memeq(hash_pbs->cur, hash_val, hash_len)) {
+		if (pbs_left(hash_pbs) != hash.len ||
+			!memeq(hash_pbs->cur, hash.ptr, hash.len)) {
 			if (DBGP(DBG_CRYPT)) {
 				DBG_dump("received HASH:",
 					 hash_pbs->cur, pbs_left(hash_pbs));
@@ -1547,14 +1519,23 @@ stf_status oakley_id_and_auth(struct msg_digest *md, bool initiator,
 				"received Hash Payload does not match computed value");
 			/* XXX Could send notification back */
 			r = STF_FAIL + INVALID_HASH_INFORMATION;
+		} else {
+			dbg("received '%s' message HASH_%s data ok",
+			    aggrmode ? "Aggr" : "Main",
+			    initiator ? "R" : "I" /*reverse*/);
 		}
 		break;
 	}
 
 	case OAKLEY_RSA_SIG:
 	{
-		r = RSA_check_signature(st, hash_val, hash_len,
+		r = RSA_check_signature(st, &hash,
 					&md->chain[ISAKMP_NEXT_SIG]->pbs, 0 /* for ikev2 only*/);
+		if (r != STF_OK) {
+			dbg("received '%s' message SIG_%s data did not match computed value",
+			    aggrmode ? "Aggr" : "Main",
+			    initiator ? "R" : "I" /*reverse*/);
+		}
 		break;
 	}
 	/* These are the only IKEv1 AUTH methods we support */
@@ -1594,7 +1575,7 @@ stf_status main_inI3_outR3(struct state *st, struct msg_digest *md)
 		if (r != STF_OK)
 			return r;
 	}
-	const struct connection *c = st->st_connection;
+	struct connection *c = st->st_connection;
 
 	/* send certificate if we have one and auth is RSA */
 	cert_t mycert = c->spd.this.cert;
@@ -1663,12 +1644,8 @@ stf_status main_inI3_outR3(struct state *st, struct msg_digest *md)
 		 * id_hd should be struct isakmp_id, but struct isakmp_ipsec_id
 		 * allows build_id_payload() to work for both phases.
 		 */
-		struct isakmp_ipsec_id id_hd;
-		chunk_t id_b;
-
-		build_id_payload(&id_hd, &id_b, &c->spd.this);
-		id_hd.isaiid_np =
-			send_cert ? ISAKMP_NEXT_CERT : auth_payload;
+		shunk_t id_b;
+		struct isakmp_ipsec_id id_hd = build_v1_id_payload(&c->spd.this, &id_b);
 		if (!out_struct(&id_hd, &isakmp_ipsec_identification_desc,
 					&rbody, &r_id_pbs) ||
 		    !out_chunk(id_b, &r_id_pbs, "my identity")) {
@@ -1729,22 +1706,17 @@ stf_status main_inI3_outR3(struct state *st, struct msg_digest *md)
 		enum next_payload_types_ikev1 np = (c->policy & POLICY_IKEV2_ALLOW) ?
 			ISAKMP_NEXT_VID : ISAKMP_NEXT_NONE;
 
-		u_char hash_val[MAX_DIGEST_LEN];
-		size_t hash_len =
-			main_mode_hash(st, hash_val, FALSE, &r_id_pbs);
+		struct crypt_mac hash = main_mode_hash(st, SA_RESPONDER, &r_id_pbs);
 
 		if (auth_payload == ISAKMP_NEXT_HASH) {
 			/* HASH_R out */
 			if (!ikev1_out_generic_raw(np, &isakmp_hash_desc, &rbody,
-						hash_val, hash_len, "HASH_R"))
+						hash.ptr, hash.len, "HASH_R"))
 				return STF_INTERNAL_ERROR;
 		} else {
 			/* SIG_R out */
-			u_char sig_val[RSA_MAX_OCTETS];
-			size_t sig_len = RSA_sign_hash(c,
-						sig_val, hash_val,
-						hash_len, 0 /* for ikev2 only */);
-
+			uint8_t sig_val[RSA_MAX_OCTETS];
+			size_t sig_len = v1_sign_hash_RSA(c, sig_val, sizeof(sig_val), &hash);
 			if (sig_len == 0) {
 				loglog(RC_LOG_SERIOUS,
 					"unable to locate my private key for RSA Signature");
@@ -1765,8 +1737,8 @@ stf_status main_inI3_outR3(struct state *st, struct msg_digest *md)
 
 	/* Last block of Phase 1 (R3), kept for Phase 2 IV generation */
 	if (DBGP(DBG_CRYPT)) {
-		DBG_dump("last encrypted block of Phase 1:",
-			 st->st_new_iv, st->st_new_iv_len);
+		DBG_dump_hunk("last encrypted block of Phase 1:",
+			      st->st_v1_new_iv);
 	}
 
 	set_ph1_iv_from_new(st);
@@ -1793,10 +1765,12 @@ stf_status main_inI3_outR3(struct state *st, struct msg_digest *md)
 	}
 
 	ISAKMP_SA_established(st);
-#ifdef USE_LINUX_AUDIT
-	linux_audit_conn(st, LAK_PARENT_START);
+#ifdef USE_XFRM_INTERFACE
+	if (c->xfrmi != NULL && c->xfrmi->if_id != yn_no)
+		if (add_xfrmi(c))
+			return STF_FATAL;
 #endif
-
+	linux_audit_conn(st, LAK_PARENT_START);
 	return STF_OK;
 }
 
@@ -1818,6 +1792,7 @@ stf_status main_inR3(struct state *st, struct msg_digest *md)
 		if (r != STF_OK)
 			return r;
 	}
+	struct connection *c = st->st_connection;
 
 	/* Done input */
 
@@ -1825,15 +1800,15 @@ stf_status main_inR3(struct state *st, struct msg_digest *md)
 	 * It seems as per Cisco implementation, XAUTH and MODECFG
 	 * are not supposed to be performed again during rekey
 	 */
-	if (st->st_connection->remotepeertype == CISCO &&
-		st->st_connection->newest_isakmp_sa != SOS_NOBODY &&
-		st->st_connection->spd.this.xauth_client) {
+	if (c->remotepeertype == CISCO &&
+		c->newest_isakmp_sa != SOS_NOBODY &&
+		c->spd.this.xauth_client) {
 		DBG(DBG_CONTROL,
 			DBG_log("Skipping XAUTH for rekey for Cisco Peer compatibility."));
 		st->hidden_variables.st_xauth_client_done = TRUE;
 		st->st_oakley.doing_xauth = FALSE;
 
-		if (st->st_connection->spd.this.modecfg_client) {
+		if (c->spd.this.modecfg_client) {
 			DBG(DBG_CONTROL,
 				DBG_log("Skipping ModeCFG for rekey for Cisco Peer compatibility."));
 			st->hidden_variables.st_modecfg_vars_set = TRUE;
@@ -1842,9 +1817,12 @@ stf_status main_inR3(struct state *st, struct msg_digest *md)
 	}
 
 	ISAKMP_SA_established(st);
-#ifdef USE_LINUX_AUDIT
-	linux_audit_conn(st, LAK_PARENT_START);
+#ifdef USE_XFRM_INTERFACE
+	if (c->xfrmi != NULL && c->xfrmi->if_id != yn_no)
+		if (add_xfrmi(c))
+			return STF_FATAL;
 #endif
+	linux_audit_conn(st, LAK_PARENT_START);
 
 	passert((st->st_policy & POLICY_PFS) == 0 ||
 		st->st_pfs_group != NULL);
@@ -1862,14 +1840,11 @@ stf_status main_inR3(struct state *st, struct msg_digest *md)
 }
 
 stf_status send_isakmp_notification(struct state *st,
-				uint16_t type, const void *data,
-				size_t len)
+				    uint16_t type, const void *data,
+				    size_t len)
 {
 	msgid_t msgid;
 	pb_stream rbody;
-	u_char
-		*r_hashval, /* where in reply to jam hash value */
-		*r_hash_start; /* start of what is to be hashed */
 
 	msgid = generate_msgid(st);
 
@@ -1879,7 +1854,6 @@ stf_status send_isakmp_notification(struct state *st,
 	/* HDR* */
 	{
 		struct isakmp_hdr hdr = {
-			.isa_np = ISAKMP_NEXT_HASH,
 			.isa_version = ISAKMP_MAJOR_VERSION << ISA_MAJ_SHIFT |
 				ISAKMP_MINOR_VERSION,
 			.isa_xchg = ISAKMP_XCHG_INFO,
@@ -1891,8 +1865,13 @@ stf_status send_isakmp_notification(struct state *st,
 		if (!out_struct(&hdr, &isakmp_hdr_desc, &reply_stream, &rbody))
 			return STF_INTERNAL_ERROR;
 	}
-	/* HASH -- create and note space to be filled later */
-	START_HASH_PAYLOAD(rbody, ISAKMP_NEXT_N);
+
+	struct v1_hash_fixup hash_fixup;
+	if (!emit_v1_HASH(V1_HASH_1, "notification",
+			  NOTIFICATION_EXCHANGE,
+			  st, &hash_fixup, &rbody)) {
+		return STF_INTERNAL_ERROR;
+	}
 
 	/* NOTIFY */
 	{
@@ -1919,36 +1898,19 @@ stf_status send_isakmp_notification(struct state *st,
 		close_output_pbs(&notify_pbs);
 	}
 
+	fixup_v1_HASH(st, &hash_fixup, msgid, rbody.cur);
 
-	{
-		/* finish computing HASH */
-		struct hmac_ctx ctx;
-
-		hmac_init(&ctx, st->st_oakley.ta_prf, st->st_skeyid_a_nss);
-		passert(sizeof(msgid_t) == sizeof(uint32_t));
-		msgid_t raw_msgid = htonl(msgid);
-		hmac_update(&ctx, (const void *)&raw_msgid, sizeof(raw_msgid));
-		hmac_update(&ctx, r_hash_start, rbody.cur - r_hash_start);
-		hmac_final(r_hashval, &ctx);
-
-		DBG(DBG_CRYPT, {
-				DBG_log("HASH computed:");
-				DBG_dump("", r_hashval, ctx.hmac_digest_len);
-			});
-	}
 	/*
 	 * save old IV (this prevents from copying a whole new state object
 	 * for NOTIFICATION / DELETE messages we don't need to maintain a state
 	 * because there are no retransmissions...
 	 */
 	{
-		u_char old_new_iv[MAX_DIGEST_LEN];
-		unsigned int old_new_iv_len;
-		u_char old_iv[MAX_DIGEST_LEN];
-		unsigned int old_iv_len;
+		struct crypt_mac old_new_iv;
+		struct crypt_mac old_iv;
 
-		save_iv(st, old_iv, old_iv_len);
-		save_new_iv(st, old_new_iv, old_new_iv_len);
+		save_iv(st, old_iv);
+		save_new_iv(st, old_new_iv);
 
 		init_phase2_iv(st, &msgid);
 		if (!ikev1_encrypt_message(&rbody, st))
@@ -1957,8 +1919,8 @@ stf_status send_isakmp_notification(struct state *st,
 		send_ike_msg_without_recording(st, &reply_stream, "ISAKMP notify");
 
 		/* get back old IV for this state */
-		restore_iv(st, old_iv, old_iv_len);
-		restore_new_iv(st, old_new_iv, old_new_iv_len);
+		restore_iv(st, old_iv);
+		restore_new_iv(st, old_new_iv);
 	}
 
 	return STF_IGNORE;
@@ -1972,10 +1934,11 @@ stf_status send_isakmp_notification(struct state *st,
  * those calls pass a fake state as sndst.
  * Note: msgid is in different order here from other calls :/
  */
-static void send_notification(struct state *sndst, notification_t type,
-			struct state *encst,
-			msgid_t msgid, u_char *icookie, u_char *rcookie,
-			u_char protoid)
+static void send_notification(struct state *sndst /*possibly fake*/,
+			      notification_t type,
+			      struct state *encst,
+			      msgid_t msgid, u_char *icookie, u_char *rcookie,
+			      u_char protoid)
 {
 	/* buffer in which to marshal our notification.
 	 * We don't use reply_buffer/reply_stream because they might be in use.
@@ -1984,12 +1947,8 @@ static void send_notification(struct state *sndst, notification_t type,
 	pb_stream pbs;
 
 	pb_stream r_hdr_pbs;
-	u_char *r_hashval, *r_hash_start;
 	static monotime_t last_malformed = MONOTIME_EPOCH;
 	monotime_t n = mononow();
-
-	r_hashval = NULL;
-	r_hash_start = NULL;
 
 	switch (type) {
 	case PAYLOAD_MALFORMED:
@@ -2018,10 +1977,11 @@ static void send_notification(struct state *sndst, notification_t type,
 			return;
 		}
 
-		if (sndst->st_iv_len != 0) {
+		if (sndst->st_v1_iv.len != 0) {
 			LSWLOG(buf) {
-				lswlogf(buf, "payload malformed.  IV: ");
-				lswlog_bytes(buf, sndst->st_iv, sndst->st_iv_len);
+				jam(buf, "payload malformed.  IV: ");
+				jam_dump_bytes(buf, sndst->st_v1_iv.ptr,
+					       sndst->st_v1_iv.len);
 			}
 		}
 
@@ -2044,17 +2004,21 @@ static void send_notification(struct state *sndst, notification_t type,
 		break;
 	}
 
-	if (encst != NULL && !IS_ISAKMP_ENCRYPTED(encst->st_state))
+	if (encst != NULL && !IS_ISAKMP_ENCRYPTED(encst->st_state->kind))
 		encst = NULL;
 
 	{
-		ipstr_buf b;
-
-		libreswan_log("sending %snotification %s to %s:%u",
-			encst ? "encrypted " : "",
-			enum_name(&ikev1_notify_names, type),
-			ipstr(&sndst->st_remoteaddr, &b),
-			sndst->st_remoteport);
+		/*
+		 * This will pick up cur_state, if any (which means it
+		 * is still relying on cur_state :-().  Can't use
+		 * SNDST as that may be fake.
+		 */
+		endpoint_buf b;
+		loglog(RC_NOTIFICATION + type,
+		       "sending %snotification %s to %s",
+		       encst ? "encrypted " : "",
+		       enum_name(&ikev1_notify_names, type),
+		       str_endpoint(&sndst->st_remote_endpoint, &b));
 	}
 
 	init_out_pbs(&pbs, buffer, sizeof(buffer), "notification msg");
@@ -2065,7 +2029,6 @@ static void send_notification(struct state *sndst, notification_t type,
 		struct isakmp_hdr hdr = {
 			.isa_version = ISAKMP_MAJOR_VERSION << ISA_MAJ_SHIFT |
 				ISAKMP_MINOR_VERSION,
-			.isa_np = encst ? ISAKMP_NEXT_HASH : ISAKMP_NEXT_N,
 			.isa_xchg = ISAKMP_XCHG_INFO,
 			.isa_msgid = msgid,
 			.isa_flags = encst ? ISAKMP_FLAGS_v1_ENCRYPTION : 0,
@@ -2078,15 +2041,14 @@ static void send_notification(struct state *sndst, notification_t type,
 	}
 
 	/* HASH -- value to be filled later */
-	if (encst) {
-		pb_stream hash_pbs;
-		passert(ikev1_out_generic(ISAKMP_NEXT_N, &isakmp_hash_desc, &r_hdr_pbs,
-					  &hash_pbs));
-		r_hashval = hash_pbs.cur; /* remember where to plant value */
-		passert(out_zero(encst->st_oakley.ta_prf->prf_output_size,
-				 &hash_pbs, "HASH(1)"));
-		close_output_pbs(&hash_pbs);
-		r_hash_start = r_hdr_pbs.cur; /* hash from after HASH(1) */
+	struct v1_hash_fixup hash_fixup;
+	if (encst != NULL) {
+		if (!emit_v1_HASH(V1_HASH_1, "send notification",
+				  NOTIFICATION_EXCHANGE,
+				  encst, &hash_fixup, &r_hdr_pbs)) {
+			/* return STF_INTERNAL_ERROR; */
+			return;
+		}
 	}
 
 	/* Notification Payload */
@@ -2111,30 +2073,16 @@ static void send_notification(struct state *sndst, notification_t type,
 	}
 
 	/* calculate hash value and patch into Hash Payload */
-	if (encst) {
-		struct hmac_ctx ctx;
-
-		hmac_init(&ctx, encst->st_oakley.ta_prf,
-			  encst->st_skeyid_a_nss);
-		passert(sizeof(msgid_t) == sizeof(uint32_t));
-		msgid_t raw_msgid = htonl(msgid);
-		hmac_update(&ctx, (const void *)&raw_msgid, sizeof(raw_msgid));
-		hmac_update(&ctx, r_hash_start, r_hdr_pbs.cur - r_hash_start);
-		hmac_final(r_hashval, &ctx);
-
-		DBG(DBG_CRYPT, {
-				DBG_log("HASH(1) computed:");
-				DBG_dump("", r_hashval, ctx.hmac_digest_len);
-			});
+	if (encst != NULL) {
+		fixup_v1_HASH(encst, &hash_fixup, msgid, r_hdr_pbs.cur);
 	}
 
 	if (encst != NULL) {
 		/* Encrypt message (preserve st_iv) */
 		/* ??? why not preserve st_new_iv? */
-		u_char old_iv[MAX_DIGEST_LEN];
-		unsigned old_iv_len;
+		struct crypt_mac old_iv;
 
-		save_iv(encst, old_iv, old_iv_len);
+		save_iv(encst, old_iv);
 
 		if (!IS_ISAKMP_SA_ESTABLISHED(encst->st_state)) {
 			update_iv(encst);
@@ -2142,7 +2090,7 @@ static void send_notification(struct state *sndst, notification_t type,
 		init_phase2_iv(encst, &msgid);
 		passert(ikev1_encrypt_message(&r_hdr_pbs, encst));
 
-		restore_iv(encst, old_iv, old_iv_len);
+		restore_iv(encst, old_iv);
 	} else {
 		close_output_pbs(&r_hdr_pbs);
 	}
@@ -2158,7 +2106,7 @@ void send_notification_from_state(struct state *st, enum state_kind from_state,
 	passert(st != NULL);
 
 	if (from_state == STATE_UNDEFINED)
-		from_state = st->st_state;
+		from_state = st->st_state->kind;
 
 	if (IS_QUICK(from_state)) {
 		p1st = find_phase1_state(st->st_connection,
@@ -2204,20 +2152,22 @@ void send_notification_from_md(struct msg_digest *md, notification_t type)
 	 */
 	struct connection fake_connection = {
 		.interface = md->iface,
-		.addr_family = addrtypeof(&md->sender),	/* for should_fragment_ike_msg() */
 		.policy = POLICY_IKE_FRAG_FORCE, 	/* for should_fragment_ike_msg() */
 	};
 
-	struct state fake_state = {
-		.st_serialno = SOS_NOBODY,
-		.st_connection = &fake_connection,	/* for should_fragment_ike_msg() */
-		.st_finite_state = finite_states[STATE_UNDEFINED],
+	struct ike_sa fake_ike = {
+		.sa = {
+			.st_serialno = SOS_NOBODY,
+			.st_connection = &fake_connection,	/* for should_fragment_ike_msg() */
+			.st_state = finite_states[STATE_UNDEFINED],
+			.st_remote_endpoint = md->sender,
+		},
 	};
 
 	passert(md != NULL);
 
-	update_ike_endpoints(&fake_state, md);
-	send_notification(&fake_state, type, NULL, 0,
+	update_ike_endpoints(&fake_ike, md);
+	send_notification(&fake_ike.sa, type, NULL, 0,
 			md->hdr.isa_ike_initiator_spi.bytes, md->hdr.isa_ike_responder_spi.bytes,
 			PROTO_ISAKMP);
 }
@@ -2242,9 +2192,6 @@ void send_v1_delete(struct state *st)
 	struct state *p1st;
 	ip_said said[EM_MAXRELSPIS];
 	ip_said *ns = said;
-	u_char
-		*r_hashval, /* where in reply to jam hash value */
-		*r_hash_start; /* start of what is to be hashed */
 	bool isakmp_sa = FALSE;
 
 	/* If there are IPsec SA's related to this state struct... */
@@ -2258,15 +2205,11 @@ void send_v1_delete(struct state *st)
 		}
 
 		if (st->st_ah.present) {
-			ns->spi = st->st_ah.our_spi;
-			ns->dst = st->st_connection->spd.this.host_addr;
-			ns->proto = PROTO_IPSEC_AH;
+			*ns = said3(&st->st_connection->spd.this.host_addr, st->st_ah.our_spi, SA_AH);
 			ns++;
 		}
 		if (st->st_esp.present) {
-			ns->spi = st->st_esp.our_spi;
-			ns->dst = st->st_connection->spd.this.host_addr;
-			ns->proto = PROTO_IPSEC_ESP;
+			*ns = said3(&st->st_connection->spd.this.host_addr, st->st_esp.our_spi, SA_ESP);
 			ns++;
 		}
 
@@ -2288,7 +2231,6 @@ void send_v1_delete(struct state *st)
 		struct isakmp_hdr hdr = {
 			.isa_version = ISAKMP_MAJOR_VERSION << ISA_MAJ_SHIFT |
 				ISAKMP_MINOR_VERSION,
-			.isa_np = ISAKMP_NEXT_HASH,
 			.isa_xchg = ISAKMP_XCHG_INFO,
 			.isa_msgid = msgid,
 			.isa_flags = ISAKMP_FLAGS_v1_ENCRYPTION,
@@ -2300,16 +2242,10 @@ void send_v1_delete(struct state *st)
 	}
 
 	/* HASH -- value to be filled later */
-	{
-		pb_stream hash_pbs;
-
-		passert(ikev1_out_generic(ISAKMP_NEXT_D, &isakmp_hash_desc, &r_hdr_pbs,
-					  &hash_pbs));
-		r_hashval = hash_pbs.cur; /* remember where to plant value */
-		passert(out_zero(p1st->st_oakley.ta_prf->prf_output_size,
-				 &hash_pbs, "HASH(1)"));
-		close_output_pbs(&hash_pbs);
-		r_hash_start = r_hdr_pbs.cur; /* hash from after HASH(1) */
+	struct v1_hash_fixup hash_fixup;
+	if (!emit_v1_HASH(V1_HASH_1, "send delete", DELETE_EXCHANGE,
+			  p1st, &hash_fixup, &r_hdr_pbs)) {
+		return /* STF_INTERNAL_ERROR */;
 	}
 
 	/* Delete Payloads */
@@ -2339,7 +2275,7 @@ void send_v1_delete(struct state *st)
 				.isad_np = ns == said ?
 					ISAKMP_NEXT_NONE : ISAKMP_NEXT_D,
 				.isad_spisize = sizeof(ipsec_spi_t),
-				.isad_protoid = ns->proto,
+				.isad_protoid = ns->proto->ikev1,
 				.isad_nospi = 1,
 			};
 
@@ -2370,27 +2306,11 @@ void send_v1_delete(struct state *st)
 					"notify payload"));
 				close_output_pbs(&cruft_pbs);
 			}
-
 		}
 	}
 
 	/* calculate hash value and patch into Hash Payload */
-	{
-		struct hmac_ctx ctx;
-
-		hmac_init(&ctx, p1st->st_oakley.ta_prf,
-			  p1st->st_skeyid_a_nss);
-		passert(sizeof(msgid_t) == sizeof(uint32_t));
-		msgid_t raw_msgid = htonl(msgid);
-		hmac_update(&ctx, (const void *)&raw_msgid, sizeof(raw_msgid));
-		hmac_update(&ctx, r_hash_start, r_hdr_pbs.cur - r_hash_start);
-		hmac_final(r_hashval, &ctx);
-
-		DBG(DBG_CRYPT, {
-				DBG_log("HASH(1) computed:");
-				DBG_dump("", r_hashval, ctx.hmac_digest_len);
-			});
-	}
+	fixup_v1_HASH(p1st, &hash_fixup, msgid, r_hdr_pbs.cur);
 
 	/*
 	 * Do a dance to avoid needing a new state object.
@@ -2401,10 +2321,9 @@ void send_v1_delete(struct state *st)
 	 * - we need to preserve (save/restore) st_tpacket.
 	 */
 	{
-		u_char old_iv[MAX_DIGEST_LEN];
-		unsigned int old_iv_len;
+		struct crypt_mac old_iv;
 
-		save_iv(p1st, old_iv, old_iv_len);
+		save_iv(p1st, old_iv);
 		init_phase2_iv(p1st, &msgid);
 
 		passert(ikev1_encrypt_message(&r_hdr_pbs, p1st));
@@ -2412,7 +2331,7 @@ void send_v1_delete(struct state *st)
 		send_ike_msg_without_recording(p1st, &reply_pbs, "delete notify");
 
 		/* get back old IV for this state */
-		restore_iv(p1st, old_iv, old_iv_len);
+		restore_iv(p1st, old_iv);
 	}
 }
 
@@ -2528,8 +2447,10 @@ bool accept_delete(struct msg_digest *md,
 				/* note: this code is cloned for handling self_delete */
 				loglog(RC_LOG_SERIOUS, "received Delete SA payload: deleting ISAKMP State #%lu",
 					dst->st_serialno);
-				if (nat_traversal_enabled && dst->st_connection->ikev1_natt != NATT_NONE)
+				if (nat_traversal_enabled && dst->st_connection->ikev1_natt != NATT_NONE) {
 					nat_traversal_change_port_lookup(md, dst);
+					v1_maybe_natify_initiator_endpoints(st, HERE);
+			}
 				delete_state(dst);
 			}
 		} else {
@@ -2566,8 +2487,10 @@ bool accept_delete(struct msg_digest *md,
 				struct connection *rc = dst->st_connection;
 				struct connection *oldc = push_cur_connection(rc);
 
-				if (nat_traversal_enabled && dst->st_connection->ikev1_natt != NATT_NONE)
+				if (nat_traversal_enabled && dst->st_connection->ikev1_natt != NATT_NONE) {
 					nat_traversal_change_port_lookup(md, dst);
+					v1_maybe_natify_initiator_endpoints(st, HERE);
+				}
 
 				if (rc->newest_ipsec_sa == dst->st_serialno &&
 					(rc->policy & POLICY_UP)) {
@@ -2622,8 +2545,10 @@ void accept_self_delete(struct msg_digest *md)
 	/* note: this code is cloned from handling ISAKMP non-self_delete */
 	loglog(RC_LOG_SERIOUS, "received Delete SA payload: self-deleting ISAKMP State #%lu",
 		st->st_serialno);
-	if (nat_traversal_enabled && st->st_connection->ikev1_natt != NATT_NONE)
+	if (nat_traversal_enabled && st->st_connection->ikev1_natt != NATT_NONE) {
 		nat_traversal_change_port_lookup(md, st);
+		v1_maybe_natify_initiator_endpoints(st, HERE);
+	}
 	delete_state(st);
 	md->st = st = NULL;
 }

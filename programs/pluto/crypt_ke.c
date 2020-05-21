@@ -33,7 +33,6 @@
 #include <sys/types.h>
 #include <signal.h>
 
-#include <libreswan.h>
 
 #include "sysdep.h"
 #include "constants.h"
@@ -60,14 +59,14 @@
 /* MUST BE THREAD-SAFE */
 void calc_ke(struct pcr_kenonce *kn)
 {
-	const struct oakley_group_desc *group = kn->group;
+	const struct dh_desc *group = kn->group;
 
 	kn->secret = calc_dh_secret(kn->group, &kn->gi);
 
 	DBG(DBG_CRYPT,
 	    DBG_log("NSS: Local DH %s secret (pointer): %p",
 		    group->common.name, kn->secret);
-	    DBG_dump_chunk("NSS: Public DH wire value:",
+	    DBG_dump_hunk("NSS: Public DH wire value:",
 			   kn->gi));
 }
 
@@ -78,7 +77,7 @@ void calc_nonce(struct pcr_kenonce *kn)
 	get_rnd_bytes(kn->n.ptr, kn->n.len);
 
 	DBG(DBG_CRYPT,
-	    DBG_dump_chunk("Generated nonce:", kn->n));
+	    DBG_dump_hunk("Generated nonce:", kn->n));
 }
 
 void cancelled_ke_and_nonce(struct pcr_kenonce *kn)
@@ -93,7 +92,7 @@ void cancelled_ke_and_nonce(struct pcr_kenonce *kn)
 /* Note: not all cn's are the same subtype */
 void request_ke_and_nonce(const char *name,
 			  struct state *st,
-			  const struct oakley_group_desc *group,
+			  const struct dh_desc *group,
 			  crypto_req_cont_func *callback)
 {
 	struct pluto_crypto_req_cont *cn = new_pcrc(callback, name);

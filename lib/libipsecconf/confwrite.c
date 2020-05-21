@@ -329,20 +329,23 @@ static void confwrite_side(FILE *out,
 
 	if (end->has_client) {
 		if (!subnetishost(&end->subnet) ||
-		     !addrinsubnet(&end->addr, &end->subnet))
-		{
-			char as[ADDRTOT_BUF];
-
-			subnettot(&end->subnet, 0, as, sizeof(as));
-			fprintf(out, "\t%ssubnet=%s\n", side, as);
+		     !addrinsubnet(&end->addr, &end->subnet)) {
+			subnet_buf as;
+			fprintf(out, "\t%ssubnet=%s\n", side,
+				str_subnet(&end->subnet, &as));
 		}
 	}
 
-	if (!isanyaddr(&end->vti_ip.addr)) {
-			char as[ADDRTOT_BUF];
+	if (subnet_is_specified(&end->vti_ip)) {
+		subnet_buf as;
+		fprintf(out, "\t%svti=%s\n", side,
+			str_subnet(&end->vti_ip, &as));
+	}
 
-			subnettot(&end->vti_ip, 0, as, sizeof(as));
-			fprintf(out, "\t%svti=%s\n", side, as);
+	if (subnet_is_specified(&end->ifaceip)) {
+		subnet_buf as;
+		fprintf(out, "\t%sinterface-ip=%s\n", side,
+			str_subnet(&end->ifaceip, &as));
 	}
 
 	if (end->rsakey1 != NULL && end->rsakey1[0] != '\0')
@@ -368,7 +371,7 @@ static void confwrite_side(FILE *out,
 	if (end->certx != NULL)
 		fprintf(out, "\t%scert=%s\n", side, end->certx);
 
-	if (!isanyaddr(&end->sourceip)) {
+	if (address_is_specified(&end->sourceip)) {
 		ipstr_buf as;
 
 		fprintf(out, "\t%ssourceip=%s\n",
@@ -379,7 +382,6 @@ static void confwrite_side(FILE *out,
 		      end->options, end->options_set, end->strings);
 	confwrite_str(out, side, kv_conn | kv_leftright,
 		      end->strings, end->strings_set);
-
 }
 
 static void confwrite_comments(FILE *out, struct starter_conn *conn)
@@ -575,7 +577,6 @@ static void confwrite_conn(FILE *out, struct starter_conn *conn, bool verbose)
 						esn = "no";
 					else
 						esn = "either";
-
 				} else {
 						/* both cannot be unset */
 						esn = "yes";

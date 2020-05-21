@@ -2,7 +2,7 @@
 Preparing X.509 files
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -11,7 +11,6 @@ east #
 east #
  echo "initdone"
 initdone
-east #
 east #
  grep 'Result using RFC 3947' /tmp/pluto.log
 | NAT-Traversal: Result using RFC 3947 (NAT-Traversal) sender port 500: peer behind NAT

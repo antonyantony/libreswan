@@ -42,6 +42,13 @@
 #include "nat_traversal.h"
 #include "pluto_x509.h"
 #include "fd.h"
+#include "hostpair.h"
+#include "ikev1_message.h"
+#include "pending.h"
+
+#ifdef USE_XFRM_INTERFACE
+# include "kernel_xfrm_interface.h"
+#endif
 
 /* STATE_AGGR_R0: HDR, SA, KE, Ni, IDii
  *           --> HDR, SA, KE, Nr, IDir, HASH_R/SIG_R
@@ -124,7 +131,8 @@ static void aggr_inI1_outR1_continue1(struct state *st,
  * SMF_DS_AUTH:  HDR, SA, KE, Nr, IDii
  *           --> HDR, SA, KE, Nr, IDir, [CERT,] SIG_R
  */
-stf_status aggr_inI1_outR1(struct state *st, struct msg_digest *md)
+stf_status aggr_inI1_outR1(struct state *unused_st UNUSED,
+			   struct msg_digest *md)
 {
 	/* With Aggressive Mode, we get an ID payload in this, the first
 	 * message, so we can use it to index the preshared-secrets
@@ -143,21 +151,18 @@ stf_status aggr_inI1_outR1(struct state *st, struct msg_digest *md)
 	const lset_t policy_exact_mask = POLICY_XAUTH |
 		POLICY_AGGRESSIVE | POLICY_IKEV1_ALLOW;
 
-	struct connection *c = find_host_connection(
-		&md->iface->ip_addr, md->iface->port,
-		&md->sender, hportof(&md->sender),
-		policy, policy_exact_mask);
+	struct connection *c = find_host_connection(&md->iface->local_endpoint,
+						    &md->sender, policy, policy_exact_mask);
 
 	if (c == NULL) {
-		c = find_host_connection(&md->iface->ip_addr, pluto_port,
-					 (ip_address*)NULL, hportof(&md->sender),
+		c = find_host_connection(&md->iface->local_endpoint, NULL,
 					 policy, policy_exact_mask);
 		if (c == NULL) {
-			ipstr_buf b;
+			endpoint_buf b;
 
 			loglog(RC_LOG_SERIOUS,
 				"initial Aggressive Mode message from %s but no (wildcard) connection has been configured with policy %s",
-				ipstr(&md->sender, &b),
+				str_endpoint(&md->sender, &b),
 				bitnamesof(sa_policy_bit_names, policy));
 			/* XXX notification is in order! */
 			return STF_IGNORE;
@@ -176,12 +181,12 @@ stf_status aggr_inI1_outR1(struct state *st, struct msg_digest *md)
 	}
 
 	/* Set up state */
-	pexpect(st == NULL);
-	st = new_v1_rstate(md);
+	struct ike_sa *ike = new_v1_rstate(md);
+	struct state *st = &ike->sa;
 
 	md->st = st;  /* (caller will reset cur_state) */
 	set_cur_state(st);
-	st->st_connection = c;	/* safe: from new_state */
+	update_state_connection(st, c);
 	change_state(st, STATE_AGGR_R1);
 
 	st->st_policy = policy;	/* ??? not sure what's needed here */
@@ -196,14 +201,12 @@ stf_status aggr_inI1_outR1(struct state *st, struct msg_digest *md)
 	 * But not in this case because we are Aggressive Mode
 	 */
 	if (!ikev1_decode_peer_id(md, FALSE, TRUE)) {
-		char buf[IDTOA_BUF];
-		ipstr_buf b;
-
-		(void) idtoa(&st->st_connection->spd.that.id, buf,
-			     sizeof(buf));
+		id_buf buf;
+		endpoint_buf b;
 		loglog(RC_LOG_SERIOUS,
 		       "initial Aggressive Mode packet claiming to be from %s on %s but no matching connection has been authorized",
-		       buf, ipstr(&md->sender, &b));
+		       str_id(&st->st_connection->spd.that.id, &buf),
+		       str_endpoint(&md->sender, &b));
 		/* XXX notification is in order! */
 		return STF_FAIL + INVALID_ID_INFORMATION;
 	}
@@ -237,7 +240,7 @@ stf_status aggr_inI1_outR1(struct state *st, struct msg_digest *md)
 	 * be already filled-in.
 	 */
 	pexpect(st->st_p1isa.ptr == NULL);
-	st->st_p1isa = clone_in_pbs_as_chunk(&sa_pd->pbs, "sa in aggr_inI1_outR1()");
+	st->st_p1isa = clone_hunk(pbs_in_as_shunk(&sa_pd->pbs), "sa in aggr_inI1_outR1()");
 
 	/*
 	 * parse_isakmp_sa picks the right group, which we need to know
@@ -407,16 +410,11 @@ static stf_status aggr_inI1_outR1_continue2_tail(struct msg_digest *md,
 
 	/* IDir out */
 
-	pb_stream r_id_pbs; /* ID Payload; used later for hash calculation */
+	pb_stream r_id_pbs; /* ID Payload; used later for hash calculation; XXX: use ID_B instead? */
 
 	{
-		struct isakmp_ipsec_id id_hd;
-		chunk_t id_b;
-
-		build_id_payload(&id_hd, &id_b, &c->spd.this);
-		id_hd.isaiid_np =
-			send_cert ? ISAKMP_NEXT_CERT : auth_payload;
-
+		shunk_t id_b;
+		struct isakmp_ipsec_id id_hd = build_v1_id_payload(&c->spd.this, &id_b);
 		if (!out_struct(&id_hd, &isakmp_ipsec_identification_desc,
 				&rbody, &r_id_pbs) ||
 		    !out_chunk(id_b, &r_id_pbs, "my identity")) {
@@ -464,25 +462,21 @@ static stf_status aggr_inI1_outR1_continue2_tail(struct msg_digest *md,
 
 	/* HASH_R or SIG_R out */
 	{
-		u_char hash_val[MAX_DIGEST_LEN];
-
-		size_t hash_len =
-			main_mode_hash(st, hash_val, FALSE, &r_id_pbs);
+		struct crypt_mac hash = main_mode_hash(st, SA_RESPONDER, &r_id_pbs);
 
 		if (auth_payload == ISAKMP_NEXT_HASH) {
 			/* HASH_R out */
 			if (!ikev1_out_generic_raw(ISAKMP_NEXT_VID,
 					     &isakmp_hash_desc,
 					     &rbody,
-					     hash_val,
-					     hash_len,
+					     hash.ptr,
+					     hash.len,
 					     "HASH_R"))
 				return STF_INTERNAL_ERROR;
 		} else {
 			/* SIG_R out */
-			u_char sig_val[RSA_MAX_OCTETS];
-			size_t sig_len = RSA_sign_hash(c, sig_val, hash_val,
-						       hash_len, 0 /* for ikev2 only */);
+			uint8_t sig_val[RSA_MAX_OCTETS];
+			size_t sig_len = v1_sign_hash_RSA(c, sig_val, sizeof(sig_val), &hash);
 			if (sig_len == 0) {
 				loglog(RC_LOG_SERIOUS,
 				       "unable to locate my private key for RSA Signature");
@@ -547,14 +541,13 @@ stf_status aggr_inR1_outI2(struct state *st, struct msg_digest *md)
 	 * But not in this case because we are Aggressive Mode
 	 */
 	if (!ikev1_decode_peer_id(md, TRUE, TRUE)) {
-		char buf[IDTOA_BUF];
-		ipstr_buf b;
+		id_buf buf;
+		endpoint_buf b;
 
-		(void) idtoa(&st->st_connection->spd.that.id, buf,
-			     sizeof(buf));
 		loglog(RC_LOG_SERIOUS,
 		       "initial Aggressive Mode packet claiming to be from %s on %s but no connection has been authorized",
-		       buf, ipstr(&md->sender, &b));
+		       str_id(&st->st_connection->spd.that.id, &buf),
+		       str_endpoint(&md->sender, &b));
 		/* XXX notification is in order! */
 		return STF_FAIL + INVALID_ID_INFORMATION;
 	}
@@ -757,9 +750,8 @@ static stf_status aggr_inR1_outI2_tail(struct msg_digest *md)
 		dbg("next payload chain: creating a fake payload for hashing identity");
 
 		/* first build an ID payload as a raw material */
-		struct isakmp_ipsec_id id_hd;
-		chunk_t id_b;
-		build_id_payload(&id_hd, &id_b, &c->spd.this);
+		shunk_t id_b;
+		struct isakmp_ipsec_id id_hd = build_v1_id_payload(&c->spd.this, &id_b);
 
 		pb_stream id_pbs;
 		u_char idbuf[1024]; /* fits all possible identity payloads? */
@@ -773,22 +765,19 @@ static stf_status aggr_inR1_outI2_tail(struct msg_digest *md)
 		close_output_pbs(&r_id_pbs);
 		close_output_pbs(&id_pbs);
 
-		u_char hash_val[MAX_DIGEST_LEN];
-		size_t hash_len = main_mode_hash(st, hash_val, TRUE, &id_pbs);
+		struct crypt_mac hash = main_mode_hash(st, SA_INITIATOR, &id_pbs);
 
 		if (auth_payload == ISAKMP_NEXT_HASH) {
 			/* HASH_I out */
 			if (!ikev1_out_generic_raw(ISAKMP_NEXT_NONE,
 					     &isakmp_hash_desc, &rbody,
-					     hash_val, hash_len, "HASH_I"))
+					     hash.ptr, hash.len, "HASH_I"))
 				return STF_INTERNAL_ERROR;
 		} else {
 			/* SIG_I out */
-			u_char sig_val[RSA_MAX_OCTETS];
-			size_t sig_len = RSA_sign_hash(st->st_connection,
-						       sig_val, hash_val,
-						       hash_len, 0 /* for ikev2 only */);
-
+			uint8_t sig_val[RSA_MAX_OCTETS];
+			size_t sig_len = v1_sign_hash_RSA(st->st_connection,
+							  sig_val, sizeof(sig_val), &hash);
 			if (sig_len == 0) {
 				loglog(RC_LOG_SERIOUS,
 				       "unable to locate my private key for RSA Signature");
@@ -852,10 +841,13 @@ static stf_status aggr_inR1_outI2_tail(struct msg_digest *md)
 	DBG(DBG_CONTROL, DBG_log("phase 1 complete"));
 
 	ISAKMP_SA_established(st);
-
-#ifdef USE_LINUX_AUDIT
-	linux_audit_conn(st, LAK_PARENT_START);
+#ifdef USE_XFRM_INTERFACE
+	if (c->xfrmi != NULL && c->xfrmi->if_id != yn_no)
+		if (add_xfrmi(c))
+			return STF_FATAL;
 #endif
+
+	linux_audit_conn(st, LAK_PARENT_START);
 	return STF_OK;
 }
 
@@ -876,12 +868,12 @@ stf_status aggr_inI2(struct state *st, struct msg_digest *md)
 	{
 		dbg("next payload chain: creating a fake payload for hashing identity");
 
-		struct isakmp_ipsec_id id_hd;
-		chunk_t id_b;
 		pb_stream pbs;
 		pb_stream id_pbs;
 
-		build_id_payload(&id_hd, &id_b, &st->st_connection->spd.that);
+		shunk_t id_b;
+		struct isakmp_ipsec_id id_hd = build_v1_id_payload(&c->spd.that, &id_b);
+
 		init_out_pbs(&pbs, idbuf, sizeof(idbuf), "identity payload");
 
 		/* interop ID for SoftRemote & maybe others ? */
@@ -975,10 +967,13 @@ stf_status aggr_inI2(struct state *st, struct msg_digest *md)
 	DBG(DBG_CONTROL, DBG_log("phase 1 complete"));
 
 	ISAKMP_SA_established(st);
-
-#ifdef USE_LINUX_AUDIT
-	linux_audit_conn(st, LAK_PARENT_START);
+#ifdef USE_XFRM_INTERFACE
+	if (c->xfrmi != NULL && c->xfrmi->if_id != yn_no)
+		if (add_xfrmi(c))
+			return STF_FATAL;
 #endif
+
+	linux_audit_conn(st, LAK_PARENT_START);
 	return STF_OK;
 }
 
@@ -998,53 +993,26 @@ static crypto_req_cont_func aggr_outI1_continue;	/* type assertion */
  * RFC 2409 5.3: --> HDR, SA, [ HASH(1),] <Ni_b>Pubkey_r, <KE_b>Ke_i, <IDii_b>Ke_i [, <Cert-I_b>Ke_i ]
  */
 /* extern initiator_function aggr_outI1; */	/* type assertion */
-void aggr_outI1(fd_t whack_sock,
+void aggr_outI1(struct fd *whack_sock,
 		struct connection *c,
 		struct state *predecessor,
 		lset_t policy,
-		unsigned long try
-#ifdef HAVE_LABELED_IPSEC
-		, struct xfrm_user_sec_ctx_ike *uctx
-#endif
-		)
+		unsigned long try,
+		const threadtime_t *inception,
+		struct xfrm_user_sec_ctx_ike *uctx)
 {
-	struct state *st;
-	struct spd_route *sr;
-
 	if (LIN(POLICY_PSK, c->policy) && LIN(POLICY_AGGRESSIVE, c->policy)) {
 		loglog(RC_LOG_SERIOUS,
 			"IKEv1 Aggressive Mode with PSK is vulnerable to dictionary attacks and is cracked on large scale by TLA's");
 	}
 
 	/* set up new state */
-	st = new_v1_istate();
-	set_cur_state(st);
-	st->st_connection = c;	/* safe: from new_state */
-
-#ifdef HAVE_LABELED_IPSEC
-	st->sec_ctx = NULL;
-#endif
-	set_state_ike_endpoints(st, c);
-
-	set_cur_state(st);
-
-	st->st_policy = policy & ~POLICY_IPSEC_MASK;
-	st->st_whack_sock = whack_sock;
-	st->st_try = try;
+	struct ike_sa *ike = new_v1_istate(whack_sock);
+	struct state *st = &ike->sa;
+	statetime_t start = statetime_backdate(st, inception);
 	change_state(st, STATE_AGGR_I1);
-
-	for (sr = &c->spd; sr != NULL; sr = sr->spd_next) {
-		if (sr->this.xauth_client) {
-			if (sr->this.xauth_username != NULL) {
-				jam_str(st->st_xauth_username,
-					sizeof(st->st_xauth_username),
-					sr->this.xauth_username);
-				break;
-			}
-		}
-	}
-
-	binlog_refresh_state(st);
+	initialize_new_state(st, c, policy, try);
+	push_cur_state(st);
 
 	if (!init_aggr_st_oakley(st, policy)) {
 		/*
@@ -1060,17 +1028,14 @@ void aggr_outI1(fd_t whack_sock,
 	}
 
 	if (HAS_IPSEC_POLICY(policy))
-		add_pending(dup_any(whack_sock), st, c, policy, 1,
-			    predecessor == NULL ? SOS_NOBODY : predecessor->st_serialno
-#ifdef HAVE_LABELED_IPSEC
-			    , uctx
-#endif
-			    );
+		add_pending(whack_sock, ike, c, policy, 1,
+			    predecessor == NULL ? SOS_NOBODY : predecessor->st_serialno,
+			    uctx, true/*part of initiate*/);
 
 	if (predecessor == NULL) {
 		libreswan_log("initiating Aggressive Mode");
 	} else {
-		update_pending(predecessor, st);
+		update_pending(pexpect_ike_sa(predecessor), pexpect_ike_sa(st));
 		libreswan_log(
 			"initiating Aggressive Mode #%lu to replace #%lu",
 			st->st_serialno, predecessor->st_serialno);
@@ -1082,6 +1047,7 @@ void aggr_outI1(fd_t whack_sock,
 	request_ke_and_nonce("aggr_outI1 KE + nonce", st,
 			     st->st_oakley.ta_dh,
 			     aggr_outI1_continue);
+	statetime_stop(&start, "%s()", __func__);
 	reset_globals();
 }
 
@@ -1106,7 +1072,7 @@ static void aggr_outI1_continue(struct state *st,
 	struct msg_digest *fake_md = alloc_md("msg_digest by aggr_outI1");
 	fake_md->st = st;
 	fake_md->smc = NULL;	/* ??? */
-	fake_md->from_state = STATE_UNDEFINED;	/* ??? */
+	fake_md->v1_from_state = STATE_UNDEFINED;	/* ??? */
 	fake_md->fake_dne = true;
 
 	complete_v1_state_transition(&fake_md, e);
@@ -1165,8 +1131,8 @@ static stf_status aggr_outI1_tail(struct state *st,
 
 		/* save initiator SA for later HASH */
 		passert(st->st_p1isa.ptr == NULL); /* no leak! */
-		clonetochunk(st->st_p1isa, sa_start, rbody.cur - sa_start,
-			     "sa in aggr_outI1");
+		st->st_p1isa = clone_bytes_as_chunk(sa_start, rbody.cur - sa_start,
+						    "sa in aggr_outI1");
 	}
 
 	/* KE out */
@@ -1180,12 +1146,10 @@ static stf_status aggr_outI1_tail(struct state *st,
 
 	/* IDii out */
 	{
-		struct isakmp_ipsec_id id_hd;
-		chunk_t id_b;
-		pb_stream id_pbs;
+		shunk_t id_b;
+		struct isakmp_ipsec_id id_hd = build_v1_id_payload(&c->spd.this, &id_b);
 
-		build_id_payload(&id_hd, &id_b, &c->spd.this);
-		id_hd.isaiid_np = send_cr ? ISAKMP_NEXT_CR : ISAKMP_NEXT_VID;
+		pb_stream id_pbs;
 		if (!out_struct(&id_hd, &isakmp_ipsec_identification_desc,
 				&rbody, &id_pbs) ||
 		    !out_chunk(id_b, &id_pbs, "my identity"))
@@ -1225,8 +1189,8 @@ static stf_status aggr_outI1_tail(struct state *st,
 	delete_event(st);
 	start_retransmits(st);
 
-	whack_log(RC_NEW_STATE + STATE_AGGR_I1,
-		  "%s: initiate", st->st_state_name);
+	loglog(RC_NEW_V1_STATE + st->st_state->kind,
+	       "%s: %s", st->st_state->name, st->st_state->story);
 	reset_cur_state();
 	return STF_IGNORE;
 }

@@ -2,10 +2,13 @@
  * identity representation, as in IKE ID Payloads (RFC 2407 DOI 4.6.2.1)
  *
  * Copyright (C) 1999-2001,2013-2017  D. Hugh Redelmeier
- * Copyright (C) 2012-2017 Paul Wouters <pwouters@redhat.com>
- * Copyright (C) 2013-2017 Antony Antony <antony@phenome.org>
- * Copyright (C) 2013-2015 Matt Rogers, <mrogers@libreswan.org>
+ * Copyright (C) 2006 Michael Richardson <mcr@xelerance.com>
+ * Copyright (C) 2008,2012-2017  Paul Wouters <paul@xelerance.com>
+ * Copyright (C) 2008-2009 David McCullough <david_mccullough@securecomputing.com>
+ * Copyright (C) 2012 Wes Hardaker <opensource@hardakers.net>
  * Copyright (C) 2013 Florian Weimer <fweimer@redhat.com>
+ * Copyright (C) 2013-2015 Matt Rogers, <mrogers@libreswan.org>
+ * Copyright (C) 2013-2017 Antony Antony <antony@phenome.org>
  * Copyright (C) 2015 Valeriu Goldberger <vgoldberger@ventusnetworks.com>
  * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  *
@@ -28,7 +31,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include <libreswan.h>
 
 #include "sysdep.h"
 #include "constants.h"
@@ -40,7 +42,7 @@
 #include "x509.h"
 #include <cert.h>
 #include "certs.h"
-#include "af_info.h"
+#include "ip_info.h"
 
 /*
  * Convert textual form of id into a (temporary) struct id.
@@ -84,9 +86,9 @@ err_t atoid(char *src, struct id *id, bool oe_only)
 			 * We need a notation to specify that a FQDN is to be
 			 * resolved to IPv6.
 			 */
-			const struct af_info *afi = strchr(src, ':') == NULL ?
-				&af_inet4_info : &
-				af_inet6_info;
+			const struct ip_info *afi = strchr(src, ':') == NULL ?
+				&ipv4_info :
+				&ipv6_info;
 
 			id->kind = afi->id_addr;
 			ugh = ttoaddr(src, 0, afi->af, &id->ip_addr);
@@ -96,7 +98,7 @@ err_t atoid(char *src, struct id *id, bool oe_only)
 			if (!oe_only && *(src + 1) == '#') {
 				/*
 				 * if there is a second specifier (#) on the
-				 * line we interprete this as ID_KEY_ID
+				 * line we interpret this as ID_KEY_ID
 				 */
 				id->kind = ID_KEY_ID;
 				id->name.ptr = (unsigned char *)src;
@@ -107,7 +109,7 @@ err_t atoid(char *src, struct id *id, bool oe_only)
 			} else if (!oe_only && *(src + 1) == '~') {
 				/*
 				 * if there is a second specifier (~) on the
-				 * line we interprete this as a binary
+				 * line we interpret this as a binary
 				 * ID_DER_ASN1_DN
 				 */
 				id->kind = ID_DER_ASN1_DN;
@@ -119,7 +121,7 @@ err_t atoid(char *src, struct id *id, bool oe_only)
 			} else if (!oe_only && *(src + 1) == '[') {
 				/*
 				 * if there is a second specifier ([) on the
-				 * line we interprete this as a text ID_KEY_ID,
+				 * line we interpret this as a text ID_KEY_ID,
 				 * and we remove a trailing ", if there is one.
 				 */
 				int len = strlen(src + 2);
@@ -157,106 +159,52 @@ err_t atoid(char *src, struct id *id, bool oe_only)
 	return ugh;
 }
 
-/*
- * Converts a binary key ID into hexadecimal format
- */
-static int keyidtoa(char *dst, size_t dstlen, chunk_t keyid)
+void jam_id(jambuf_t *buf, const struct id *id, jam_bytes_fn *jam_bytes)
 {
-	int n = datatot(keyid.ptr, keyid.len, 'x', dst, dstlen);
-
-	return ((n < (int)dstlen) ? n : (int)dstlen) - 1;
-}
-
-int idtoa(const struct id *id, char *dst, size_t dstlen)
-{
-	int n;
-
 	switch (id->kind) {
 	case ID_FROMCERT:
-		n = snprintf(dst, dstlen, "%s", "%fromcert");
+		jam(buf, "%%fromcert");
 		break;
 	case ID_NONE:
-		n = snprintf(dst, dstlen, "%s", "(none)");
+		jam(buf, "(none)");
 		break;
 	case ID_NULL:
-		n = snprintf(dst, dstlen, "%s", "ID_NULL");
+		jam(buf, "ID_NULL");
 		break;
 	case ID_IPV4_ADDR:
 	case ID_IPV6_ADDR:
 		if (isanyaddr(&id->ip_addr)) {
-			n = snprintf(dst, dstlen, "%s", "%any");
+			jam(buf, "%%any");
 		} else {
-			n = (int)addrtot(&id->ip_addr, 0, dst, dstlen) - 1;
+			jam_address(buf, &id->ip_addr);
 		}
 		break;
 	case ID_FQDN:
-		n = snprintf(dst, dstlen, "@%.*s", (int)id->name.len,
-			id->name.ptr);
+		jam(buf, "@");
+		jam_bytes(buf, id->name.ptr, id->name.len);
 		break;
 	case ID_USER_FQDN:
-		n = snprintf(dst, dstlen, "%.*s", (int)id->name.len,
-			id->name.ptr);
+		jam_bytes(buf, id->name.ptr, id->name.len);
 		break;
 	case ID_DER_ASN1_DN:
-		n = dntoa(dst, dstlen, id->name);
+		jam_dn(buf, id->name, jam_bytes);
 		break;
 	case ID_KEY_ID:
-		passert(dstlen > 4);
-		dst[0] = '@';
-		dst[1] = '#';
-		dstlen -= 2;
-		dst += 2;
-		n = keyidtoa(dst, dstlen, id->name);
-		n += 2;
+		jam(buf, "@#0x");
+		jam_hex_bytes(buf, id->name.ptr, id->name.len);
 		break;
 	default:
-		n = snprintf(dst, dstlen, "unknown id kind %d", id->kind);
+		jam(buf, "unknown id kind %d", id->kind);
 		break;
 	}
-
-	/*
-	 * "Sanitize" string so that log isn't endangered:
-	 * replace unprintable characters with '?'.
-	 */
-	if (n > 0) {
-		for (; *dst != '\0'; dst++)
-			if (!isprint(*dst))
-				*dst = '?';
-	}
-
-	return n;
 }
 
-/*
- * Replace the shell metacharacters ', \, ", `, and $ in a character string
- * by escape sequences consisting of their octal values
- */
-void escape_metachar(const char *src, char *dst, size_t dstlen)
+const char *str_id(const struct id *id, id_buf *dst)
 {
-	while (*src != '\0' && dstlen > 5) {
-		switch (*src) {
-		case '\'':
-		case '\\':
-		case '"':
-		case '`':
-		case '$':
-		{
-			int n = snprintf(dst, dstlen, "\\03%o", *src & 0xFF);
-
-			passert((size_t)n < dstlen);	/* no truncation! */
-			dst += n;
-			dstlen -= n;
-			break;
-		}
-		default:
-			passert(1 < dstlen);	/* no truncation! */
-			*dst++ = *src;
-			dstlen--;
-		}
-		src++;
-	}
-	passert(1 <= dstlen);	/* no truncation! */
-	*dst = '\0';
+	jambuf_t buf = ARRAY_AS_JAMBUF(dst->buf);
+	/* JAM_ID() only emits printable ASCII */
+	jam_id(&buf, id, jam_raw_bytes);
+	return dst->buf;
 }
 
 /*
@@ -285,6 +233,16 @@ void unshare_id_content(struct id *id)
 	}
 }
 
+struct id clone_id(const struct id *src, const char *name)
+{
+	struct id dst = {
+		.kind = src->kind,
+		.ip_addr = src->ip_addr,
+		.name = clone_hunk(src->name, name),
+	};
+	return dst;
+}
+
 void free_id_content(struct id *id)
 {
 	switch (id->kind) {
@@ -292,13 +250,14 @@ void free_id_content(struct id *id)
 	case ID_USER_FQDN:
 	case ID_DER_ASN1_DN:
 	case ID_KEY_ID:
-		freeanychunk(id->name);
+		free_chunk_content(&id->name);
 		break;
 	case ID_FROMCERT:
 	case ID_NONE:
 	case ID_NULL:
 	case ID_IPV4_ADDR:
 	case ID_IPV6_ADDR:
+		pexpect(id->name.ptr == NULL);
 		break;
 	default:
 		bad_case(id->kind);
@@ -325,8 +284,6 @@ bool any_id(const struct id *a)
 
 	default:
 		bad_case(a->kind);
-		/* NOTREACHED */
-		return FALSE;
 	}
 }
 
@@ -390,14 +347,10 @@ bool same_id(const struct id *a, const struct id *b)
 
 	default:
 		bad_case(a->kind);
-		/* NOTREACHED */
-		return FALSE;
 	}
 }
 
 /* compare two struct id values, DNs can contain wildcards */
-
-static bool match_dn_any_order_wild(chunk_t a, chunk_t b, int *wildcards);	/* forward */
 
 bool match_id(const struct id *a, const struct id *b, int *wildcards)
 {
@@ -417,14 +370,11 @@ bool match_id(const struct id *a, const struct id *b, int *wildcards)
 	}
 
 	DBG(DBG_CONTROLMORE, {
-			char abuf[IDTOA_BUF];
-			char bbuf[IDTOA_BUF];
-			idtoa(a, abuf, IDTOA_BUF);
-			idtoa(b, bbuf, IDTOA_BUF);
-			DBG_log("   match_id a=%s", abuf);
-			DBG_log("            b=%s", bbuf);
-			DBG_log("   results  %s", match ? "matched" : "fail");
-		});
+		id_buf buf;
+		DBG_log("   match_id a=%s", str_id(a, &buf));
+		DBG_log("            b=%s", str_id(b, &buf));
+		DBG_log("   results  %s", match ? "matched" : "fail");
+	});
 
 	return match;
 }
@@ -433,7 +383,6 @@ bool match_id(const struct id *a, const struct id *b, int *wildcards)
 int id_count_wildcards(const struct id *id)
 {
 	int count = 0;
-	char idbuf[IDTOA_BUF];
 
 	switch (id->kind) {
 	case ID_NONE:
@@ -446,12 +395,12 @@ int id_count_wildcards(const struct id *id)
 		break;
 	}
 
-	idtoa(id, idbuf, IDTOA_BUF);
-	DBG(DBG_CONTROL,
+	DBG(DBG_CONTROL, {
+		id_buf b;
 		DBG_log("counting wild cards for %s is %d",
-			idbuf,
+			str_id(id, &b),
 			count);
-		);
+	});
 
 	return count;
 }
@@ -460,9 +409,7 @@ void duplicate_id(struct id *dst, const struct id *src)
 {
 	passert(dst->name.ptr == NULL || dst->name.ptr != src->name.ptr);
 	free_id_content(dst);
-	dst->kind = src->kind;
-	dst->ip_addr = src->ip_addr;
-	clonetochunk(dst->name, src->name.ptr, src->name.len, "copy of id");
+	*dst = clone_id(src, "copy of id");
 }
 
 static bool match_rdn(const CERTRDN *const rdn_a, const CERTRDN *const rdn_b, bool *const has_wild)
@@ -516,23 +463,37 @@ static bool match_rdn(const CERTRDN *const rdn_a, const CERTRDN *const rdn_b, bo
  */
 static bool match_dn_unordered(const chunk_t a, const chunk_t b, int *const wildcards)
 {
-	char abuf[ASN1_BUF_LEN];
-	char bbuf[ASN1_BUF_LEN];
-	int rdn_num = 0;
-	int matched = 0;
+	dn_buf a_dnbuf = { "", };
+	dn_buf b_dnbuf = { "", };
 
-	dntoa(abuf, ASN1_BUF_LEN, a);
-	dntoa(bbuf, ASN1_BUF_LEN, b);
 
-	DBG(DBG_CONTROL,
-	    DBG_log("%s A: %s, B: %s", __func__, abuf, bbuf));
+	/*
+	 * Escape the ASN.1 into RFC-1485 (actually RFC-4514 and
+	 * printable ASCII) so that that it is suitable for NSS's
+	 * CERT_AsciiToName().
+	 */
+	const char *abuf = str_dn(a, &a_dnbuf); /* RFC1485 for NSS */
+	const char *bbuf = str_dn(b, &b_dnbuf); /* RFC1485 for NSS */
+
+	/*
+	 * ABUF and BBUF, set by dntoa(), contain an RFC 1485(?)
+	 * encoded string and that can contain UTF-8 (i.e.,
+	 * !isprint()).  Strip that out before logging.
+	 */
+	dbg("matching unordered DNs A: '%s' B: '%s'", abuf, bbuf);
 
 	CERTName *const a_name = CERT_AsciiToName(abuf);
 	CERTName *const b_name = CERT_AsciiToName(bbuf);
 
-	if (a_name == NULL || b_name == NULL)
-		return FALSE;
+	if (a_name == NULL || b_name == NULL) {
+		/* NULL is ignored; see NSS commit 206 */
+		CERT_DestroyName(a_name);
+		CERT_DestroyName(b_name);
+		return false;
+	}
 
+	int rdn_num = 0;
+	int matched = 0;
 	CERTRDN *const *rdns_b;
 	for (rdns_b = b_name->rdns; *rdns_b != NULL; rdns_b++) {
 		CERTRDN *const rdn_b = *rdns_b;
@@ -556,12 +517,8 @@ static bool match_dn_unordered(const chunk_t a, const chunk_t b, int *const wild
 
 	CERT_DestroyName(a_name);
 	CERT_DestroyName(b_name);
-	DBG(DBG_CONTROL,
-	    DBG_log("%s matched: %d, rdn_num: %d, wc %d",
-		    __func__,
-		    matched,
-		    rdn_num,
-		    wildcards ? *wildcards : 0));
+	dbg("%s matched: %d, rdn_num: %d, wc %d",
+	    __func__, matched, rdn_num, wildcards ? *wildcards : 0);
 
 	return matched > 0 && rdn_num > 0 && matched == rdn_num;
 }
@@ -574,8 +531,8 @@ bool same_dn_any_order(chunk_t a, chunk_t b)
 		DBG(DBG_CONTROL, {
 			DBG_log("%s: not an exact match, now checking any RDN order",
 				 __func__);
-			// DBG_dump_chunk("a", a);
-			// DBG_dump_chunk("b", b);
+			// DBG_dump_hunk("a", a);
+			// DBG_dump_hunk("b", b);
 		});
 		ret = match_dn_unordered(a, b, NULL);
 	}
@@ -583,7 +540,7 @@ bool same_dn_any_order(chunk_t a, chunk_t b)
 	return ret;
 }
 
-static bool match_dn_any_order_wild(chunk_t a, chunk_t b, int *wildcards)
+bool match_dn_any_order_wild(chunk_t a, chunk_t b, int *wildcards)
 {
 	bool ret = match_dn(a, b, wildcards);
 
@@ -596,4 +553,47 @@ static bool match_dn_any_order_wild(chunk_t a, chunk_t b, int *wildcards)
 		ret = match_dn_unordered(a, b, wildcards);
 	}
 	return ret;
+}
+
+/*
+ * Build an ID payload
+ * Note: no memory is allocated for the body of the payload (tl->ptr).
+ * We assume it will end up being a pointer into a sufficiently
+ * stable datastructure.  It only needs to last a short time.
+ */
+
+enum ike_id_type id_to_payload(const struct id *id, const ip_address *host, shunk_t *body)
+{
+	int type;
+	shunk_t tl;
+	switch (id->kind) {
+	case ID_NONE:
+		type = address_type(host)->id_addr;
+		tl = address_as_shunk(host);
+		break;
+	case ID_FROMCERT:
+		type = ID_DER_ASN1_DN;
+		tl = shunk2(id->name.ptr, id->name.len);
+		break;
+	case ID_FQDN:
+	case ID_USER_FQDN:
+	case ID_DER_ASN1_DN:
+	case ID_KEY_ID:
+		type = id->kind;
+		tl = shunk2(id->name.ptr, id->name.len);
+		break;
+	case ID_IPV4_ADDR:
+	case ID_IPV6_ADDR:
+		type = id->kind;
+		tl = address_as_shunk(&id->ip_addr);
+		break;
+	case ID_NULL:
+		type = id->kind;
+		tl = empty_shunk;
+		break;
+	default:
+		bad_case(id->kind);
+	}
+	*body = tl;
+	return type;
 }

@@ -1,8 +1,9 @@
-/* get-next-event loop
+/* get-next-event loop, for libreswan
+ *
  * Copyright (C) 1998-2001,2013  D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013 Florian Weimer <fweimer@redhat.com>
- * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019 Andrew Cagney
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -24,6 +25,7 @@
 #include "timer.h"
 #include "err.h"
 #include "ip_address.h"
+#include "ip_endpoint.h"
 
 struct state;
 struct msg_digest;
@@ -65,15 +67,12 @@ struct iface_dev {
 	int id_count;
 	char *id_vname; /* virtual (ipsec) device name */
 	char *id_rname; /* real device name */
-#ifdef USE_NIC_OFFLOAD
 	bool id_nic_offload;
-#endif
 };
 
 struct iface_port {
 	struct iface_dev   *ip_dev;
-	uint16_t port;         /* host byte order */
-	ip_address ip_addr;     /* interface IP address */
+	ip_endpoint local_endpoint;	/* interface IP address:port */
 	int fd;                 /* file descriptor of socket for IKE UDP messages */
 	struct iface_port *next;
 	bool ike_float;
@@ -85,58 +84,73 @@ extern struct iface_port  *interfaces;   /* public interfaces */
 extern enum pluto_ddos_mode ddos_mode;
 extern bool pluto_drop_oppo_null;
 
-extern struct iface_port *lookup_iface_ip(ip_address *ip, uint16_t port);
+extern struct iface_port *find_iface_port_by_local_endpoint(ip_endpoint *local_endpoint);
 extern bool use_interface(const char *rifn);
 extern void find_ifaces(bool rm_dead);
-extern void show_ifaces_status(void);
+extern void show_ifaces_status(struct fd *whackfd);
 extern void free_ifaces(void);
 extern void show_debug_status(void);
-extern void show_fips_status(void);
-extern void call_server(void);
-extern void init_event_base(void);
+extern void show_fips_status(struct fd *whackfd);
+extern void call_server(char *conffile);
 typedef void event_callback_routine(evutil_socket_t, const short, void *);
 void fire_timer_photon_torpedo(struct event **evp, event_callback_fn cb, void *arg,
 			       const deltatime_t delay);
-extern struct pluto_event *pluto_event_add(evutil_socket_t fd, short events,
-					   event_callback_fn cb, void *arg,
-					   const deltatime_t *delay,
-					   const char *name);
-void pluto_event_reschedule(struct pluto_event *event, deltatime_t delay);
+extern struct pluto_event *add_fd_read_event_handler(evutil_socket_t fd,
+						     event_callback_fn cb, void *arg,
+						     const char *name);
 extern void delete_pluto_event(struct pluto_event **evp);
 extern void link_pluto_event_list(struct pluto_event *e);
-extern void free_pluto_event_list(void);
 bool ev_before(struct pluto_event *pev, deltatime_t delay);
 extern void set_pluto_busy(bool busy);
 extern void set_whack_pluto_ddos(enum ddos_mode mode);
-extern bool should_fragment_ike_msg(struct state *st, size_t len,
-				    bool resending);
+
+extern void init_server(void);
+extern void free_server(void);
 
 extern struct event_base *get_pluto_event_base(void);
 
 /*
- * Schedule an event with no timeout.
+ * Schedule an event (with no timeout) to resume a suspended state.
+ * SERIALNO (so_serial_t) is used to identify the state because the
+ * state object may not be directly accessable (as happens with worker
+ * threads).
  *
- * Typically used to resume processing of a state on the main thread.
- * For instance, by a worker thread to transfer control back to the
- * main thread (this is why so_serial_t and not struct state is the
- * parameter); and by the main thread when faking STF_SUSPEND by
- * scheduling a new event.
+ * For instance: a worker thread needing to resume processing of a
+ * state on the main thread once crypto has completed; by the main
+ * thread when faking STF_SUSPEND by scheduling a new event.
  *
  * On callback:
  *
- * ST either points at the state matching SERIALNO, or NULL (SERIALNO
- * is either SOS_NOBODY or the state doesn't exist).  A CB expecting a
- * state back MUST check ST before processing.  Caller sets CUR_STATE
- * so don't play with that.
+ * The CALLBACK must check ST's value: if it is NULL then the state
+ * "disappeared"; if it is non-NULL then it is for SERIALNO.  Either
+ * way the CALLBACK is responsible for releasing CONTEXT.
  *
  * MDP either points at the unsuspended contents of .st_suspended_md,
  * or NULL.  On return, if *MDP is non-NULL, then it will be released.
+ *
+ * XXX: There's a design flaw here - what happens if a state is
+ * simultaneously processing a request and a response - there's only
+ * space for one message!  Suspect what saves things is that it
+ * doesn't happen in the real world.
+ *
+ * XXX: resume_cb should return stf_status, but doing this is a mess.
  */
 
-typedef void pluto_event_now_cb(struct state *st, struct msg_digest **mdp,
-				void *context);
-extern void pluto_event_now(const char *name, so_serial_t serialno,
-			    pluto_event_now_cb *callback, void *context);
+typedef stf_status resume_cb(struct state *st, struct msg_digest **mdp,
+			     void *context);
+void schedule_resume(const char *name, so_serial_t serialno,
+		     resume_cb *callback, void *context);
+
+/*
+ * Schedule a callback on the main event loop now.
+ *
+ * Unlike schedule_resume(), SERIALNO can be SOS_NOBODY and this
+ * doesn't try to unsuspend MD.
+ */
+
+typedef void callback_cb(struct state *st, void *context);
+void schedule_callback(const char *name, so_serial_t serialno,
+		       callback_cb *callback, void *context);
 
 /*
  * Create a child process using fork()

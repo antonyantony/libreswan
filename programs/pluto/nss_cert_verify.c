@@ -26,7 +26,6 @@
 #include <time.h>
 #include <limits.h>
 #include <sys/types.h>
-#include <libreswan.h>
 #include "sysdep.h"
 #include "lswnss.h"
 #include "constants.h"
@@ -45,6 +44,7 @@
 #include "state.h"
 #include "pluto_timing.h"
 #include "root_certs.h"
+#include "ip_info.h"
 
 /*
  * set up the slot/handle/trust things that NSS needs
@@ -203,7 +203,7 @@ static void set_rev_params(CERTRevocationFlags *rev,
 #define RETRYABLE_TYPE(err) ((err) == SEC_ERROR_INADEQUATE_CERT_TYPE || \
 			      (err) == SEC_ERROR_INADEQUATE_KEY_USAGE)
 
-static bool verify_end_cert(CERTCertList *trustcl,
+static bool verify_end_cert(const struct root_certs *root_certs,
 			    const struct rev_opts *rev_opts,
 			    CERTCertificate *end_cert)
 {
@@ -227,7 +227,7 @@ static bool verify_end_cert(CERTCertList *trustcl,
 		},
 		{
 			.type = cert_pi_trustAnchors,
-			.value = { .pointer = { .chain = trustcl } }
+			.value = { .pointer = { .chain = root_certs->trustcl, } }
 		},
 		{
 			.type = cert_pi_useOnlyTrustAnchors,
@@ -255,19 +255,35 @@ static bool verify_end_cert(CERTCertList *trustcl,
 
 	CERTVerifyLog vfy_log;
 
+	enum cvout_param {
+		cvout_errorLog,
+		cvout_end,
+	};
+
 	CERTValOutParam cvout[] = {
-		{
+		[cvout_errorLog] = {
 			.type = cert_po_errorLog,
 			.value = { .pointer = { .log = &vfy_log } }
 		},
-		{
-			.type = cert_po_certList,
-			.value = { .pointer = { .chain = NULL } }
-		},
-		{
+		[cvout_end] = {
 			.type = cert_po_end
 		}
 	};
+
+	if (DBGP(DBG_BASE)) {
+		DBG_log("%s verifying %s using:", __func__, end_cert->subjectName);
+		unsigned nr = 0;
+		CERTCertList *trustcl = root_certs->trustcl;
+		for (CERTCertListNode *node = CERT_LIST_HEAD(trustcl);
+		     !CERT_LIST_END(node, trustcl);
+		     node = CERT_LIST_NEXT(node)) {
+			DBG_log("  trusted CA: %s", node->cert->subjectName);
+			nr++;
+		}
+		if (nr == 0) {
+			DBG_log("  but have no trusted CAs");
+		}
+	}
 
 	for (const struct usage_desc *p = usages; ; p++) {
 		DBGF(DBG_X509, "verify_end_cert trying profile %s", p->usageName);
@@ -305,33 +321,9 @@ static bool verify_end_cert(CERTCertList *trustcl,
 		log_bad_cert("warning", p->usageName,  vfy_log.head);
 
 		PORT_FreeArena(vfy_log.arena, PR_FALSE);
-
-		/*
-		 * ??? observed squirrelly behaviour:
-		 * CERT_DestroyCertList(NULL) does something very odd:
-		 * at least sometimes terminating execution without a core file.
-		 * testing/pluto/ikev2-x509-02-eku illustrates this.
-		 * So we must make sure not to do that.
-		 */
-		if (cvout[1].value.pointer.chain != NULL) {
-			CERT_DestroyCertList(cvout[1].value.pointer.chain);
-			cvout[1].value.pointer.chain = NULL;
-		}
 	}
 
 	PORT_FreeArena(vfy_log.arena, PR_FALSE);
-
-	/*
-	 * ??? observed squirrelly behaviour:
-	 * CERT_DestroyCertList(NULL) does something very odd:
-	 * at least sometimes terminating execution without a core file.
-	 * testing/pluto/ikev2-x509-23-no-ca illustrates this.
-	 * So we must make sure not to do that.
-	 */
-	if (cvout[1].value.pointer.chain != NULL) {
-		CERT_DestroyCertList(cvout[1].value.pointer.chain);
-		cvout[1].value.pointer.chain = NULL;
-	}
 
 	return verified;
 }
@@ -405,12 +397,13 @@ static void add_decoded_cert(CERTCertDBHandle *handle,
 	}
 	dbg("decoded cert: %s", cert->subjectName);
 
-	/* extra verification */
-#ifdef FIPS_CHECK
+	/* XXX: Currently only a check for RSA seems needed */
+	/* See also RSA_secret_sane() and ECDSA_secret_sane() */
 	if (libreswan_fipsmode()) {
 		SECKEYPublicKey *pk = CERT_ExtractPublicKey(cert);
 		passert(pk != NULL);
-		if ((pk->u.rsa.modulus.len * BITS_PER_BYTE) < FIPS_MIN_RSA_KEY_SIZE) {
+		if (pk->keyType == rsaKey &&
+			((pk->u.rsa.modulus.len * BITS_PER_BYTE) < FIPS_MIN_RSA_KEY_SIZE)) {
 			libreswan_log("FIPS: Rejecting peer cert with key size %d under %d",
 					pk->u.rsa.modulus.len * BITS_PER_BYTE,
 					FIPS_MIN_RSA_KEY_SIZE);
@@ -420,7 +413,6 @@ static void add_decoded_cert(CERTCertDBHandle *handle,
 		}
 		SECKEY_DestroyPublicKey(pk);
 	}
-#endif /* FIPS_CHECK */
 
 	/*
 	 * Append the certificate to the CERTS array.
@@ -467,9 +459,14 @@ static struct certs *decode_cert_payloads(CERTCertDBHandle *handle,
 		}
 
 		dbg("saving certificate of type '%s'", cert_name);
-		/* convert remaining buffer to something nss  likes */
-		chunk_t payload_chunk = same_in_pbs_left_as_chunk(&p->pbs);
-		SECItem payload = same_chunk_as_secitem(payload_chunk, siDERCertBuffer);
+		/* convert remaining buffer to something nss likes */
+		shunk_t payload_hunk = pbs_in_left_as_shunk(&p->pbs);
+		/* NSS doesn't do const */
+		SECItem payload = {
+			.type = siDERCertBuffer,
+			.data = (void*)payload_hunk.ptr,
+			.len = payload_hunk.len,
+		};
 
 		switch (cert_type) {
 		case CERT_X509_SIGNATURE:
@@ -507,10 +504,12 @@ static struct certs *decode_cert_payloads(CERTCertDBHandle *handle,
  * Decode and verify the chain received by pluto.
  * ee_out is the resulting end cert
  */
-struct certs *find_and_verify_certs(struct state *st,
+
+struct certs* find_and_verify_certs(struct state *st,
 				    struct payload_digest *cert_payloads,
 				    const struct rev_opts *rev_opts,
-				    bool *crl_needed, bool *bad)
+				    bool *crl_needed, bool *bad,
+				    const struct root_certs *root_certs)
 {
 	*crl_needed = false;
 	*bad = false;
@@ -526,10 +525,7 @@ struct certs *find_and_verify_certs(struct state *st,
 		return NULL;
 	}
 
-	statetime_t root_time = statetime_start(st);
-	CERTCertList *root_certs = get_root_certs(); 	/* must not free */
-	statetime_stop(&root_time, "%s() calling get_root_certs()", __func__);
-	if (!pexpect(root_certs != NULL) || CERT_LIST_EMPTY(root_certs)) {
+	if (root_certs_empty(root_certs)) {
 		libreswan_log("No Certificate Authority in NSS Certificate DB! Certificate payloads discarded.");
 		return NULL;
 	}
@@ -592,35 +588,84 @@ struct certs *find_and_verify_certs(struct state *st,
 	return certs;
 }
 
-bool cert_VerifySubjectAltName(const CERTCertificate *cert, const char *name)
+bool cert_VerifySubjectAltName(const CERTCertificate *cert,
+			       const struct id *id)
 {
-	SECItem	subAltName;
-	SECStatus rv = CERT_FindCertExtension(cert, SEC_OID_X509_SUBJECT_ALT_NAME,
-			&subAltName);
-	if (rv != SECSuccess) {
-		loglog(RC_LOG_SERIOUS, "certificate contains no subjectAltName extension matching '%s'",
-			name);
-		return FALSE;
-	}
-
-	ip_address myip;
-	bool san_ip = (tnatoaddr(name, 0, AF_UNSPEC, &myip) == NULL);
-
-	PLArenaPool *arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
-	passert(arena != NULL);
-
-	CERTGeneralName *nameList = CERT_DecodeAltNameExtension(arena, &subAltName);
-
-	if (nameList == NULL) {
-		loglog(RC_LOG_SERIOUS, "certificate subjectAltName extension failed to decode while looking for '%s'",
-			name);
-		PORT_FreeArena(arena, PR_FALSE);
-		return FALSE;
+	if (id->kind == ID_DER_ASN1_DN) {
+		loglog(RC_LOG_SERIOUS, "cert_VerifySubjectAltName() should not be called for ID_DER_ASN1_DN");
+		return true;
 	}
 
 	/*
-	 * nameList is a pointer into a non-empty circular linked list.
-	 * This loop visits each entry.
+	 * Get a handle on the certificate's subject alt name.
+	 */
+	SECItem	subAltName;
+	SECStatus rv = CERT_FindCertExtension(cert, SEC_OID_X509_SUBJECT_ALT_NAME,
+					      &subAltName);
+	if (rv != SECSuccess) {
+		id_buf name;
+		loglog(RC_LOG_SERIOUS, "certificate contains no subjectAltName extension to match %s '%s'",
+		       enum_name(&ike_idtype_names, id->kind),
+		       str_id(id, &name));
+		return false;
+	}
+
+	/*
+	 * Now decode that into a circular buffer (yes not a list) so
+	 * the ID can be compared against it.
+	 */
+	PLArenaPool *arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
+	passert(arena != NULL);
+	CERTGeneralName *nameList = CERT_DecodeAltNameExtension(arena, &subAltName);
+	if (nameList == NULL) {
+		id_buf name;
+		loglog(RC_LOG_SERIOUS, "certificate subjectAltName extension failed to decode while looking for %s '%s'",
+		       enum_name(&ike_idtype_names, id->kind),
+		       str_id(id, &name));
+		/* XXX: is nss error set? */
+		PORT_FreeArena(arena, PR_FALSE);
+		return false;
+	}
+
+	/*
+	 * Convert the ID with no special escaping (other than that
+	 * specified for converting an ASN.1 DN to text).
+	 *
+	 * XXX: Is there any point in continuing when KIND isn't
+	 * ID_FQDN?  For instance, ID_DER_ASN1_DN (in fact, for DN,
+	 * code was calling this with the ID's first character - not
+	 * an @ - discarded making the value useless).
+	 *
+	 * XXX: Is this overkill?  For instance, since DNS ID has a
+	 * very limited character set, the escaping used is largely
+	 * academic - any escape character ('\', '?') is invalid and
+	 * can't match.
+	 */
+	char raw_id_buf[IDTOA_BUF];
+	jambuf_t raw_id_jambuf = ARRAY_AS_JAMBUF(raw_id_buf);
+	jam_id(&raw_id_jambuf, id, jam_raw_bytes);
+	const char *raw_id = raw_id_buf;
+	if (id->kind == ID_FQDN) {
+		if (pexpect(raw_id[0] == '@'))
+			raw_id++;
+	} else {
+		pexpect(raw_id[0] != '@');
+	}
+
+	/*
+	 * Try converting the ID to an address.  If it fails, assume
+	 * it is a DNS name?
+	 *
+	 * XXX: Is this a "smart" way of handling both an ID_*address*
+	 * and an ID_FQDN containing a textual IP address?
+	 */
+	ip_address myip;
+	bool san_ip = (tnatoaddr(raw_id, 0, AF_UNSPEC, &myip) == NULL);
+
+	/*
+	 * nameList is a pointer into a non-empty circular linked
+	 * list.  This loop visits each entry.
+	 *
 	 * We have visited each when we come back to the start.
 	 * We test only at the end, after we advance, because we want to visit
 	 * the first entry the first time we see it but stop when we get to it
@@ -632,6 +677,8 @@ bool cert_VerifySubjectAltName(const CERTCertificate *cert, const char *name)
 		case certDNSName:
 		case certRFC822Name:
 		{
+			if (san_ip)
+				break;
 			/*
 			 * Match the parameter name with the name in the certificate.
 			 * The name in the cert may start with "*."; that will match
@@ -641,12 +688,9 @@ bool cert_VerifySubjectAltName(const CERTCertificate *cert, const char *name)
 			const char *c_ptr = (const void *) current->name.other.data;
 			size_t c_len =  current->name.other.len;
 
-			const char *n_ptr = name;
+			const char *n_ptr = raw_id;
 			static const char wild[] = "*.";
 			const size_t wild_len = sizeof(wild) - 1;
-
-			if (san_ip)
-				break;
 
 			if (c_len > wild_len && startswith(c_ptr, wild)) {
 				/* wildcard in cert: ignore first component of name */
@@ -660,12 +704,14 @@ bool cert_VerifySubjectAltName(const CERTCertificate *cert, const char *name)
 			}
 
 			if (c_len == strlen(n_ptr) && strncaseeq(n_ptr, c_ptr, c_len)) {
-				/*
-				 * ??? if current->name.other.data contains bad characters,
-				 * what prevents them being logged?
-				 */
-				DBG(DBG_X509, DBG_log("subjectAltname %s matched %*s in certificate",
-					name, current->name.other.len, current->name.other.data));
+				LSWDBGP(DBG_BASE, buf) {
+					jam(buf, "subjectAltname '");
+					jam_sanitized_bytes(buf, raw_id, strlen(raw_id)),
+					jam(buf, "' matched '");
+					jam_sanitized_bytes(buf, current->name.other.data,
+							    current->name.other.len);
+					jam(buf, "' in certificate");
+				}
 				PORT_FreeArena(arena, PR_FALSE);
 				return TRUE;
 			}
@@ -673,31 +719,28 @@ bool cert_VerifySubjectAltName(const CERTCertificate *cert, const char *name)
 		}
 
 		case certIPAddress:
+		{
 			if (!san_ip)
 				break;
-
-			if ((current->name.other.len == 4) && (addrtypeof(&myip) == AF_INET)) {
-				if (memcmp(current->name.other.data, &myip.u.v4.sin_addr.s_addr, 4) == 0) {
-					DBG(DBG_X509, DBG_log("subjectAltname IPv4 matches %s", name));
-					PORT_FreeArena(arena, PR_FALSE);
-					return TRUE;
-				} else {
-					DBG(DBG_X509, DBG_log("subjectAltname IPv4 does not match %s", name));
-					break;
-				}
+			/*
+			 * XXX: If one address is IPv4 and the other
+			 * is IPv6 then the hunk_memeq() check will
+			 * fail because the lengths are wrong.
+			 */
+			shunk_t as = address_as_shunk(&myip);
+			if (hunk_memeq(as, current->name.other.data,
+				       current->name.other.len)) {
+				address_buf b;
+				dbg("subjectAltname matches address %s",
+				    str_address(&myip, &b));
+				PORT_FreeArena(arena, PR_FALSE);
+				return true;
 			}
-			if ((current->name.other.len == 16) && (addrtypeof(&myip) == AF_INET6)) {
-				if (memcmp(current->name.other.data, &myip.u.v6.sin6_addr.s6_addr, 16) == 0) {
-					DBG(DBG_X509, DBG_log("subjectAltname IPv6 matches %s", name));
-					PORT_FreeArena(arena, PR_FALSE);
-					return TRUE;
-				} else {
-					DBG(DBG_X509, DBG_log("subjectAltname IPv6 does not match %s", name));
-					break;
-				}
-			}
-			DBG(DBG_X509, DBG_log("subjectAltname IP address family mismatch for %s", name));
+			address_buf b;
+			dbg("subjectAltname does not match address %s",
+			    str_address(&myip, &b));
 			break;
+		}
 
 		default:
 			break;
@@ -705,10 +748,17 @@ bool cert_VerifySubjectAltName(const CERTCertificate *cert, const char *name)
 		current = CERT_GetNextGeneralName(current);
 	} while (current != nameList);
 
-	loglog(RC_LOG_SERIOUS, "No matching subjectAltName found for '%s'", name);
+	LSWLOG_RC(RC_LOG_SERIOUS, buf) {
+		jam(buf, "certificate subjectAltName extension does not match ");
+		lswlog_enum(buf, &ike_idtype_names, id->kind);
+		jam(buf, " '");
+		jam_sanitized_bytes(buf, raw_id, strlen(raw_id));
+		jam(buf, "'");
+	}
+
 	/* Don't free nameList, it's part of the arena. */
 	PORT_FreeArena(arena, PR_FALSE);
-	return FALSE;
+	return false;
 }
 
 SECItem *nss_pkcs7_blob(CERTCertificate *cert, bool send_full_chain)

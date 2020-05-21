@@ -63,7 +63,7 @@
  */
 
 #define WHACK_BASIC_MAGIC (((((('w' << 8) + 'h') << 8) + 'k') << 8) + 25)
-#define WHACK_MAGIC (((((('o' << 8) + 'h') << 8) + 'k') << 8) + 46)
+#define WHACK_MAGIC (((((('o' << 8) + 'h') << 8) + 'k') << 8) + 47)
 
 /*
  * Where, if any, is the pubkey coming from.
@@ -94,7 +94,8 @@ struct whack_end {
 		   host_nexthop,
 		   host_srcip;
 	ip_subnet  client,
-		   host_vtiip;
+		   host_vtiip,
+		   ifaceip;
 
 	bool key_from_DNS_on_demand;
 	enum whack_pubkey_type pubkey_type;
@@ -127,8 +128,6 @@ struct whack_end {
 enum whack_opt_set {
 	WHACK_ADJUSTOPTIONS=0,		/* normal case */
 	WHACK_SETDUMPDIR=1,		/* string1 contains new dumpdir */
-	WHACK_STARTWHACKRECORD=2,	/* string1 contains file to write options to */
-	WHACK_STOPWHACKRECORD=3,	/* turn off recording to file */
 };
 
 struct whack_message {
@@ -179,6 +178,7 @@ struct whack_message {
 	deltatime_t r_timeout; /* in secs */
 	deltatime_t r_interval; /* in msec */
 	enum yna_options nic_offload;
+	uint32_t xfrm_if_id;
 
 	/* For IKEv1 RFC 3706 - Dead Peer Detection */
 	deltatime_t dpd_delay;
@@ -283,6 +283,10 @@ struct whack_message {
 	bool whack_deletestate;
 	long unsigned int whack_deletestateno;
 
+	/* rekey now */
+	bool whack_rekey_ike; /* rekey the latest ike now */
+	bool whack_rekey_ipsec;  /* rekey latest ipsec now */
+
 	/* for WHACK_NFLOG_GROUP: */
 	long unsigned int whack_nfloggroup;
 
@@ -304,6 +308,9 @@ struct whack_message {
 
 	/* for DDOS modes */
 	enum ddos_mode whack_ddos;
+
+	/* force EVENT_PENDING_DDNS */
+	bool whack_ddns;
 
 	/* for WHACK_CRASH - note if a remote peer is known to have rebooted */
 	bool whack_crash;

@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -15,7 +15,6 @@ east #
 east #
  grep "liveness: no need to send"  /tmp/pluto.log
 | liveness: no need to send or schedule DPD for replaced IPsec SA
-east #
 east #
  ../bin/check-for-core.sh
 east #

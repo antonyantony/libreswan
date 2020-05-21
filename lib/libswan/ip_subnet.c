@@ -17,55 +17,243 @@
  * for more details.
  */
 
+#include "jambuf.h"
 #include "ip_subnet.h"
-#include "lswlog.h"
+#include "libreswan/passert.h"
+#include "lswlog.h"	/* for pexpect() */
+#include "ip_info.h"
 
-bool subnetisnone(const ip_subnet *sn)
+const ip_subnet subnet_invalid; /* all zeros */
+
+static ip_subnet subnet3(const ip_address *address, int maskbits, int port)
 {
-	ip_address base = ip_subnet_floor(sn);
-	return isanyaddr(&base) && subnetishost(sn);
+	ip_endpoint e = endpoint(address, port);
+	ip_subnet s = {
+		.addr = e,
+		.maskbits = maskbits,
+	};
+	return s;
 }
 
-ip_address ip_subnet_floor(const ip_subnet *subnet)
+#ifdef SUBNET_TYPE
+static ip_subnet subnet4(const ip_address *lo_address, const ip_address *hi_address,
+			 int lo_hport, int hi_hport)
 {
-	return subnet->addr;
+	ip_subnet s = {
+		.lo_address = *lo_address,
+		.hi_address = *hi_address,
+		.lo_port = lo_port,
+		.hi_port = hi_port,
+	};
+}
+#endif
+
+ip_subnet subnet_from_address(const ip_address *address)
+{
+	const struct ip_info *afi = address_type(address);
+	if (!pexpect(afi != NULL)) {
+		return subnet_invalid;
+	}
+	return subnet3(address, afi->mask_cnt, 0);
 }
 
-ip_address ip_subnet_ceiling(const ip_subnet *subnet)
+ip_subnet subnet_from_endpoint(const ip_endpoint *endpoint)
 {
-	/* start with address */
-	chunk_t base = same_ip_address_as_chunk(&subnet->addr);
-	passert((size_t)subnet->maskbits <= base.len * 8);
-	uint8_t buf[16] = { 0, };
-	passert(base.len <= sizeof(buf))
-	memcpy(buf, base.ptr, base.len);
-
-	/* maskbits = 9 -> byte = 1; bits = 1 */
-	unsigned byte = subnet->maskbits / 8;
-	unsigned bits = subnet->maskbits - (byte * 8);
-	/* 1 << (8-1) -> 0x80 - 1 -> 0x7f */
-	if (bits != 0) {
-		buf[byte] |= (1 << (8 - bits)) - 1;
-		byte++;
+	const struct ip_info *afi = endpoint_type(endpoint);
+	if (!pexpect(afi != NULL)) {
+		return subnet_invalid;
 	}
-	for (; byte < base.len; byte++) {
-		buf[byte] = 0xff;
+	ip_address address = endpoint_address(endpoint);
+	int hport = endpoint_hport(endpoint);
+	pexpect(hport != 0);
+	return subnet3(&address, afi->mask_cnt, hport);
+}
+
+ip_address subnet_prefix(const ip_subnet *src)
+{
+	return subnet_blit(src,
+			   /*routing-prefix*/&keep_bits,
+			   /*host-id*/&clear_bits);
+}
+
+const struct ip_info *subnet_type(const ip_subnet *src)
+{
+	return endpoint_type(&src->addr);
+}
+
+int subnet_hport(const ip_subnet *s)
+{
+#ifdef SUBNET_TYPE
+	const struct ip_info *afi = subnet_type(s);
+	if (afi == NULL) {
+		/* not asserting, who knows what nonsense a user can generate */
+		libreswan_log("%s has unspecified type", __func__);
+		return -1;
+	}
+	return s->hport;
+#else
+	return endpoint_hport(&s->addr);
+#endif
+}
+
+int subnet_nport(const ip_subnet *s)
+{
+#ifdef SUBNET_TYPE
+	const struct ip_info *afi = subnet_type(s);
+	if (afi == NULL) {
+		/* not asserting, who knows what nonsense a user can generate */
+		libreswan_log("%s has unspecified type", __func__);
+		return -1;
+	}
+	return htons(s->hport);
+#else
+	return endpoint_nport(&s->addr);
+#endif
+}
+
+ip_subnet set_subnet_hport(const ip_subnet *subnet, int hport)
+{
+	ip_subnet s = *subnet;
+#ifdef SUBNET_TYPE
+	s.port = hport;
+#else
+	s.addr = set_endpoint_hport(&subnet->addr, hport);
+#endif
+	return s;
+}
+
+bool subnet_is_specified(const ip_subnet *s)
+{
+	return endpoint_is_specified(&s->addr);
+}
+
+bool subnet_contains_all_addresses(const ip_subnet *s)
+{
+	const struct ip_info *afi = subnet_type(s);
+	if (!pexpect(afi != NULL) ||
+	    s->maskbits != 0) {
+		return false;
+	}
+	ip_address network = subnet_prefix(s);
+	return (address_is_any(&network)
+		&& subnet_hport(s) == 0);
+}
+
+bool subnet_contains_no_addresses(const ip_subnet *s)
+{
+	const struct ip_info *afi = subnet_type(s);
+	if (!pexpect(afi != NULL) ||
+	    s->maskbits != afi->mask_cnt) {
+		return false;
+	}
+	ip_address network = subnet_prefix(s);
+	return (address_is_any(&network)
+		&& subnet_hport(s) == 0);
+}
+
+/*
+ * mashup() notes:
+ * - mashup operates on network-order IP addresses
+ */
+
+struct ip_blit {
+	uint8_t and;
+	uint8_t or;
+};
+
+const struct ip_blit clear_bits = { .and = 0x00, .or = 0x00, };
+const struct ip_blit set_bits = { .and = 0x00/*don't care*/, .or = 0xff, };
+const struct ip_blit keep_bits = { .and = 0xff, .or = 0x00, };
+
+ip_address subnet_blit(const ip_subnet *src,
+			  const struct ip_blit *prefix,
+			  const struct ip_blit *host)
+{
+	/* strip port; copy type */
+	ip_address mask = endpoint_address(&src->addr);
+	chunk_t raw = address_as_chunk(&mask);
+
+	if (!pexpect((size_t)src->maskbits <= raw.len * 8)) {
+		return address_invalid;	/* "can't happen" */
 	}
 
-	ip_address mask;
-	initaddr(buf, base.len, addrtypeof(&subnet->addr), &mask);
+	uint8_t *p = raw.ptr; /* cast void* */
+
+	/* the cross over byte */
+	size_t xbyte = src->maskbits / BITS_PER_BYTE;
+	unsigned xbit = src->maskbits % BITS_PER_BYTE;
+
+	/* leading bytes: & PREFIX->AND | PREFIX->OR */
+	unsigned b = 0;
+	for (; b < xbyte; b++) {
+		p[b] &= prefix->and;
+		p[b] |= prefix->or;
+	}
+
+	/*
+	 * cross over: & {PREFIX,HOST}_AND | {PREFIX,HOST}_OR
+	 *
+	 * tricky logic:
+	 * - b == xbyte
+	 * - if xbyte == raw.len we must not access p[xbyte]
+	 * - if xbyte == raw.len, xbit will be 0
+	 * - if xbit == 0, the loop for trailing bytes will
+	 *   perform the required operation slightly more efficiently
+	 * So we guard this step with xbit != 0 instead of b < raw.len
+	 */
+	if (xbit != 0) {
+		uint8_t hmask = 0xFF >> xbit;
+		p[b] &= (prefix->and & ~hmask) | (host->and & hmask);
+		p[b] |= (prefix->or & ~hmask) | (host->or & hmask);
+		b++;
+	}
+
+	/* trailing bytes: & HOST->AND | HOST->OR */
+	for (; b < raw.len; b++) {
+		p[b] &= host->and;
+		p[b] |= host->or;
+	}
+
 	return mask;
 }
 
-void fmt_subnet(fmtbuf_t *buf, const ip_subnet *subnet)
+/*
+ * subnet mask - get the mask of a subnet, as an address
+ *
+ * For instance 1.2.3.4/24 -> 255.255.255.0.
+ */
+
+ip_address subnet_mask(const ip_subnet *src)
 {
-	fmt_address_cooked(buf, &subnet->addr); /* sensitive? */
-	fmt(buf, "/%u", subnet->maskbits);
+	return subnet_blit(src, /*prefix*/ &set_bits, /*host*/ &clear_bits);
 }
 
-const char *str_subnet(const ip_subnet *subnet, ip_subnet_buf *out)
+void jam_subnet(jambuf_t *buf, const ip_subnet *subnet)
 {
-	fmtbuf_t buf = ARRAY_AS_FMTBUF(out->buf);
-	fmt_subnet(&buf, subnet);
+	jam_address(buf, &subnet->addr); /* sensitive? */
+	jam(buf, "/%u", subnet->maskbits);
+}
+
+const char *str_subnet(const ip_subnet *subnet, subnet_buf *out)
+{
+	jambuf_t buf = ARRAY_AS_JAMBUF(out->buf);
+	jam_subnet(&buf, subnet);
+	return out->buf;
+}
+
+void jam_subnet_port(jambuf_t *buf, const ip_subnet *subnet)
+{
+	jam_address(buf, &subnet->addr); /* sensitive? */
+	jam(buf, "/%u", subnet->maskbits);
+	int port = subnet_hport(subnet);
+	if (port >= 0) {
+		jam(buf, ":%d", port);
+	}
+}
+
+const char *str_subnet_port(const ip_subnet *subnet, subnet_buf *out)
+{
+	jambuf_t buf = ARRAY_AS_JAMBUF(out->buf);
+	jam_subnet_port(&buf, subnet);
 	return out->buf;
 }

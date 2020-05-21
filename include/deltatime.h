@@ -24,7 +24,7 @@
 #include <stdint.h>		/* for intmax_t */
 #include <stdbool.h>		/* for bool */
 
-struct lswlog;
+#include "jambuf.h"
 
 /*
  * XXX: This value isn't typed so what is it really the max of?
@@ -48,12 +48,14 @@ struct lswlog;
  * Sigh.
  */
 
-typedef struct { intmax_t ms; } deltatime_t;
+typedef struct { struct timeval dt; } deltatime_t;
 
-#define DELTATIME_INIT(S) { (intmax_t)((S) * 1000) }
+#define DELTATIME_INIT(S) { .dt = { .tv_sec = (S), } }
 
 deltatime_t deltatime(time_t secs);
 deltatime_t deltatime_ms(intmax_t ms);
+
+deltatime_t deltatime_timevals_diff(struct timeval l, struct timeval r);
 
 /* sign(a - b) */
 int deltatime_cmp(deltatime_t a, deltatime_t b);
@@ -82,12 +84,19 @@ struct timeval deltatimeval(deltatime_t);
 /* output as "smart" seconds */
 
 typedef struct {
-	char buf[100]; /* true length ???? */
+	/* slightly over size */
+	char buf[sizeof("-18446744073709551615.1000000")+1/*canary*/]; /* true length ???? */
 } deltatime_buf;
-const char *str_deltatime(deltatime_t d, deltatime_buf *buf);
 
-/* fmt_deltatime() */
-size_t lswlog_deltatime(struct lswlog *buf, deltatime_t d);
+const char *str_deltatime(deltatime_t d, deltatime_buf *buf);
+size_t jam_deltatime(jambuf_t *buf, deltatime_t d);
+#define lswlog_deltatime jam_deltatime /* XXX: TBD */
+
+/* jam_deltatime() */
+
+/*
+ * legacy.
+ */
 
 /* But what about -ve? */
 #define PRI_DELTATIME "%jd.%03jd"

@@ -39,6 +39,7 @@
 #include "monotime.h"
 #include "reqid.h"
 #include "fd.h"
+#include "crypt_mac.h"
 
 #include <nss.h>
 #include <pk11pub.h>
@@ -52,6 +53,7 @@
 #include "ike_spi.h"
 #include "pluto_timing.h"	/* for statetime_t */
 #include "ikev2_msgid.h"
+#include "ip_endpoint.h"
 
 struct ikev2_ipseckey_dns; /* forward declaration of tag */
 
@@ -123,7 +125,7 @@ struct trans_attrs {
 	uint16_t enckeylen;			/* encryption key len (bits) */
 	const struct prf_desc *ta_prf;		/* package of prf routines */
 	const struct integ_desc *ta_integ;	/* package of integrity routines */
-	const struct oakley_group_desc *ta_dh;	/* Diffie-Helman-Merkel routines */
+	const struct dh_desc *ta_dh;	/* Diffie-Helman-Merkel routines */
 };
 
 /* IPsec (Phase 2 / Quick Mode) transform and attributes
@@ -155,12 +157,6 @@ struct ipsec_proto_info {
 	monotime_t our_lastused;
 	monotime_t peer_lastused;
 	uint64_t add_time;
-};
-
-struct initiate_list {
-	so_serial_t st_serialno;
-//	enum initiate_new_exchagnge send_type;
-	struct  initiate_list *next;
 };
 
 struct ike_frag {
@@ -231,16 +227,27 @@ struct msg_digest *unsuspend_md(struct state *st);
  * there's nothing to check.
  */
 #define suspend_md(ST, MDP) {						\
-		DBG(DBG_CONTROL,					\
-		    DBG_log("suspending state #%lu and saving MD",	\
-			    (ST)->st_serialno));			\
+		dbg("suspending state #%lu and saving MD %p",		\
+		    (ST)->st_serialno, *(MDP));				\
 		passert((ST)->st_suspended_md == NULL);			\
 		(ST)->st_suspended_md = *(MDP);				\
 		*(MDP) = NULL; /* take ownership */			\
-		(ST)->st_suspended_md_func = __func__;		\
+		(ST)->st_suspended_md_func = __func__;			\
 		(ST)->st_suspended_md_line = __LINE__;			\
 		passert(state_is_busy(ST));				\
 	}
+
+/*
+ * All the hash tables states are stored in.
+ */
+enum state_hash {
+	SERIALNO_STATE_HASH,
+	CONNECTION_STATE_HASH,
+	REQID_STATE_HASH,
+	IKE_SPIS_STATE_HASH,
+	IKE_INITIATOR_SPI_STATE_HASH,
+	STATE_HASH_ROOF,
+};
 
 /*
  * For auditing, why an SA is being deleted.
@@ -281,15 +288,15 @@ extern enum_names state_category_names;
  * IKEv1 and IKEv2 construct states using this as a base.
  */
 struct finite_state {
-	enum state_kind fs_kind;
-	const char *fs_name;
-	const char *fs_short_name;
-	const char *fs_story;
-	lset_t fs_flags;
-	enum state_category fs_category;
-	const struct state_v1_microcode *fs_v1_transitions;
-	const struct state_v2_microcode *fs_v2_transitions;
-	size_t fs_nr_transitions;
+	enum state_kind kind;
+	const char *name;
+	const char *short_name;
+	const char *story;
+	lset_t flags;
+	enum state_category category;
+	const struct state_v1_microcode *v1_transitions;
+	const struct state_v2_microcode *v2_transitions;
+	size_t nr_transitions;
 };
 
 void lswlog_finite_state(struct lswlog *buf, const struct finite_state *fs);
@@ -320,16 +327,21 @@ struct state {
 	struct xauth *st_xauth;			/* per state xauth/pam thread */
 #endif
 
-	enum ike_version st_ike_version;	/* IKEv1, IKEv2, ... */
+	/*
+	 * XXX: Can these attributes be moved to struct finite_state?
+	 * Probably, but later.
+	 *
+	 * XXX: Can these attributes be made "const".  Probably,
+	 * new_state() could use clone_thing(const state on stack).
+	 */
+	/*const*/ enum ike_version st_ike_version;	/* IKEv1, IKEv2, ... */
+	/*const*/ enum sa_type st_establishing_sa;	/* where is this state going? */
 
 	bool st_ikev2_anon;                     /* is this an anonymous IKEv2 state? */
 	bool st_suppress_del_notify;            /* suppress sending DELETE - eg replaced conn */
-	bool st_rekeytov2;                      /* true if this IKEv1 is about
-						 * to be replaced with IKEv2
-						 */
 
 	struct connection *st_connection;       /* connection for this SA */
-	fd_t st_whack_sock;                /* fd for our Whack TCP socket.
+	struct fd *st_whack_sock;                /* fd for our Whack TCP socket.
 						 * Single copy: close when
 						 * freeing struct.
 						 */
@@ -353,34 +365,43 @@ struct state {
 
 	bool st_outbound_done;			/* if true, then outgoing SA already installed */
 
-	const struct oakley_group_desc *st_pfs_group;   /*group for Phase 2 PFS */
+	const struct dh_desc *st_pfs_group;   /*group for Phase 2 PFS */
 	lset_t st_hash_negotiated;              /* Saving the negotiated hash values here */
 	lset_t st_policy;                       /* policy for IPsec SA */
 
-	ip_address st_remoteaddr;               /* where to send packets to */
-	uint16_t st_remoteport;                /* host byte order */
+	ip_endpoint st_remote_endpoint;        /* where to send packets to */
 
-	const struct iface_port *st_interface;  /* where to send from */  /* dhr 2013: why? There was already connection->interface */
-	ip_address st_localaddr;                /* where to send them from */
-	uint16_t st_localport;
+	/*
+	 * dhr 2013: why [.st_interface]? There was already
+	 * connection->interface
+	 *
+	 * XXX: It seems that .st_interface starts out the same as the
+	 * connection's interface but then be changed by NAT.  For
+	 * instance, when the initial request is sent on :500 but the
+	 * response comes back on :4500, .st_interface will switch.
+	 *
+	 * XXX: It looks like there's redundancy, or at least there
+	 * should be consistency between this.{addr,port} and the
+	 * local endpoint.  pexpect_st_local_endpoint() is a place
+	 * holder as that idear gets explored.
+	 */
+	const struct iface_port *st_interface;  /* where to send from */
+#define pexpect_st_local_endpoint(ST) /* see above */
 
+	bool st_mobike_del_src_ip;		/* for mobike migrate unroute */
 	/* IKEv2 MOBIKE probe copies */
-	ip_address st_mobike_remoteaddr;
-	uint16_t st_mobike_remoteport;
-	const struct iface_port *st_mobike_interface;
+	ip_address st_mobike_remote_endpoint;
 	ip_address st_deleted_local_addr;	/* kernel deleted address */
-	ip_address st_mobike_localaddr;		/* new address to initiate MOBIKE */
-	uint16_t st_mobike_localport;		/* is this necessary ? */
+	ip_endpoint st_mobike_local_endpoint;	/* new address to initiate MOBIKE */
 	ip_address st_mobike_host_nexthop;	/* for updown script */
 
 	/** IKEv1-only things **/
 
-	msgid_t st_msgid;                       /* MSG-ID from header.
-						   Network Order! */
-	bool st_msgid_reserved;			/* is msgid reserved yet? */
-
-	msgid_t st_msgid_phase15;               /* msgid for phase 1.5 - Network Order! */
-
+	struct {
+		msgid_t id;             /* MSG-ID from header. Network Order?!? */
+		bool reserved;		/* is msgid reserved yet? */
+		msgid_t phase15;        /* msgid for phase 1.5 - Network Order! */
+	} st_v1_msgid;
 	/* only for a state representing an ISAKMP SA */
 	struct msgid_list *st_used_msgids;	/* used-up msgids */
 
@@ -397,15 +418,11 @@ struct state {
 	const struct state_v2_microcode *st_v2_next_transition;
 #endif
 
-	/* Initialization Vectors for IKE encryption */
+	/* Initialization Vectors for IKEv1 IKE encryption */
 
-	u_char st_new_iv[MAX_DIGEST_LEN];	/* tentative IV (calculated from current packet) */
-	u_char st_iv[MAX_DIGEST_LEN];           /* accepted IV (after packet passes muster) */
-	u_char st_ph1_iv[MAX_DIGEST_LEN];       /* IV at end of phase 1 */
-
-	unsigned int st_new_iv_len;
-	unsigned int st_iv_len;
-	unsigned int st_ph1_iv_len;
+	struct crypt_mac st_v1_new_iv;	/* tentative IV (calculated from current packet) */
+	struct crypt_mac st_v1_iv;		/* accepted IV (after packet passes muster) */
+	struct crypt_mac st_v1_ph1_iv;	/* IV at end of phase 1 */
 
 	/* end of IKEv1-only things */
 
@@ -418,7 +435,8 @@ struct state {
 	enum original_role st_original_role;
 	enum sa_role st_sa_role;
 
-	struct v2_msgids st_v2_msgids;
+	struct v2_msgid_wip st_v2_msgid_wip;		/* IKE and CHILD */
+	struct v2_msgid_windows st_v2_msgid_windows;	/* IKE */
 
 	/* message ID sequence for things we send (as initiator) */
 	msgid_t st_msgid_lastack;               /* last one peer acknowledged  - host order */
@@ -429,7 +447,6 @@ struct state {
 
 	chunk_t st_firstpacket_me;              /* copy of my message 1 (for hashing) */
 	chunk_t st_firstpacket_him;             /* copy of his message 1 (for hashing) */
-	struct initiate_list *send_next_ix;
 
 	struct p_dns_req *ipseckey_dnsr;    /* ipseckey of that end */
 	struct p_dns_req *ipseckey_fwd_dnsr;/* validate IDi that IP in forward A/AAAA */
@@ -460,9 +477,7 @@ struct state {
 	chunk_t st_tpacket;                     /* Transmitted packet */
 	struct v2_ike_tfrag *st_v2_tfrags;	/* Transmitted fragments */
 
-#ifdef HAVE_LABELED_IPSEC
 	struct xfrm_user_sec_ctx_ike *sec_ctx;
-#endif
 
 	/* Phase 2 ID payload info about my user */
 	uint8_t st_myuserprotoid;             /* IDcx.protoid */
@@ -543,11 +558,7 @@ struct state {
 	/* In a Phase 1 state, preserve peer's public key after authentication */
 	struct pubkey *st_peer_pubkey;
 
-#define st_state st_state_kind /*compat*/
-#define st_state_kind st_finite_state->fs_kind
-#define st_state_name st_finite_state->fs_name
-#define st_state_story st_finite_state->fs_story
-	const struct finite_state *st_finite_state;	/* Current FSM state */
+	const struct finite_state *st_state;	/* Current FSM state */
 
 	/*
 	 * Account for why an SA is is started, established, and
@@ -684,12 +695,9 @@ struct state {
 
 	/* state list entry */
 	struct list_entry st_serialno_list_entry;
-	/* SERIALNO hash table entry */
-	struct list_entry st_serialno_hash_entry;
-	/* IKE SPIi:SPIr hash table entry */
-	struct list_entry st_ike_spis_hash_entry;
-	/* IKE SPIi hash table entry */
-	struct list_entry st_ike_initiator_spi_hash_entry;
+
+	/* all the hash table entries */
+	struct list_entry st_hash_entries[STATE_HASH_ROOF];
 
 	struct hidden_variables hidden_variables;
 
@@ -749,11 +757,11 @@ struct state {
  *    struct ike_sa *ike; ike->sa.st_...
  *    struct child_sa *child; child->sa.st_...
  *
- * The function ike_sa() returns the IKE SA that the struct state
+ * The function get_ike_sa() returns the IKE SA that the struct state
  * belongs to (an IKE SA belongs to itself).
  *
- * pexpect_ike_sa() is similar, except it complains loudly when ST
- * isn't an IKE SA.
+ * pexpect_{ike,child}_sa() cast the SA (assuming it makes sense), or
+ * NULL.
  */
 
 struct ike_sa { struct state sa; };
@@ -773,34 +781,35 @@ extern bool states_use_connection(const struct connection *c);
 
 /* state functions */
 
-so_serial_t next_so_serialno(void);
-struct state *new_v1_istate(void);
-struct state *new_v1_rstate(struct msg_digest *md);
-struct state *new_v2_state(enum state_kind kind, enum sa_role sa_role,
-			   ike_spi_t ike_initiator_spi,
-			   ike_spi_t ike_responder_spi);
+struct ike_sa *new_v1_istate(struct fd *whackfd);
+struct ike_sa *new_v1_rstate(struct msg_digest *md);
+struct ike_sa *new_v2_state(enum state_kind kind, enum sa_role sa_role,
+			    const ike_spi_t ike_initiator_spi,
+			    const ike_spi_t ike_responder_spi,
+			    struct connection *c, lset_t policy,
+			    int try, struct fd *whack_sock);
 
 extern void init_states(void);
 extern void rehash_state(struct state *st,
 			 const ike_spi_t *ike_responder_spi);
-extern void release_whack(struct state *st);
+extern void release_any_whack(struct state *st, where_t where, const char *why);
 extern void state_eroute_usage(const ip_subnet *ours, const ip_subnet *his,
 			       unsigned long count, monotime_t nw);
 extern void delete_state(struct state *st);
+extern void discard_state(struct state **st);
 extern void delete_states_by_connection(struct connection *c, bool relations);
 extern void rekey_p2states_by_connection(struct connection *c);
 extern void delete_my_family(struct state *pst, bool v2_responder_state);
 
-struct state *ikev1_duplicate_state(struct state *st);
-struct state *ikev2_duplicate_state(struct ike_sa *st, enum sa_type sa_type,
-				    enum sa_role sa_role);
+struct state *ikev1_duplicate_state(struct state *st, struct fd *whackfd);
+struct child_sa *ikev2_duplicate_state(struct ike_sa *st, enum sa_type sa_type,
+				       enum sa_role sa_role, struct fd *whackfd);
 
 extern struct state
 	*state_with_serialno(so_serial_t sn),
 	*find_phase2_state_to_delete(const struct state *p1st, uint8_t protoid,
 			     ipsec_spi_t spi, bool *bogus),
-	*find_phase1_state(const struct connection *c, lset_t ok_states),
-	*find_likely_sender(size_t packet_len, u_char * packet);
+	*find_phase1_state(const struct connection *c, lset_t ok_states);
 
 struct state *find_state_ikev1(const ike_spis_t *ike_spis, msgid_t msgid);
 struct state *find_state_ikev1_init(const ike_spi_t *ike_initiator_spi,
@@ -810,13 +819,14 @@ extern bool find_pending_phase2(const so_serial_t psn,
 					const struct connection *c,
 					lset_t ok_states);
 
-extern struct state *find_v2_ike_sa(const ike_spis_t *ike_spis);
-extern struct state *find_v2_ike_sa_by_initiator_spi(const ike_spi_t *ike_initiator_spi);
+extern struct ike_sa *find_v2_ike_sa(const ike_spis_t *ike_spis,
+				     enum sa_role local_ike_role);
+extern struct ike_sa *find_v2_ike_sa_by_initiator_spi(const ike_spi_t *ike_initiator_spi,
+						      enum sa_role local_ike_role);
 
-struct state *find_v2_sa_by_request_msgid(const ike_spis_t *ike_spis, msgid_t msgid);
-
-struct state *find_v2_child_sa_by_outbound_spi(const ike_spis_t *ike_spis,
-					       uint8_t protoid, ipsec_spi_t spi);
+struct child_sa *find_v2_child_sa_by_outbound_spi(struct ike_sa *ike,
+						  uint8_t protoid,
+						  ipsec_spi_t outbound_spi);
 
 extern void find_states_and_redirect(const char *conn_name,
 				     ip_address remote_ip,
@@ -828,21 +838,18 @@ extern struct state *find_v1_info_state(const ike_spis_t *ike_spis,
 extern void initialize_new_state(struct state *st,
 				 struct connection *c,
 				 lset_t policy,
-				 int try,
-				 fd_t whack_sock);
+				 int try);
 
 extern void show_traffic_status(const char *name);
-extern void show_states_status(bool brief);
+extern void show_states_status(struct fd *whackfd, bool brief);
 
 void v2_migrate_children(struct ike_sa *from, struct child_sa *to);
 
-void for_each_state(void (*f)(struct state *, void *data), void *data);
+void for_each_state(void (*f)(struct state *, void *data), void *data,
+		    const char *func);
 
 extern void find_my_cpi_gap(cpi_t *latest_cpi, cpi_t *first_busy_cpi);
 extern ipsec_spi_t uniquify_his_cpi(ipsec_spi_t cpi, const struct state *st, int tries);
-
-extern void fmt_list_traffic(struct state *st, char *state_buf,
-			     const size_t state_buf_len);
 
 extern void fmt_state(struct state *st, const monotime_t n,
 		      char *state_buf, const size_t state_buf_len,
@@ -872,10 +879,10 @@ extern bool state_is_busy(const struct state *st);
 extern bool verbose_state_busy(const struct state *st);
 extern bool drop_new_exchanges(void);
 extern bool require_ddos_cookies(void);
-extern void show_globalstate_status(void);
+extern void show_globalstate_status(struct fd *whackfd);
 extern void set_newest_ipsec_sa(const char *m, struct state *const st);
-extern void update_ike_endpoints(struct state *st, const struct msg_digest *md);
-extern bool update_mobike_endpoints(struct state *st, const struct msg_digest *md);
+extern void update_ike_endpoints(struct ike_sa *ike, const struct msg_digest *md);
+extern bool update_mobike_endpoints(struct ike_sa *ike, const struct msg_digest *md);
 extern void v2_expire_unused_ike_sa(struct ike_sa *ike);
 
 bool shared_phase1_connection(const struct connection *c);

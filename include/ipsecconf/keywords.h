@@ -53,7 +53,7 @@ enum keyword_string_config_field {
 	KSF_SECRETSFILE,
 	KSF_PERPEERDIR,
 	KSF_MYVENDORID,
-	KSF_PLUTOSTDERRLOG,
+	KSF_LOGFILE,
 	KSF_PLUTO_DNSSEC_ROOTKEY_FILE,
 	KSF_PLUTO_DNSSEC_ANCHORS,
 	KSF_PROTOSTACK,
@@ -76,9 +76,10 @@ enum keyword_numeric_config_field {
 	KBF_HIDETOS,
 	KBF_UNIQUEIDS,
 	KBF_DO_DNSSEC,
-	KBF_PLUTOSTDERRLOGTIME,
-	KBF_PLUTOSTDERRLOGAPPEND,
-	KBF_PLUTOSTDERRLOGIP,
+	KBF_LOGTIME,
+	KBF_LOGAPPEND,
+	KBF_LOGIP,
+	KBF_AUDIT_LOG,
 	KBF_IKEPORT,
 	KBF_IKEBUF,
 	KBF_IKE_ERRQUEUE,
@@ -110,7 +111,6 @@ enum keyword_numeric_config_field {
 	KBF_NFLOG_ALL,		/* Enable global nflog device */
 	KBF_DDOS_MODE,		/* set DDOS mode */
 	KBF_SECCOMP,		/* set SECCOMP mode */
-
 	KBF_ROOF
 };
 
@@ -130,7 +130,8 @@ enum keyword_string_conn_field {
 	KSCF_NEXTHOP,	/* loose_enum */ /* left/right */
 	KSCF_RSAKEY1,	/* loose_enum */ /* left/right */
 	KSCF_RSAKEY2,	/* loose_enum */ /* left/right */
-		KSCF_last_loose = KSCF_RSAKEY2,
+	KSCF_XFRM_IF_ID,
+		KSCF_last_loose = KSCF_XFRM_IF_ID,
 
 	KSCF_UPDOWN,	/* left/right */
 	KSCF_ID,	/* left/right */
@@ -140,6 +141,7 @@ enum keyword_string_conn_field {
 	KSCF_PROTOPORT,	/* left/right */
 	KSCF_SOURCEIP,	/* left/right */
 	KSCF_VTI_IP,	/* left/right */
+	KSCF_INTERFACE_IP,  /* left/right */
 	KSCF_USERNAME,	/* left/right */
 	KSCF_ADDRESSPOOL,	/* left/right */
 	KSCF_SUBNET,	/* left/right */
@@ -182,6 +184,7 @@ enum keyword_numeric_conn_field {
 	KNCF_NEXTHOP	= KSCF_NEXTHOP,	/* loose_enum */ /* left/right */
 	KNCF_RSAKEY1	= KSCF_RSAKEY1,	/* loose_enum */ /* left/right */
 	KNCF_RSAKEY2	= KSCF_RSAKEY2,	/* loose_enum */ /* left/right */
+	KNCF_XFRM_IF_ID =  KSCF_XFRM_IF_ID,
 
 	KNCF_XAUTHSERVER,	/* left/right */
 	KNCF_XAUTHCLIENT,	/* left/right */
@@ -218,6 +221,7 @@ enum keyword_numeric_conn_field {
 	KNCF_PFS,
 	KNCF_SHA2_TRUNCBUG,
 	KNCF_MSDH_DOWNGRADE,
+	KNCF_SAN_ON_CERT,
 	KNCF_DNS_MATCH_ID,
 	KNCF_SALIFETIME,
 	KNCF_REKEY,
@@ -248,7 +252,6 @@ enum keyword_numeric_conn_field {
 	KNCF_OVERLAPIP,		/* Allow overlapping IPsec policies */
 	KNCF_REMOTEPEERTYPE,	/* Cisco interop: remote peer type */
 	KNCF_NMCONFIGURED,	/* Network Manager support */
-	KNCF_LABELED_IPSEC,
 	KNCF_SAREFTRACK,	/* saref tracking parameter for _updown */
 	KNCF_WARNIGNORE,	/* to ignore obsoleted keywords */
 	KNCF_XAUTHBY,		/* method of xauth user auth - file, pam or alwaysok */

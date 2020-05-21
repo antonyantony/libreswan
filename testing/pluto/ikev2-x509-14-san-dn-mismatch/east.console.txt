@@ -4,7 +4,7 @@ east #
  certutil -D -n west -d sql:/etc/ipsec.d
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -22,7 +22,6 @@ east #
 |    ID type: ID_DER_ASN1_DN (0x9)
 east #
  grep "RSA authentication failed" /tmp/pluto.log
-east #
 east #
  ../bin/check-for-core.sh
 east #

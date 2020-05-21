@@ -35,7 +35,6 @@
 #include <arpa/inet.h>
 #include <resolv.h>
 
-#include <libreswan.h>
 
 #include "sysdep.h"
 #include "constants.h"
@@ -300,14 +299,11 @@ static void dpd_outI(struct state *p1st, struct state *st, bool eroute_care,
 	 */
 	dpd_sched_timeout(p1st, nw, timeout);
 
-	DBG(DBG_DPD, {
-		ipstr_buf b;
-		DBG_log("DPD: sending R_U_THERE %u to %s:%d (state #%lu)",
-			 p1st->st_dpd_seqno,
-			 ipstr(&p1st->st_remoteaddr, &b),
-			 p1st->st_remoteport,
-			 p1st->st_serialno);
-	});
+	endpoint_buf b;
+	dbg("DPD: sending R_U_THERE %u to %s (state #%lu)",
+	    p1st->st_dpd_seqno,
+	    str_endpoint(&p1st->st_remote_endpoint, &b),
+	    p1st->st_serialno);
 
 	if (send_isakmp_notification(p1st, R_U_THERE,
 				     &seqno, sizeof(seqno)) != STF_IGNORE) {
@@ -360,7 +356,7 @@ void dpd_event(struct state *st)
 
 	set_cur_state(st);
 
-	if (IS_PHASE1(st->st_state) || IS_PHASE15(st->st_state))
+	if (IS_PHASE1(st->st_state->kind) || IS_PHASE15(st->st_state->kind))
 		p1_dpd_outI1(st);
 	else
 		p2_dpd_outI1(st);

@@ -27,15 +27,17 @@
 #include "ike_alg_hash.h"
 #include "ike_alg_prf.h"
 #include "ike_alg_integ.h"
-#include "ike_alg_hash_nss_ops.h"
-#include "ike_alg_prf_nss_ops.h"
+#include "ike_alg_hash_ops.h"
+#include "ike_alg_prf_mac_ops.h"
+#include "ike_alg_prf_ikev1_ops.h"
+#include "ike_alg_prf_ikev2_ops.h"
 #include "sadb.h"
 
 const struct hash_desc ike_alg_hash_sha1 = {
 	.common = {
 		.name = "sha",
 		.fqn = "SHA1",
-		.names = { "sha", "sha1", },
+		.names = "sha,sha1",
 		.algo_type = IKE_ALG_HASH,
 		.id = {
 			[IKEv1_OAKLEY_ID] = OAKLEY_SHA1,
@@ -57,7 +59,7 @@ const struct prf_desc ike_alg_prf_sha1 = {
 	.common = {
 		.name = "sha",
 		.fqn = "HMAC_SHA1",
-		.names = { "sha", "sha1", "hmac_sha1", },
+		.names = "sha,sha1,hmac_sha1",
 		.algo_type = IKE_ALG_PRF,
 		.id = {
 			[IKEv1_OAKLEY_ID] = OAKLEY_SHA1,
@@ -72,7 +74,14 @@ const struct prf_desc ike_alg_prf_sha1 = {
 	.prf_key_size = SHA1_DIGEST_SIZE,
 	.prf_output_size = SHA1_DIGEST_SIZE,
 	.hasher = &ike_alg_hash_sha1,
-	.prf_ops = &ike_alg_prf_nss_ops,
+	.prf_mac_ops = &ike_alg_prf_mac_nss_ops,
+#ifdef USE_NSS_PRF
+	.prf_ikev1_ops = &ike_alg_prf_ikev1_nss_ops,
+	.prf_ikev2_ops = &ike_alg_prf_ikev2_nss_ops,
+#else
+	.prf_ikev1_ops = &ike_alg_prf_ikev1_mac_ops,
+	.prf_ikev2_ops = &ike_alg_prf_ikev2_mac_ops,
+#endif
 	.prf_ike_audit_name = "sha1",
 };
 
@@ -80,7 +89,7 @@ const struct integ_desc ike_alg_integ_sha1 = {
 	.common = {
 		.name = "sha",
 		.fqn = "HMAC_SHA1_96",
-		.names = { "sha", "sha1", "sha1_96", "hmac_sha1", "hmac_sha1_96", },
+		.names = "sha,sha1,sha1_96,hmac_sha1,hmac_sha1_96",
 		.algo_type = IKE_ALG_INTEG,
 		.id = {
 			[IKEv1_OAKLEY_ID] = OAKLEY_SHA1,

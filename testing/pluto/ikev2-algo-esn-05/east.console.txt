@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -19,7 +19,6 @@ east #
  ip xfrm state |grep replay-window
 	replay-window 0 flag af-unspec
 	replay-window 0 flag af-unspec
-east #
 east #
  ../bin/check-for-core.sh
 east #

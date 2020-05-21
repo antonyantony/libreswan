@@ -4,7 +4,10 @@
 # That way, the sanitizers and the reference output don't have to deal
 # with moving targets.
 
-/bin/systemctl start strongswan.service
+# avoid systemd so this works in namespaces
+#/bin/systemctl start strongswan.service
+mkdir -p /run/strongswan
+/usr/sbin/strongswan start > /dev/null 2>&1
 
 seconds=0
 while test ${seconds} -lt 10 ; do

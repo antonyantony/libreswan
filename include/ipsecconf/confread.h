@@ -30,6 +30,7 @@
 #include "err.h"
 #include "ip_range.h"
 #include "ip_subnet.h"
+#include "lswcdefs.h"
 
 #ifndef _LIBRESWAN_H
 #include <libreswan.h>
@@ -61,6 +62,7 @@ struct starter_end {
 	ip_address addr, nexthop, sourceip;
 	bool has_client;
 	ip_subnet subnet, vti_ip;
+	ip_subnet  ifaceip;
 	char *iface;
 	char *id;
 	enum keyword_authby authby;
@@ -135,6 +137,7 @@ struct starter_conn {
 	char *accept_redirect_to;
 	bool vti_routing;
 	bool vti_shared;
+	uint32_t xfrm_if_id;
 };
 
 struct starter_config {

@@ -15,11 +15,10 @@ west #
  # confirm clear text does not get through
 west #
  ../../pluto/bin/ping-once.sh --down -I 192.0.1.254 192.0.2.254
-[ 00.00] IN=eth1 OUT= MAC=12:00:00:64:64:45:12:00:00:64:64:23:08:00 SRC=192.0.2.254 DST=192.0.1.254 LEN=XXXX TOS=0x00 PREC=0x00 TTL=64 ID=XXXXX PROTO=ICMP TYPE=0 CODE=0 ID=XXXX SEQ=1 
 down
 west #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
@@ -32,13 +31,12 @@ west #
  ../../pluto/bin/libreswan-up-down.sh westnet-eastnet-ikev2 -I 192.0.1.254 192.0.2.254
 002 "westnet-eastnet-ikev2": terminating SAs using this connection
 002 added connection description "westnet-eastnet-ikev2"
-002 "westnet-eastnet-ikev2" #1: initiating v2 parent SA
-1v2 "westnet-eastnet-ikev2" #1: initiate
+1v2 "westnet-eastnet-ikev2" #1: initiating IKEv2 IKE SA
 1v2 "westnet-eastnet-ikev2" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
 1v2 "westnet-eastnet-ikev2" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
 002 "westnet-eastnet-ikev2" #2: certificate verified OK: E=user-east@testing.libreswan.org,CN=east.testing.libreswan.org,OU=Test Department,O=Libreswan,L=Toronto,ST=Ontario,C=CA
 002 "westnet-eastnet-ikev2" #2: IKEv2 mode peer ID is ID_DER_ASN1_DN: 'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=east.testing.libreswan.org, E=user-east@testing.libreswan.org'
-003 "westnet-eastnet-ikev2" #2: Authenticated using RSA
+003 "westnet-eastnet-ikev2" #2: Authenticated using RSA with IKEv2_AUTH_HASH_SHA2_512
 002 "westnet-eastnet-ikev2" #2: negotiated connection [192.0.1.0-192.0.1.255:0-65535 0] -> [192.0.2.0-192.0.2.255:0-65535 0]
 004 "westnet-eastnet-ikev2" #2: STATE_V2_IPSEC_I: IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256-NONE NATOA=none NATD=none DPD=passive}
 destination -I 192.0.1.254 192.0.2.254 is alive
@@ -51,11 +49,9 @@ west #
  echo done
 done
 west #
- grep "retransmits:" /tmp/pluto.log | sed -e 's/current time .*/current time .../'
-| #1 STATE_PARENT_I1: retransmits: first event in 15 seconds; timeout in 60 seconds; limit of 12 retransmits; current time ...
-| #1 STATE_PARENT_I1: retransmits: cleared
-| #2 STATE_PARENT_I2: retransmits: first event in 15 seconds; timeout in 60 seconds; limit of 12 retransmits; current time ...
-| #2 STATE_PARENT_I2: retransmits: cleared
+ # On east this shows the duplicates on west there is nothing.
+west #
+ grep "received duplicate [^ ]* message request .* fragment" /tmp/pluto.log
 west #
  ../../pluto/bin/ipsec-look.sh
 west NOW
@@ -67,8 +63,8 @@ NEW_IPSEC_CONN mangle TABLES
 ROUTING TABLES
 default via 192.1.2.254 dev eth1
 192.0.1.0/24 dev eth0 proto kernel scope link src 192.0.1.254
+192.0.2.0/24 via 192.1.2.23 dev eth1
 192.1.2.0/24 dev eth1 proto kernel scope link src 192.1.2.45
-192.9.4.0/24 dev eth2 proto kernel scope link src 192.9.4.45
 NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
@@ -80,7 +76,6 @@ nic                                                          P,,
 north                                                        P,,  
 road                                                         P,,  
 west                                                         u,u,u
-west #
 west #
  ../bin/check-for-core.sh
 west #

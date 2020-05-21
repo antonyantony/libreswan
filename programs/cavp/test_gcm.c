@@ -20,7 +20,7 @@
 #include "lswalloc.h"
 #include "ike_alg.h"
 #include "ike_alg_encrypt.h"
-#include "ike_alg_encrypt_nss_gcm_ops.h"
+#include "ike_alg_encrypt_ops.h"
 #include "crypt_symkey.h"
 
 #include "cavp.h"
@@ -186,7 +186,7 @@ static void gcm_run_test(void)
 	}
 	PK11SymKey *gcm_key = encrypt_key_from_symkey_bytes("GCM key", gcm_alg,
 							    0, sizeof_symkey(key),
-							    key);
+							    key, HERE);
 
 	chunk_t text_and_tag = clone_chunk_chunk(ct, tag, "text-and-tag");
 

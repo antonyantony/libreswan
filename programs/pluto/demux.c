@@ -42,7 +42,6 @@
 #  include <sys/uio.h>          /* struct iovec */
 #endif
 
-#include <libreswan.h>
 
 #include "sysdep.h"
 #include "constants.h"
@@ -64,22 +63,12 @@
 #include "ipsec_doi.h"  /* needs demux.h and state.h */
 #include "timer.h"
 #include "udpfromto.h"
-
+#include "ip_sockaddr.h"
 #include "ip_address.h"
 #include "ip_endpoint.h"
-#include "af_info.h"
+#include "ip_info.h"
 #include "pluto_stats.h"
 #include "ikev2_send.h"
-
-/* This file does basic header checking and demux of
- * incoming packets.
- */
-
-void init_demux(void)
-{
-	init_ikev1();
-	init_ikev2();
-}
 
 /*
  * read the message.
@@ -90,32 +79,19 @@ void init_demux(void)
 
 static struct msg_digest *read_packet(const struct iface_port *ifp)
 {
-	realtime_t md_inception = realnow();
-
 	int packet_len;
 	/* ??? this buffer seems *way* too big */
 	uint8_t bigbuffer[MAX_INPUT_UDP_SIZE];
 
 	uint8_t *_buffer = bigbuffer;
-	union {
-		struct sockaddr sa;
-		struct sockaddr_in sa_in4;
-		struct sockaddr_in6 sa_in6;
-	} from
-#if defined(HAVE_UDPFROMTO)
-	, to
-#endif
-	;
+	ip_sockaddr from;
+	zero(&from);
 	socklen_t from_len = sizeof(from);
 #if defined(HAVE_UDPFROMTO)
+	ip_sockaddr to;
+	zero(&to);
 	socklen_t to_len   = sizeof(to);
 #endif
-	err_t from_ugh = NULL;
-	static const char undisclosed[] = "unknown source";
-
-	ip_address sender;
-	happy(anyaddr(addrtypeof(&ifp->ip_addr), &sender));
-	zero(&from.sa);
 
 #if defined(HAVE_UDPFROMTO)
 	packet_len = recvfromto(ifp->fd, bigbuffer,
@@ -127,78 +103,56 @@ static struct msg_digest *read_packet(const struct iface_port *ifp)
 			      sizeof(bigbuffer), /*flags*/ 0,
 			      &from.sa, &from_len);
 #endif
+	int packet_errno = errno; /* save!!! */
 
 	/* we do not do anything with *to* addresses yet... we will */
 
-	/* First: digest the from address.
-	 * We presume that nothing here disturbs errno.
+	/*
+	 * Try to decode the from address.
+	 *
+	 * If that fails report some sense of error and then always
+	 * give up.
 	 */
-	if (packet_len == -1 &&
-	    from_len == sizeof(from) &&
-	    all_zero((const void *)&from.sa, sizeof(from))) {
-		/* "from" is untouched -- not set by recvfrom */
-		from_ugh = undisclosed;
-	} else if (from_len   <
-		   (int) (offsetof(struct sockaddr,
-				   sa_family) + sizeof(from.sa.sa_family))) {
-		from_ugh = "truncated";
-	} else {
-		const struct af_info *afi = aftoinfo(from.sa.sa_family);
-
-		if (afi == NULL) {
-			from_ugh = "unexpected Address Family";
-		} else if (from_len != afi->sa_sz) {
-			from_ugh = "wrong length";
+	ip_endpoint sender;
+	const char *from_ugh = sockaddr_to_endpoint(&from, from_len, &sender);
+	if (from_ugh != NULL) {
+		if (packet_len >= 0) {
+			/* technically it worked, but returned value was useless */
+			plog_global("recvfrom on %s returned malformed source sockaddr: %s",
+				    ifp->ip_dev->id_rname, from_ugh);
+		} else if (from_len == sizeof(from) &&
+			   all_zero((const void *)&from, sizeof(from)) &&
+			   packet_errno == ECONNREFUSED) {
+			/*
+			 * Tone down scary message for vague event: We
+			 * get "connection refused" in response to
+			 * some datagram we sent, but we cannot tell
+			 * which one.
+			 */
+			plog_global("recvfrom on %s failed; some IKE message we sent has been rejected with ECONNREFUSED (kernel supplied no details)",
+				    ifp->ip_dev->id_rname);
 		} else {
-			switch (from.sa.sa_family) {
-			case AF_INET:
-				from_ugh = initaddr(
-					(void *) &from.sa_in4.sin_addr,
-					sizeof(from.sa_in4.sin_addr),
-					AF_INET, &sender);
-				setportof(from.sa_in4.sin_port, &sender);
-				break;
-			case AF_INET6:
-				from_ugh = initaddr(
-					(void *) &from.sa_in6.sin6_addr,
-					sizeof(from.sa_in6.
-					       sin6_addr),
-					AF_INET6, &sender);
-				setportof(from.sa_in6.sin6_port, &sender);
-				break;
-			}
+			/* if from==0, this prints "unspecified", not "undisclosed", oops */
+			plog_global("recvfrom on %s failed; Pluto cannot decode source sockaddr in rejection: %s "PRI_ERRNO,
+				    ifp->ip_dev->id_rname, from_ugh,
+				    pri_errno(packet_errno));
 		}
+		return NULL;
 	}
 
-	/* now we report any actual I/O error */
-	if (packet_len == -1) {
-		if (from_ugh == undisclosed &&
-		    errno == ECONNREFUSED) {
-			/* Tone down scary message for vague event:
-			 * We get "connection refused" in response to some
-			 * datagram we sent, but we cannot tell which one.
-			 */
-			libreswan_log(
-				"some IKE message we sent has been rejected with ECONNREFUSED (kernel supplied no details)");
-		} else if (from_ugh != NULL) {
-			LSWLOG_ERRNO(errno, buf) {
-				lswlogf(buf, "recvfrom on %s failed; Pluto cannot decode source sockaddr in rejection: %s",
-					ifp->ip_dev->id_rname, from_ugh);
-			}
-		} else {
-			LSWLOG_ERRNO(errno, buf) {
-				lswlogf(buf, "recvfrom on %s from ",
-					ifp->ip_dev->id_rname);
-				fmt_endpoint(buf, &sender); /* sensitive? */
-				lswlogs(buf, " failed");
-			}
-		}
+	/*
+	 * Managed to decode the from address; fudge up an MD so that
+	 * it be used as log context prefix.
+	 */
 
-		return NULL;
-	} else if (from_ugh != NULL) {
-		libreswan_log(
-			"recvfrom on %s returned malformed source sockaddr: %s",
-			ifp->ip_dev->id_rname, from_ugh);
+	struct msg_digest stack_md = {
+		.iface = ifp,
+		.sender = sender,
+	};
+
+	if (packet_len < 0) {
+		plog_md(&stack_md, "recvfrom on %s failed "PRI_ERRNO,
+			ifp->ip_dev->id_rname, pri_errno(packet_errno));
 		return NULL;
 	}
 
@@ -206,21 +160,13 @@ static struct msg_digest *read_packet(const struct iface_port *ifp)
 		uint32_t non_esp;
 
 		if (packet_len < (int)sizeof(uint32_t)) {
-			LSWLOG(buf) {
-				lswlogs(buf, "recvfrom ");
-				fmt_endpoint(buf, &sender); /* sensitive? */
-				lswlogf(buf, " too small packet (%d)",
-					packet_len);
-			}
+			plog_md(&stack_md, "too small packet (%d)",
+				packet_len);
 			return NULL;
 		}
 		memcpy(&non_esp, _buffer, sizeof(uint32_t));
 		if (non_esp != 0) {
-			LSWLOG(buf) {
-				lswlogs(buf, "recvfrom ");
-				fmt_endpoint(buf, &sender); /* sensitive? */
-				lswlogs(buf, " has no Non-ESP marker");
-			}
+			plog_md(&stack_md, "has no Non-ESP marker");
 			return NULL;
 		}
 		_buffer += sizeof(uint32_t);
@@ -238,10 +184,7 @@ static struct msg_digest *read_packet(const struct iface_port *ifp)
 		    packet_len >= NON_ESP_MARKER_SIZE &&
 		    memeq(_buffer, non_ESP_marker,
 			   NON_ESP_MARKER_SIZE)) {
-			LSWLOG(buf) {
-				lswlogs(buf, "Mangled packet with potential spurious non-esp marker ignored. Sender: ");
-				fmt_endpoint(buf, &sender); /* sensitiv? */
-			}
+			plog_md(&stack_md, "mangled with potential spurious non-esp marker");
 			return NULL;
 		}
 	}
@@ -253,37 +196,35 @@ static struct msg_digest *read_packet(const struct iface_port *ifp)
 		 * can reach this point. Complain and discard them.
 		 * Possibly too if the NAT mapping vanished on the initiator NAT gw ?
 		 */
-		LSWDBGP(DBG_NATT, buf) {
-			lswlogs(buf, "NAT-T keep-alive (bogus ?) should not reach this point. Ignored. Sender: ");
-			fmt_endpoint(buf, &sender); /* sensitive? */
-		};
+		endpoint_buf eb;
+		dbg("NAT-T keep-alive (bogus ?) should not reach this point. Ignored. Sender: %s",
+		    str_endpoint(&sender, &eb)); /* sensitive? */
 		return NULL;
 	}
 
 	/*
-	 * Clone actual message contents and set up md->packet_pbs to
-	 * describe it.
+	 * Create the real message digest; and set up md->packet_pbs
+	 * to describe it.
 	 */
 	struct msg_digest *md = alloc_md("msg_digest in read_packet");
-	md->iface = ifp;
-	md->sender = sender;
-	md->md_inception = md_inception;
+	md->sender = stack_md.sender;
+	md->iface = stack_md.iface;
+	init_pbs(&md->packet_pbs,
+		 clone_bytes(_buffer, packet_len,
+			     "message buffer in read_packet()"),
+		 packet_len, "packet");
 
-	init_pbs(&md->packet_pbs
-		 , clone_bytes(_buffer, packet_len,
-			       "message buffer in read_packet()")
-		 , packet_len, "packet");
+	endpoint_buf eb;
+	endpoint_buf b2;
+	dbg("*received %d bytes from %s on %s (%s)",
+	    (int) pbs_room(&md->packet_pbs),
+	    str_endpoint(&sender, &eb),
+	    ifp->ip_dev->id_rname,
+	    str_endpoint(&ifp->local_endpoint, &b2));
 
-	LSWDBGP(DBG_RAW | DBG_CRYPT | DBG_PARSING | DBG_CONTROL, buf) {
-		lswlogf(buf, "*received %d bytes from ",
-			(int) pbs_room(&md->packet_pbs));
-		fmt_endpoint(buf, &sender);
-		lswlogf(buf, " on %s (port=%d)",
-			ifp->ip_dev->id_rname, ifp->port);
-	};
-
-	DBG(DBG_RAW,
-	    DBG_dump("", md->packet_pbs.start, pbs_room(&md->packet_pbs)));
+	if (DBGP(DBG_RAW)) {
+		DBG_dump(NULL, md->packet_pbs.start, pbs_room(&md->packet_pbs));
+	}
 
 	pstats_ike_in_bytes += pbs_room(&md->packet_pbs);
 
@@ -313,7 +254,7 @@ void process_packet(struct msg_digest **mdp)
 		 * of any content - not even to look for major version
 		 * number!  So we'll just drop it.
 		 */
-		libreswan_log("Received packet with mangled IKE header - dropped");
+		plog_md(md, "received packet with mangled IKE header - dropped");
 		return;
 	}
 
@@ -321,14 +262,13 @@ void process_packet(struct msg_digest **mdp)
 		/* Some (old?) versions of the Cisco VPN client send an additional
 		 * 16 bytes of zero bytes - Complain but accept it
 		 */
-		DBG(DBG_CONTROL, {
-			DBG_log(
-			"size (%u) in received packet is larger than the size specified in ISAKMP HDR (%u) - ignoring extraneous bytes",
-			(unsigned) pbs_room(&md->packet_pbs),
-			md->hdr.isa_length);
+		if (DBGP(DBG_CONTROL)) {
+			DBG_log("size (%u) in received packet is larger than the size specified in ISAKMP HDR (%u) - ignoring extraneous bytes",
+				(unsigned) pbs_room(&md->packet_pbs),
+				md->hdr.isa_length);
 			DBG_dump("extraneous bytes:", md->message_pbs.roof,
 				md->packet_pbs.roof - md->message_pbs.roof);
-		});
+		}
 	}
 
 	unsigned vmaj = md->hdr.isa_version >> ISA_MAJ_SHIFT;
@@ -340,7 +280,7 @@ void process_packet(struct msg_digest **mdp)
 		 * IKEv2 doesn't say what to do with low versions,
 		 * just drop them.
 		 */
-		libreswan_log("ignoring packet with IKE major version '%d'", vmaj);
+		plog_md(md, "ignoring packet with IKE major version '%d'", vmaj);
 		return;
 
 	case ISAKMP_MAJOR_VERSION: /* IKEv1 */
@@ -359,15 +299,14 @@ void process_packet(struct msg_digest **mdp)
 			 * own, given the major version numbers are
 			 * identical.
 			 */
-			libreswan_log("ignoring packet with IKEv1 minor version number %d greater than %d", vmin, ISAKMP_MINOR_VERSION);
+			plog_md(md, "ignoring packet with IKEv1 minor version number %d greater than %d", vmin, ISAKMP_MINOR_VERSION);
 			send_notification_from_md(md, INVALID_MINOR_VERSION);
 			return;
 		}
-		DBG(DBG_CONTROL,
-		    DBG_log(" processing version=%u.%u packet with exchange type=%s (%d)",
-			    vmaj, vmin,
-			    enum_name(&exchange_names_ikev1orv2, md->hdr.isa_xchg),
-			    md->hdr.isa_xchg));
+		dbg(" processing version=%u.%u packet with exchange type=%s (%d)",
+		    vmaj, vmin,
+		    enum_name(&exchange_names_ikev1orv2, md->hdr.isa_xchg),
+		    md->hdr.isa_xchg);
 		process_v1_packet(mdp);
 		/* our caller will release_any_md(mdp) */
 		break;
@@ -377,19 +316,18 @@ void process_packet(struct msg_digest **mdp)
 			/* Unlike IKEv1, for IKEv2 we are supposed to try to
 			 * continue on unknown minors
 			 */
-			libreswan_log("Ignoring unknown IKEv2 minor version number %d", vmin);
+			plog_md(md, "Ignoring unknown IKEv2 minor version number %d", vmin);
 		}
-		DBG(DBG_CONTROL,
-		    DBG_log(" processing version=%u.%u packet with exchange type=%s (%d)",
-			    vmaj, vmin,
-			    enum_name(&exchange_names_ikev1orv2, md->hdr.isa_xchg),
-			    md->hdr.isa_xchg));
+		dbg(" processing version=%u.%u packet with exchange type=%s (%d)",
+		    vmaj, vmin,
+		    enum_name(&exchange_names_ikev1orv2, md->hdr.isa_xchg),
+		    md->hdr.isa_xchg);
 		ikev2_process_packet(mdp);
 		/* our caller will release_any_md(mdp) */
 		break;
 
 	default:
-		libreswan_log("message contains unsupported IKE major version '%d'", vmaj);
+		plog_md(md, "message contains unsupported IKE major version '%d'", vmaj);
 		/*
 		 * According to 1.5.  Informational Messages outside
 		 * of an IKE SA, [...] the message is always sent
@@ -462,34 +400,41 @@ static void process_md(struct msg_digest **mdp)
 
 static bool impair_incoming(struct msg_digest **mdp);
 
-static void comm_handle(const struct iface_port *ifp)
+void comm_handle_cb(evutil_socket_t unused_fd UNUSED,
+		    const short unused_event UNUSED,
+		    void *arg)
 {
-	/* Even though select(2) says that there is a message,
-	 * it might only be a MSG_ERRQUEUE message.  At least
-	 * sometimes that leads to a hanging recvfrom.  To avoid
-	 * what appears to be a kernel bug, check_msg_errqueue
-	 * uses poll(2) and tells us if there is anything for us
-	 * to read.
+	const struct iface_port *ifp = arg;
+	/*
+	 * Even though select(2) says that there is a message, it
+	 * might only be a MSG_ERRQUEUE message.  At least sometimes
+	 * that leads to a hanging recvfrom.  To avoid what appears to
+	 * be a kernel bug, check_msg_errqueue uses poll(2) and tells
+	 * us if there is anything for us to read.
 	 *
 	 * This is early enough that teardown isn't required:
 	 * just return on failure.
 	 */
-	if (!check_incoming_msg_errqueue(ifp, "read_packet"))
+	threadtime_t errqueue_start = threadtime_start();
+	bool errqueue_ok = check_incoming_msg_errqueue(ifp, "read_packet");
+	threadtime_stop(&errqueue_start, SOS_NOBODY,
+			"%s() calling check_incoming_msg_errqueue()", __func__);
+	if (!errqueue_ok) {
 		return; /* no normal message to read */
+	}
 
+	threadtime_t md_start = threadtime_start();
 	struct msg_digest *md = read_packet(ifp);
 	if (md != NULL) {
+		md->md_inception = md_start;
 		if (!impair_incoming(&md)) {
 			process_md(&md);
 		}
 		pexpect(md == NULL);
 	}
+	threadtime_stop(&md_start, SOS_NOBODY,
+			"%s() reading and processing packet", __func__);
 	pexpect_reset_globals();
-}
-
-void comm_handle_cb(evutil_socket_t fd UNUSED, const short event UNUSED, void *arg)
-{
-	comm_handle((const struct iface_port *) arg);
 }
 
 /*
@@ -508,7 +453,7 @@ static void process_md_clone(struct msg_digest *orig, const char *fmt, ...)
 {
 	/* not whack FD yet is expected to be reset! */
 	pexpect_reset_globals();
-	struct msg_digest *md = clone_md(orig, fmt /* good enough */);
+	struct msg_digest *md = clone_raw_md(orig, fmt /* good enough */);
 
 	LSWLOG(buf) {
 		lswlogs(buf, "IMPAIR: start processing ");
@@ -518,8 +463,9 @@ static void process_md_clone(struct msg_digest *orig, const char *fmt, ...)
 		va_end(ap);
 		lswlogf(buf, " (%d bytes)", (int)pbs_room(&md->packet_pbs));
 	}
-	DBG(DBG_RAW,
-	    DBG_dump("", md->packet_pbs.start, pbs_room(&md->packet_pbs)));
+	if (DBGP(DBG_RAW)) {
+		DBG_dump(NULL, md->packet_pbs.start, pbs_room(&md->packet_pbs));
+	}
 
 	process_md(&md);
 
@@ -543,17 +489,17 @@ struct replay_entry {
 	unsigned long nr;
 };
 
-static size_t log_replay_entry(struct lswlog *buf, void *data)
+static void jam_replay_entry(struct lswlog *buf, const void *data)
 {
-	struct replay_entry *r = (struct replay_entry*)data;
-	return lswlogf(buf, "replay packet %lu", r == NULL ? 0L : r->nr);
+	const struct replay_entry *r = data;
+	jam(buf, "replay packet %lu", r == NULL ? 0L : r->nr);
 }
 
 static struct list_head replay_packets;
 
 static const struct list_info replay_info = {
 	.name = "replay list",
-	.log = log_replay_entry,
+	.jam = jam_replay_entry,
 };
 
 static void save_any_md_for_replay(struct msg_digest **mdp)
@@ -561,7 +507,7 @@ static void save_any_md_for_replay(struct msg_digest **mdp)
 	if (mdp != NULL && *mdp != NULL) {
 		init_list(&replay_info, &replay_packets);
 		struct replay_entry *e = alloc_thing(struct replay_entry, "replay");
-		e->md = clone_md(*mdp, "copy of real message");
+		e->md = clone_raw_md(*mdp, "copy of real message");
 		e->nr = ++replay_count; /* yes; pre-increment */
 		e->entry = list_entry(&replay_info, e); /* back-link */
 		insert_list_entry(&replay_packets, &e->entry);
@@ -601,12 +547,10 @@ static bool impair_incoming(struct msg_digest **mdp)
 	return *mdp == NULL;
 }
 
-static pluto_event_now_cb handle_md_event; /* type assertion */
-static void handle_md_event(struct state *st, struct msg_digest **mdp,
-			    void *context)
+static callback_cb handle_md_event; /* type assertion */
+static void handle_md_event(struct state *st, void *context)
 {
-	passert(st == NULL);
-	passert(mdp == NULL); /* suspended md from state */
+	pexpect(st == NULL);
 	struct msg_digest *md = context;
 	process_md(&md);
 	pexpect(md == NULL);
@@ -615,15 +559,12 @@ static void handle_md_event(struct state *st, struct msg_digest **mdp,
 
 void schedule_md_event(const char *name, struct msg_digest *md)
 {
-	pluto_event_now(name, SOS_NOBODY, handle_md_event, md);
+	schedule_callback(name, SOS_NOBODY, handle_md_event, md);
 }
 
-enum ike_version msg_ike_version(const struct msg_digest *md)
+enum ike_version hdr_ike_version(const struct isakmp_hdr *hdr)
 {
-	if (md == NULL) {
-		return 0; /* reserved */
-	}
-	unsigned vmaj = md->hdr.isa_version >> ISA_MAJ_SHIFT;
+	unsigned vmaj = hdr->isa_version >> ISA_MAJ_SHIFT;
 	switch (vmaj) {
 	case ISAKMP_MAJOR_VERSION: return IKEv1;
 	case IKEv2_MAJOR_VERSION: return IKEv2;
@@ -653,13 +594,15 @@ enum ike_version msg_ike_version(const struct msg_digest *md)
  *       default: bad_case(role);
  *       }
  *
+ * Separate from this is IKE SA role ORIGINAL_INITIATOR or
+ * ORIGINAL_RESPONDER RFC 7296 2.2.
  */
 enum message_role v2_msg_role(const struct msg_digest *md)
 {
 	if (md == NULL) {
 		return NO_MESSAGE;
 	}
-	if (!pexpect(msg_ike_version(md) == IKEv2)) {
+	if (!pexpect(hdr_ike_version(&md->hdr) == IKEv2)) {
 		return NO_MESSAGE;
 	}
 	if (md->fake_dne) {
@@ -677,29 +620,62 @@ enum message_role v2_msg_role(const struct msg_digest *md)
  * Auxiliary function for modecfg_inR1()
  * Result is allocated on heap so caller must ensure it is freed.
  */
-char *cisco_stringify(pb_stream *pbs, const char *attr_name)
+
+char *cisco_stringify(pb_stream *input_pbs, const char *attr_name)
 {
 	char strbuf[500]; /* Cisco maximum unknown - arbitrary choice */
-	size_t len = pbs_left(pbs);
-
-	if (len > sizeof(strbuf) - 1)
-		len = sizeof(strbuf) - 1;	/* silently truncate */
-
-	memcpy(strbuf, pbs->cur, len);
-	strbuf[len] = '\0';
+	jambuf_t buf = ARRAY_AS_JAMBUF(strbuf); /* let jambuf deal with overflow */
+	shunk_t str = pbs_in_left_as_shunk(input_pbs);
 
 	/*
-	 * ' is poison to the way this string will be used
-	 * in system() and hence shell.  Remove any.
+	 * detox string
 	 */
-	for (char *s = strbuf;; ) {
-		s = strchr(s, '\'');
-		if (s == NULL)
+	for (const char *p = (const void *)str.ptr, *end = p + str.len;
+	     p < end && *p != '\0'; p++) {
+		char c = *p;
+		switch (c) {
+		case '\'':
+			/*
+			 * preserve cisco_stringify() behaviour:
+			 *
+			 * ' is poison to the way this string will be
+			 * used in system() and hence shell.  Remove
+			 * any.
+			 */
+			jam(&buf, "?");
 			break;
-		*s = '?';
+		case '\n':
+		case '\r':
+			/*
+			 * preserve sanitize_string() behaviour:
+			 *
+			 * exception is that all veritical space just
+			 * becomes white space
+			 */
+			jam(&buf, " ");
+			break;
+		default:
+			/*
+			 * preserve sanitize_string() behavour:
+			 *
+			 * XXX: isprint() is wrong as it is affected
+			 * by locale - need portable is printable
+			 * ascii; is there something hiding in the
+			 * x509 sources?
+			 */
+			if (c != '\\' && isprint(c)) {
+				jam_char(&buf, c);
+			} else {
+				jam(&buf, "\\%03o", c);
+			}
+			break;
+		}
 	}
-	sanitize_string(strbuf, sizeof(strbuf));
-	loglog(RC_INFORMATIONAL, "Received %s: %s", attr_name, strbuf);
+	if (!jambuf_ok(&buf)) {
+		loglog(RC_INFORMATIONAL, "Received overlong %s: %s (truncated)", attr_name, strbuf);
+	} else {
+		loglog(RC_INFORMATIONAL, "Received %s: %s", attr_name, strbuf);
+	}
 	return clone_str(strbuf, attr_name);
 }
 
@@ -708,7 +684,7 @@ char *cisco_stringify(pb_stream *pbs, const char *attr_name)
  */
 void lswlog_msg_digest(struct lswlog *buf, const struct msg_digest *md)
 {
-	enum ike_version ike_version = msg_ike_version(md);
+	enum ike_version ike_version = hdr_ike_version(&md->hdr);
 	lswlog_enum_enum_short(buf, &exchange_type_names, ike_version,
 			       md->hdr.isa_xchg);
 	if (ike_version == IKEv2) {

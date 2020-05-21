@@ -32,29 +32,107 @@ enum message_role;
  * An additional bonus is that the old v2_INVALID_MSGID ((uint32_t)-1)
  * will not match -1 - cross checking code should only compare valid
  * MSGIDs.
+ *
+ * While .PENDING - the list of states waiting for an open window - is
+ * probably only used by the initiator code, store it in the window so
+ * that struct contains everything.
  */
 
-struct v2_window {
+typedef stf_status v2_msgid_pending_cb(struct ike_sa *ike,
+				       struct state *st,
+				       struct msg_digest **mdp);
+
+struct v2_msgid_pending {
+	so_serial_t st_serialno;
+	v2_msgid_pending_cb *cb;
+	struct v2_msgid_pending *next;
+};
+
+struct v2_msgid_window {
 	intmax_t sent;
 	intmax_t recv;
+	struct v2_msgid_pending *pending;
 };
 
-struct v2_msgids {
-	/* IKE and CHILD */
-	intmax_t current_request;
-	/* IKE only */
-	struct v2_window initiator;
-	struct v2_window responder;
+struct v2_msgid_windows {
+	struct v2_msgid_window initiator;
+	struct v2_msgid_window responder;
 };
 
-void v2_msgid_init(struct ike_sa *ike);
+/*
+ * The Message ID for the state's in-progress exchanges.  If no
+ * exchange is in progress then it's value is -1.
+ *
+ * The INITIATOR Message ID is valid from the time the request is sent
+ * (earlier?) through to when the response is received.  Lookups then
+ * use this to route the response to the state waiting for it.
+ *
+ * The RESPONDER Message ID is valid for the period that the state is
+ * processing the request.
+ *
+ * XXX: should the also be {start,cancel}_initiator()?
+ */
+
+struct v2_msgid_wip {
+	intmax_t initiator;
+	intmax_t responder;
+};
+
+void v2_msgid_init_ike(struct ike_sa *ike);
+void v2_msgid_init_child(struct ike_sa *ike, struct child_sa *child);
+void v2_msgid_free(struct state *st);
+
+void v2_msgid_start_responder(struct ike_sa *ike, struct state *responder,
+			      const struct msg_digest *md);
+
+void v2_msgid_switch_responder(struct ike_sa *ike, struct child_sa *child,
+			       const struct msg_digest *md);
+void v2_msgid_switch_initiator(struct ike_sa *ike, struct child_sa *child,
+			       const struct msg_digest *md);
+
+void v2_msgid_cancel_responder(struct ike_sa *ike, struct state *responder,
+			       const struct msg_digest *md);
+
+/*
+ * Processing has finished - recv's accepted or sent is on its way -
+ * update window.{recv,sent} and wip.{initiator,responder}.
+ *
+ * XXX: Should these interfaces be revamped so that they are more like
+ * the above?
+ *
+ * In complete_v2_state_transition(), update_recv() and update_send
+ * are first called so that all windows are up-to-date, and then
+ * schedule_next_initiator() is called to schedule any waiting
+ * initiators.  It could probably be simpler, but probably only after
+ * record 'n' send has been eliminated.
+ */
 void v2_msgid_update_recv(struct ike_sa *ike, struct state *receiver,
 			  struct msg_digest *md);
 void v2_msgid_update_sent(struct ike_sa *ike, struct state *sender,
 			  struct msg_digest *md, enum message_role sending);
-bool v2_msgid_ok(struct ike_sa *ike, enum message_role incomming, msgid_t msgid);
 
-void schedule_next_send(struct state *st);
-stf_status add_st_to_ike_sa_send_list(struct state *st, struct ike_sa *ike);
+/*
+ * Handle multiple initiators trying to send simultaneously.
+ *
+ * XXX: Suspect this code is broken.
+ *
+ * For this to work all initiators need to route their requests
+ * through queue_initiator(), and due to record 'n' send at least,
+ * this isn't true.
+ *
+ * Complicating this is how each individual initiate code path needs
+ * to be modified so that delays calling queue_initiator() until it is
+ * ready to actually send (and a message id can be assigned).  Would
+ * it be simplier if there was a gate keeper that assigned request
+ * message id up front, but only when one was available?
+ */
+void v2_msgid_queue_initiator(struct ike_sa *ike, struct state *st,
+			      v2_msgid_pending_cb *callback);
+void v2_msgid_schedule_next_initiator(struct ike_sa *ike);
+
+void dbg_v2_msgid(struct ike_sa *ike, struct state *st, const char *msg, ...) PRINTF_LIKE(3);
+void fail_v2_msgid(where_t where, struct ike_sa *ike, struct state *st,
+		   const char *fmt, ...) PRINTF_LIKE(4);
+#define FAIL_V2_MSGID(IKE, ST, FMT, ...) fail_v2_msgid(HERE, IKE, ST, FMT,##__VA_ARGS__)
 
 #endif

@@ -27,8 +27,6 @@
  *
  */
 
-#include "lswlog.h"
-
 #include "defs.h"
 #include "rnd.h"
 #include "ikev2_cookie.h"
@@ -36,6 +34,7 @@
 #include "ike_alg_hash.h"	/* for sha2 */
 #include "crypt_hash.h"
 #include "ikev2_send.h"
+#include "log.h"
 
 /*
  * That the cookie size of 32-bytes happens to match
@@ -45,14 +44,13 @@ typedef struct {
 	uint8_t bytes[32];
 } v2_cookie_t;
 
-static uint8_t v2_cookie_secret[sizeof(v2_cookie_t)];
+static v2_cookie_t v2_cookie_secret;
 
 void refresh_v2_cookie_secret(void)
 {
-	get_rnd_bytes(v2_cookie_secret, sizeof(v2_cookie_secret));
+	get_rnd_bytes(&v2_cookie_secret, sizeof(v2_cookie_secret));
 	DBG(DBG_PRIVATE,
-	    DBG_dump("v2_cookie_secret",
-		     v2_cookie_secret, sizeof(v2_cookie_secret)));
+	    DBG_dump_thing("v2_cookie_secret", v2_cookie_secret));
 }
 
 /*
@@ -65,21 +63,19 @@ void refresh_v2_cookie_secret(void)
  */
 static bool compute_v2_cookie_from_md(v2_cookie_t *cookie,
 				      struct msg_digest *md,
-				      chunk_t Ni)
+				      shunk_t Ni)
 {
 	struct crypt_hash *ctx = crypt_hash_init("IKEv2 COOKIE",
 						 &ike_alg_hash_sha2_256);
 
-	crypt_hash_digest_chunk(ctx, "Ni", Ni);
+	crypt_hash_digest_hunk(ctx, "Ni", Ni);
 
-	chunk_t IPi = same_ip_address_as_chunk(&md->sender);
-	crypt_hash_digest_chunk(ctx, "IPi", IPi);
+	shunk_t IPi = address_as_shunk(&md->sender);
+	crypt_hash_digest_hunk(ctx, "IPi", IPi);
 
-	crypt_hash_digest_bytes(ctx, "SPIi", &md->hdr.isa_ike_initiator_spi,
-				sizeof(md->hdr.isa_ike_initiator_spi));
+	crypt_hash_digest_thing(ctx, "SPIi", md->hdr.isa_ike_initiator_spi);
 
-	crypt_hash_digest_bytes(ctx, "<secret>", v2_cookie_secret,
-				sizeof(v2_cookie_secret));
+	crypt_hash_digest_thing(ctx, "<secret>", v2_cookie_secret);
 
 	/* happy coincidence? */
 	pexpect(sizeof(cookie->bytes) == SHA2_256_DIGEST_SIZE);
@@ -130,12 +126,12 @@ bool v2_rejected_initiator_cookie(struct msg_digest *md,
 	 * function (PRF) (We can check for minimum 128bit length).
 	 */
 	if (md->chain[ISAKMP_NEXT_v2Ni] == NULL) {
-		rate_log("DDOS cookie requires Ni paylod - dropping message");
+		rate_log(md, "DDOS cookie requires Ni paylod - dropping message");
 		return true; /* reject cookie */
 	}
-	chunk_t Ni = same_in_pbs_left_as_chunk(&md->chain[ISAKMP_NEXT_v2Ni]->pbs);
+	shunk_t Ni = pbs_in_left_as_shunk(&md->chain[ISAKMP_NEXT_v2Ni]->pbs);
 	if (Ni.len < IKEv2_MINIMUM_NONCE_SIZE || IKEv2_MAXIMUM_NONCE_SIZE < Ni.len) {
-		rate_log("DOS cookie failed as Ni payload invalid  - dropping message");
+		rate_log(md, "DOS cookie failed as Ni payload invalid  - dropping message");
 		return true; /* reject cookie */
 	}
 
@@ -148,7 +144,7 @@ bool v2_rejected_initiator_cookie(struct msg_digest *md,
 
 	/* No cookie? demand one */
 	if (me_want_cookie && cookie_digest == NULL) {
-		rate_log("DOS mode on; responding to IKE_SA_INIT with cookie notification request");
+		rate_log(md, "DOS mode on; responding to IKE_SA_INIT with cookie notification request");
 		send_v2N_response_from_md(md, v2N_COOKIE, &local_cookie);
 		return true; /* reject cookie */
 	}
@@ -170,18 +166,18 @@ bool v2_rejected_initiator_cookie(struct msg_digest *md,
 	if (cookie_header->isan_protoid != 0 ||
 	    cookie_header->isan_spisize != 0 ||
 	    cookie_header->isan_length != sizeof(v2_cookie_t) + sizeof(struct ikev2_notify)) {
-		rate_log("DOS cookie notification corrupt, or invalid - dropping message");
+		rate_log(md, "DOS cookie notification corrupt, or invalid - dropping message");
 		return true; /* reject cookie */
 	}
-	chunk_t remote_cookie = same_in_pbs_left_as_chunk(&cookie_digest->pbs);
+	shunk_t remote_cookie = pbs_in_left_as_shunk(&cookie_digest->pbs);
 
 	if (DBGP(DBG_BASE)) {
-		DBG_dump_chunk("received cookie", remote_cookie);
-		DBG_dump_chunk("computed cookie", local_cookie);
+		DBG_dump_hunk("received cookie", remote_cookie);
+		DBG_dump_hunk("computed cookie", local_cookie);
 	}
 
-	if (!chunk_eq(local_cookie, remote_cookie)) {
-		rate_log("DOS cookies do not match - dropping message");
+	if (!hunk_eq(local_cookie, remote_cookie)) {
+		rate_log(md, "DOS cookies do not match - dropping message");
 		return true; /* reject cookie */
 	}
 	dbg("cookies match");

@@ -21,6 +21,10 @@
 #ifndef PROPOSALS_H
 #define PROPOSALS_H
 
+/*
+ * XXX: rename v[23]_proposal to proposal_v[12].
+ */
+
 #include "lswcdefs.h"
 #include "constants.h"
 #include "ike_alg.h"
@@ -64,6 +68,7 @@ struct proposal_policy {
 	unsigned parser_version;
 	bool pfs; /* For CHILD SA, use DH from IKE SA */
 	bool check_pfs_vs_dh;
+	bool ignore_parser_errors;
 	/*
 	 * According to current policy, is the algorithm ok
 	 * (supported)?  If it isn't return FALSE.
@@ -83,6 +88,15 @@ struct proposal_policy {
  */
 
 struct proposal_defaults {
+	/*
+	 * Proposals to parse when the parser is called with a NULL
+	 * proposals string.
+	 */
+	const char *proposals;
+	/*
+	 * Algorithms to add to the proposal when they were not
+	 * specified by the proposal string.
+	 */
 	const struct ike_alg **dh;
 	const struct ike_alg **prf;
 	const struct ike_alg **integ;
@@ -102,7 +116,7 @@ struct proposal_protocol {
 	enum ike_alg_key ikev1_alg_id;
 
 	/*
-	 * Lists of defaults for each IKE version.
+	 * Lists of defaults for both IKE version.
 	 */
 	const struct proposal_defaults *defaults[IKE_VERSION_ROOF];
 
@@ -116,19 +130,12 @@ struct proposal_protocol {
 			    const struct proposal *proposal);
 
 	/*
-	 * XXX: Is the proto-id needed?  Parser should be protocol
-	 * agnostic.
+	 * What algorithms are expected?
 	 */
-	unsigned protoid;
-
-	/*
-	 * This lookup functions must set err and return null if NAME
-	 * isn't valid.
-	 */
-	alg_byname_fn *encrypt_alg_byname;
-	alg_byname_fn *prf_alg_byname;
-	alg_byname_fn *integ_alg_byname;
-	alg_byname_fn *dh_alg_byname;
+	bool encrypt;
+	bool prf;
+	bool integ;
+	bool dh;
 };
 
 /*
@@ -151,6 +158,7 @@ bool proposal_encrypt_norm(const struct proposal *proposal);
 bool proposal_integ_none(const struct proposal *proposal);
 
 unsigned nr_proposals(struct proposals *proposals);
+bool default_proposals(struct proposals *proposals);
 
 extern void proposals_addref(struct proposals **proposals);
 extern void proposals_delref(struct proposals **proposals);
@@ -160,8 +168,7 @@ extern void free_proposal(struct proposal **proposal);
 
 void free_algorithms(struct proposal *proposal, enum proposal_algorithm algorithm);
 void append_proposal(struct proposals *proposals, struct proposal **proposal);
-void append_algorithm(struct proposal_parser *parser,
-		      struct proposal *proposal, enum proposal_algorithm algorithm,
+void append_algorithm(struct proposal_parser *parser, struct proposal *proposal,
 		      const struct ike_alg *alg, int enckeylen);
 
 struct proposal_parser *alloc_proposal_parser(const struct proposal_policy *policy,
@@ -255,7 +262,7 @@ struct v1_proposal {
 	const struct encrypt_desc *encrypt;
 	const struct prf_desc *prf;
 	const struct integ_desc *integ;
-	const struct oakley_group_desc *dh;
+	const struct dh_desc *dh;
 	const struct proposal_protocol *protocol;
 };
 

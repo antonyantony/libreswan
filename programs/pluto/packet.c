@@ -23,14 +23,14 @@
 #include <netinet/in.h>
 #include <string.h>
 
-#include <libreswan.h>
 
 #include "constants.h"
 #include "lswlog.h"
 #include "lswalloc.h"
 #include "impair.h"
-
+#include "ip_info.h"		/* used by pbs_in_address() */
 #include "packet.h"
+#include "shunk.h"
 
 const pb_stream empty_pbs;
 
@@ -68,6 +68,25 @@ static field_desc isa_fields[] = {
 struct_desc isakmp_hdr_desc = {
 	.name = "ISAKMP Message",
 	.fields = isa_fields,
+	.size = sizeof(struct isakmp_hdr),
+	.pt = ISAKMP_NEXT_NONE,
+};
+
+static field_desc raw_isa_fields[] = {
+	{ ft_raw, COOKIE_SIZE, "initiator cookie", NULL },
+	{ ft_raw, COOKIE_SIZE, "responder cookie", NULL },
+	{ ft_nat, 8 / BITS_PER_BYTE, "next payload type", },
+	{ ft_nat, 8 / BITS_PER_BYTE, "ISAKMP version", },
+	{ ft_nat, 8 / BITS_PER_BYTE, "exchange type", },
+	{ ft_nat, 8 / BITS_PER_BYTE, "flags", },
+	{ ft_nat, 32 / BITS_PER_BYTE, "Message ID", NULL },
+	{ ft_nat, 32 / BITS_PER_BYTE, "length", NULL },
+	{ ft_end, 0, NULL, NULL }
+};
+
+struct_desc raw_isakmp_hdr_desc = {
+	.name = "ISAKMP Message (raw)",
+	.fields = raw_isa_fields,
 	.size = sizeof(struct isakmp_hdr),
 	.pt = ISAKMP_NEXT_NONE,
 };
@@ -1180,7 +1199,7 @@ struct_desc ikev2_certificate_req_desc = {
  *               Figure 14:  Authentication Payload Format
  *
  */
-static field_desc ikev2a_fields[] = {
+static field_desc ikev2_auth_fields[] = {
 	{ ft_pnpc, 8 / BITS_PER_BYTE, "next payload type", &ikev2_payload_names },
 	{ ft_set, 8 / BITS_PER_BYTE, "flags", critical_names },
 	{ ft_len, 16 / BITS_PER_BYTE, "length", NULL },
@@ -1189,10 +1208,10 @@ static field_desc ikev2a_fields[] = {
 	{ ft_end,  0, NULL, NULL }
 };
 
-struct_desc ikev2_a_desc = {
+struct_desc ikev2_auth_desc = {
 	.name = "IKEv2 Authentication Payload",
-	.fields = ikev2a_fields,
-	.size = sizeof(struct ikev2_a),
+	.fields = ikev2_auth_fields,
+	.size = sizeof(struct ikev2_auth),
 	.pt = ISAKMP_NEXT_v2AUTH,
 };
 
@@ -1544,9 +1563,6 @@ struct_desc ikev2notify_ipcomp_data_desc = {
 	.size = 3,
 };
 
-
-#ifdef HAVE_LABELED_IPSEC
-
 /*
  * Undocumented Security Context for Labeled IPsec
  *
@@ -1566,8 +1582,6 @@ struct_desc sec_ctx_desc = {
 	.fields = sec_ctx_fields,
 	.size = sizeof(struct sec_ctx),
 };
-
-#endif
 
 /*
  * descriptor for each V1 payload type
@@ -1616,7 +1630,7 @@ struct_desc *v2_payload_desc(unsigned p)
 		&ikev2_id_r_desc,		/* 36 ISAKMP_NEXT_v2IDr */
 		&ikev2_certificate_desc,        /* 37 ISAKMP_NEXT_v2CERT */
 		&ikev2_certificate_req_desc,    /* 38 ISAKMP_NEXT_v2CERTREQ */
-		&ikev2_a_desc,                  /* 39 ISAKMP_NEXT_v2AUTH */
+		&ikev2_auth_desc,               /* 39 ISAKMP_NEXT_v2AUTH */
 		&ikev2_nonce_desc,              /* 40 ISAKMP_NEXT_v2Ni / ISAKMP_NEXT_v2Nr */
 		&ikev2_notify_desc,             /* 41 ISAKMP_NEXT_v2N */
 		&ikev2_delete_desc,             /* 42 ISAKMP_NEXT_v2D */
@@ -1691,27 +1705,17 @@ chunk_t same_out_pbs_as_chunk(pb_stream *pbs)
 
 chunk_t clone_out_pbs_as_chunk(pb_stream *pbs, const char *name)
 {
-	return clone_chunk(same_out_pbs_as_chunk(pbs), name);
+	return clone_hunk(same_out_pbs_as_chunk(pbs), name);
 }
 
-chunk_t same_in_pbs_as_chunk(pb_stream *pbs)
+shunk_t pbs_in_as_shunk(pb_stream *pbs)
 {
-	return chunk(pbs->start, pbs_room(pbs));
+	return shunk2(pbs->start, pbs_room(pbs));
 }
 
-chunk_t clone_in_pbs_as_chunk(pb_stream *pbs, const char *name)
+shunk_t pbs_in_left_as_shunk(const pb_stream *pbs)
 {
-	return clone_chunk(same_in_pbs_as_chunk(pbs), name);
-}
-
-chunk_t same_in_pbs_left_as_chunk(pb_stream *pbs)
-{
-	return chunk(pbs->cur, pbs_left(pbs));
-}
-
-chunk_t clone_in_pbs_left_as_chunk(pb_stream *pbs, const char *name)
-{
-	return clone_chunk(same_in_pbs_left_as_chunk(pbs), name);
+	return shunk2(pbs->cur, pbs_left(pbs));
 }
 
 static err_t enum_enum_checker(
@@ -1730,25 +1734,60 @@ static err_t enum_enum_checker(
 	return NULL;
 }
 
-/* print a host struct
- *
- * This code assumes that the network and host structure
- * members have the same alignment and size!  This requires
- * that all padding be explicit.
+/*
+ * print a natural number using the specified FMT, with the value in
+ * network-byte-order appended.
  */
+
+static void DBG_print_nat(const field_desc *fp, uintmax_t nat)
+{
+	LSWLOG_DEBUG(buf) {
+		jam(buf, "   %s: %ju", fp->name, nat);
+		jam(buf, " (");
+		/*
+		 * Note that a single byte value such as "(23)" is
+		 * ambigious.  Since it is prefixed by the equivalent
+		 * decimal it should be clear.
+		 *
+		 * XXX: the same conversion code appears in
+		 * out_struct() and probably elsewhere?
+		 */
+		passert(fp->size > 0);
+		passert(fp->size <= sizeof(nat));
+		uint8_t bytes[sizeof(nat)];
+		uint8_t *cur = bytes + fp->size;
+		uintmax_t n = nat;
+		do {
+			cur--;
+			*cur = (uint8_t)n;
+			n >>= BITS_PER_BYTE;
+		} while (cur > bytes);
+		jam_dump_bytes(buf, bytes, fp->size);
+		jam(buf, ")");
+	}
+}
+
+/*
+ * print a host-byte-ordered struct
+ *
+ * This code assumes that the network and host structure members have
+ * the same alignment and size!  This requires that all padding be
+ * explicit.
+ */
+
 static void DBG_print_struct(const char *label, const void *struct_ptr,
 		      struct_desc *sd, bool len_meaningful)
 {
 	bool immediate = FALSE;
 	const uint8_t *inp = struct_ptr;
 	field_desc *fp;
-	uint32_t last_enum = 0;
+	uintmax_t last_enum = 0;
 
 	DBG_log("%s%s:", label, sd->name);
 
 	for (fp = sd->fields; fp->field_type != ft_end; fp++) {
 		int i = fp->size;
-		uint32_t n = 0;
+		uintmax_t n = 0;
 
 		switch (fp->field_type) {
 		case ft_zig:		/* zero (ignore violations) */
@@ -1766,7 +1805,7 @@ static void DBG_print_struct(const char *label, const void *struct_ptr,
 		case ft_af_enum:        /* Attribute Format + value from an enumeration */
 		case ft_af_loose_enum:  /* Attribute Format + value from an enumeration */
 		case ft_set:            /* bits representing set */
-			/* grab i bytes */
+			/* grab bytes in host-byte-order */
 			switch (i) {
 			case 8 / BITS_PER_BYTE:
 				n = *(const uint8_t *)inp;
@@ -1789,10 +1828,7 @@ static void DBG_print_struct(const char *label, const void *struct_ptr,
 					break;
 			/* FALL THROUGH */
 			case ft_nat: /* natural number (may be 0) */
-				DBG_log("   %s: %" PRIu32 " (0x%" PRIx32 ")",
-					fp->name,
-					n,
-					n);
+				DBG_print_nat(fp, n);
 				break;
 
 			case ft_af_loose_enum:  /* Attribute Format + value from an enumeration */
@@ -1810,7 +1846,7 @@ static void DBG_print_struct(const char *label, const void *struct_ptr,
 				if (name == NULL) {
 					name = enum_show(fp->desc, n);
 				}
-				DBG_log("   %s: %s%s (0x%" PRIx32 ")",
+				DBG_log("   %s: %s%s (0x%jx)",
 					fp->name,
 					immediate ? "AF+" : "",
 					name, n);
@@ -1823,7 +1859,7 @@ static void DBG_print_struct(const char *label, const void *struct_ptr,
 			case ft_pnpc:
 			case ft_lss:
 				last_enum = n;
-				DBG_log("   %s: %s (0x%" PRIx32 ")",
+				DBG_log("   %s: %s (0x%jx)",
 					fp->name,
 					enum_show(fp->desc, n),
 					n);
@@ -1835,14 +1871,14 @@ static void DBG_print_struct(const char *label, const void *struct_ptr,
 				const char *name = enum_enum_showb(fp->desc,
 								   last_enum,
 								   n, &buf);
-				DBG_log("   %s: %s (0x%" PRIx32 ")",
+				DBG_log("   %s: %s (0x%jx)",
 					fp->name,
 					name, n);
 			}
 				break;
 
 			case ft_set: /* bits representing set */
-				DBG_log("   %s: %s (0x%" PRIx32 ")",
+				DBG_log("   %s: %s (0x%jx)",
 					fp->name,
 					bitnamesof(fp->desc, n),
 					n);
@@ -1854,14 +1890,13 @@ static void DBG_print_struct(const char *label, const void *struct_ptr,
 			break;
 
 		case ft_raw:            /* bytes to be left in network-order */
-		{
-			char m[50];     /* arbitrary limit on name width in log */
-
-			snprintf(m, sizeof(m), "   %s:", fp->name);
-			DBG_dump(m, inp, i);
+			LSWLOG_DEBUG(buf) {
+				jam(buf, "   %s: ", fp->name);
+				jam_dump_bytes(buf, inp, i);
+			}
 			inp += i;
-		}
-		break;
+			break;
+
 		default:
 			bad_case(fp->field_type);
 		}
@@ -1926,7 +1961,7 @@ bool in_struct(void *struct_ptr, struct_desc *sd,
 		uint8_t *roof = cur + sd->size; /* may be changed by a length field */
 		uint8_t *outp = struct_ptr;
 		bool immediate = FALSE;
-		uint32_t last_enum = 0;
+		uintmax_t last_enum = 0;
 
 		for (field_desc *fp = sd->fields; ugh == NULL; fp++) {
 
@@ -1974,7 +2009,7 @@ bool in_struct(void *struct_ptr, struct_desc *sd,
 			case ft_af_loose_enum:  /* Attribute Format + value from an enumeration */
 			case ft_set:            /* bits representing set */
 			{
-				uint32_t n = 0;
+				uintmax_t n = 0;
 
 				/* Reportedly fails on arm, see bug #775 */
 				for (size_t i = fp->size; i != 0; i--)
@@ -1984,19 +2019,21 @@ bool in_struct(void *struct_ptr, struct_desc *sd,
 				case ft_len:    /* length of this struct and any following crud */
 				case ft_lv:     /* length/value field of attribute */
 				{
-					uint32_t len = fp->field_type ==
+					size_t len = fp->field_type ==
 							ft_len ? n :
 							immediate ? sd->size :
 							n + sd->size;
 
 					if (len < sd->size) {
 						ugh = builddiag(
-							"%s of %s is smaller than minimum",
+							"%zd-byte %s of %s is smaller than minimum",
+							len,
 							fp->name,
 							sd->name);
 					} else if (pbs_left(ins) < len) {
 						ugh = builddiag(
-							"%s of %s is larger than can fit",
+							"%zd-byte %s of %s is larger than can fit",
+							len,
 							fp->name,
 							sd->name);
 					} else {
@@ -2018,7 +2055,7 @@ bool in_struct(void *struct_ptr, struct_desc *sd,
 					 */
 					if (fp->field_type == ft_af_enum &&
 					    enum_name(fp->desc, n) == NULL) {
-						ugh = builddiag("%s of %s has an unknown value: %s%" PRIu32 " (0x%" PRIx32 ")",
+						ugh = builddiag("%s of %s has an unknown value: %s%ju (0x%jx)",
 								fp->name, sd->name,
 								immediate ? "AF+" : "",
 								last_enum, n);
@@ -2027,10 +2064,9 @@ bool in_struct(void *struct_ptr, struct_desc *sd,
 
 				case ft_enum:   /* value from an enumeration */
 					if (enum_name(fp->desc, n) == NULL) {
-						ugh = builddiag("%s of %s has an unknown value: %" PRIu32 " (0x%" PRIx32 ")",
+						ugh = builddiag("%s of %s has an unknown value: %ju (0x%jx)",
 								fp->name, sd->name,
-								n,
-								n);
+								n, n);
 					}
 				/* FALL THROUGH */
 				case ft_loose_enum:     /* value from an enumeration with only some names known */
@@ -2046,7 +2082,7 @@ bool in_struct(void *struct_ptr, struct_desc *sd,
 
 				case ft_set:            /* bits representing set */
 					if (!testset(fp->desc, n)) {
-						ugh = builddiag("bitset %s of %s has unknown member(s): %s (0x%" PRIx32 ")",
+						ugh = builddiag("bitset %s of %s has unknown member(s): %s (0x%ju)",
 								fp->name, sd->name,
 								bitnamesof(fp->desc, n),
 								n);
@@ -2601,7 +2637,17 @@ static bool space_for(size_t len, pb_stream *outs, const char *fmt, ...)
 bool out_raw(const void *bytes, size_t len, pb_stream *outs, const char *name)
 {
 	if (space_for(len, outs, "%zu raw bytes of %s", len, name)) {
-		DBG(DBG_EMITTING, DBG_dump(name, bytes, len));
+		if (DBGP(DBG_BASE)) {
+			if (len > 16) { /* arbitrary */
+				DBG_log("%s:", name);
+				DBG_dump(NULL, bytes, len);
+			} else {
+				LSWLOG_DEBUG(buf) {
+					jam(buf, "%s: ", name);
+					jam_dump_bytes(buf, bytes, len);
+				}
+			}
+		}
 		memcpy(outs->cur, bytes, len);
 		outs->cur += len;
 		return true;
@@ -2704,4 +2750,39 @@ void close_output_pbs(pb_stream *pbs)
 
 	if (pbs->container != NULL)
 		pbs->container->cur = pbs->cur; /* pass space utilization up */
+}
+
+bool pbs_in_address(ip_address *address, const struct ip_info *ipv,
+		    struct pbs_in *input_pbs, const char *what)
+{
+	switch (ipv->af) {
+	case AF_INET:
+	{
+		struct in_addr ip;
+		if (!in_raw(&ip, sizeof(ip), input_pbs, what)) {
+			*address = address_invalid;
+			return false;
+		}
+		*address = address_from_in_addr(&ip);
+		return true;
+	}
+	case AF_INET6:
+	{
+		struct in6_addr ip;
+		if (!in_raw(&ip, sizeof(ip), input_pbs, what)) {
+			*address = address_invalid;
+			return false;
+		}
+		*address = address_from_in6_addr(&ip);
+		return true;
+	}
+	default:
+		bad_case(ipv->af);
+	}
+}
+
+bool pbs_out_address(const ip_address *address, struct pbs_out *out_pbs, const char *what)
+{
+	shunk_t as = address_as_shunk(address);
+	return out_raw(as.ptr, as.len, out_pbs, what);
 }

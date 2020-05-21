@@ -1,5 +1,4 @@
-/*
- * impair constants, for libreswan
+/* impair constants, for libreswan
  *
  * Copyright (C) 2017-2019 Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2019-2019 Paul Wouters <pwouters@redhat.com>
@@ -91,6 +90,9 @@ static struct double_double impair = {
        S(IMPAIR_UNKNOWN_PAYLOAD_CRITICAL, "impair-unknown-payload-critical", "mark the unknown payload as critical"),
        S(IMPAIR_IKEv1_DEL_WITH_NOTIFY, "impair-ikev1-del-with-notify", "causes pluto to send IKE Delete with additional bogus Notify payload"),
        S(IMPAIR_BAD_IKE_AUTH_XCHG, "impair-bad-ikev2-auth-xchg", "causes pluto to send IKE_AUTH replies with wrong exchange type"),
+       S(IMPAIR_REKEY_INITIATOR_SUPERNET, "impair-rekey-initiate-supernet", "cause pluto to send IPsec SA rekey on initiator with TSi and TSR to 0/0 ::0, to emulate Windows client"),
+       S(IMPAIR_REKEY_RESPOND_SUPERNET, "impair-rekey-respond-supernet", "cause pluto to send IPsec SA rekey responder TSi and TSR to 0/0 ::0"),
+       S(IMPAIR_REKEY_RESPOND_SUBNET, "impair-rekey-respond-subnet", "cause pluto to send IPsec SA rekey responder TSi and TSR to X/32 X/128"),
 
 #undef S
 };
@@ -124,6 +126,19 @@ static const struct keyword send_impairment_value[] = {
 
 static const struct keywords send_impairment_keywords =
 	DIRECT_KEYWORDS("send impaired content", send_impairment_value);
+
+static const struct keyword exchange_impairment_value[] = {
+#define S(E, H) [E##_EXCHANGE] = { .name = "SEND_" #E, .sname = #E, .value = E##_EXCHANGE, .details = H, }
+	S(NO, "do not modify exchanges"),
+	S(QUICK, "modify IKEv1 QUICK exchanges"),
+	S(XAUTH, "modify IKEv1 XAUTH exchanges"),
+	S(NOTIFICATION, "modify notification (informational) exchanges"),
+	S(DELETE, "modify delete exchanges"),
+#undef S
+};
+
+static const struct keywords exchange_impairment_keywords =
+	DIRECT_KEYWORDS("impaire exchange content", exchange_impairment_value);
 
 struct impairment {
 	const char *what;
@@ -181,6 +196,32 @@ struct impairment impairments[] = {
 		.help = "corrupt the outgoing CHILD proposal's key length attribute",
 		.how_keynum = &send_impairment_keywords,
 		V(impair_child_key_length_attribute),
+	},
+	{
+		.what = "log-rate-limit",
+		.help = "set the per-hour(?) cap on rate-limited log messages",
+		V(impair_log_rate_limit),
+	},
+
+	/*
+	 * IKEv1: hash payloads
+	 */
+	{
+		.what = "v1-hash-check",
+		.help = "disable check of incoming IKEv1 hash payload",
+		V(impair_emitting),
+	},
+	{
+		.what = "v1-hash-payload",
+		.help = "corrupt the outgoing HASH payload",
+		.how_keynum = &send_impairment_keywords,
+		V(impair_v1_hash_payload),
+	},
+	{
+		.what = "v1-hash-exchange",
+		.help = "the outgoing exchange that should contain the corrupted HASH payload",
+		.how_keynum = &exchange_impairment_keywords,
+		V(impair_v1_hash_exchange),
 	},
 };
 
@@ -264,10 +305,10 @@ bool parse_impair(const char *optarg,
 	}
 	/* Break OPTARG into WHAT[=HOW] */
 	shunk_t arg = shunk1(optarg);
-	shunk_t what = shunk_strsep(&arg, ":=");
+	shunk_t what = shunk_token(&arg, NULL, ":=");
 	shunk_t how = arg;
 	/*
-	 * look for both WHAT and for compatability with the old
+	 * look for both WHAT and for compatibility with the old
 	 * lset_t impair flags, no-WHAT.
 	 */
 	unsigned ci = 1;
@@ -279,7 +320,7 @@ bool parse_impair(const char *optarg,
 			LSWLOG_ERROR(buf) {
 				lswlogf(buf, "ignoring unrecognized option '-%s-impair "PRI_SHUNK"'",
 					enable ? "" : "-no",
-					PRI_shunk(what));
+					pri_shunk(what));
 			}
 			return false;
 		} else if (shunk_strcaseeq(nowhat, impairments[ci].what)) {
@@ -297,7 +338,7 @@ bool parse_impair(const char *optarg,
 
 	/*
 	 * Ensure that --no-impair WHAT, --impair no-WHAT, --impair
-         * WHAT:no, all always work.
+	 * WHAT:no, all always work.
 	 */
 	if (no || shunk_strcaseeq(how, "no")) {
 		/* reject --no-impair WHAT:no and --impair no-WHAT:no */
@@ -305,7 +346,7 @@ bool parse_impair(const char *optarg,
 			LSWLOG_ERROR(buf) {
 				lswlogf(buf, "ignoring option '-%s-impair "PRI_SHUNK":"PRI_SHUNK"' with unexpected parameter '"PRI_SHUNK"'",
 					enable ? "" : "-no",
-					PRI_shunk(what), PRI_shunk(how), PRI_shunk(how));
+					pri_shunk(what), pri_shunk(how), pri_shunk(how));
 			}
 			return false;
 		}
@@ -323,7 +364,7 @@ bool parse_impair(const char *optarg,
 		if (how.len == 0) {
 			LSWLOG_ERROR(buf) {
 				lswlogf(buf, "ignoring option '--impair "PRI_SHUNK"' with missing parameter",
-					PRI_shunk(what));
+					pri_shunk(what));
 			}
 			return false;
 		}
@@ -347,8 +388,8 @@ bool parse_impair(const char *optarg,
 		}
 		LSWLOG_ERROR(buf) {
 			lswlogf(buf, "ignoring option '--impair "PRI_SHUNK":"PRI_SHUNK"' with unknown parameter '"PRI_SHUNK"'",
-				PRI_shunk(what), PRI_shunk(how),
-				PRI_shunk(how));
+				pri_shunk(what), pri_shunk(how),
+				pri_shunk(how));
 		}
 		return false;
 	} else {
@@ -365,8 +406,7 @@ bool parse_impair(const char *optarg,
 		 */
 		if (shunk_strcaseeq(how, "false") ||
 		    shunk_strcaseeq(how, "off") ||
-		    shunk_strcaseeq(how, "no") ||
-		    shunk_strcaseeq(how, "0")) {
+		    shunk_strcaseeq(how, "no")) {
 			/* --impair WHAT:nope */
 			*whack_impair = (struct whack_impair) {
 				.what = ci,
@@ -376,8 +416,7 @@ bool parse_impair(const char *optarg,
 		} else if (how.len == 0 ||
 			   shunk_strcaseeq(how, "true") ||
 			   shunk_strcaseeq(how, "on") ||
-			   shunk_strcaseeq(how, "yes") ||
-			   shunk_strcaseeq(how, "1")) {
+			   shunk_strcaseeq(how, "yes")) {
 			/* --impair WHAT:yes */
 			*whack_impair = (struct whack_impair) {
 				.what = ci,
@@ -385,10 +424,18 @@ bool parse_impair(const char *optarg,
 			};
 			return true;
 		} else {
+			unsigned value = 0;
+			if (parse_biased_unsigned(how, &value, 0)) {
+				*whack_impair = (struct whack_impair) {
+					.what = ci,
+					.how = value,
+				};
+				return true;
+			}
 			/* XXX: ignores "WHAT:" */
 			LSWLOG_ERROR(buf) {
 				lswlogf(buf, "ignoring option '--impair "PRI_SHUNK":"PRI_SHUNK"' with unexpected parameter '"PRI_SHUNK"'",
-					PRI_shunk(what), PRI_shunk(how), PRI_shunk(how));
+					pri_shunk(what), pri_shunk(how), pri_shunk(how));
 			}
 			return false;
 		}
@@ -401,16 +448,16 @@ bool parse_impair(const char *optarg,
 
 static uintmax_t value_of(const struct impairment *cr)
 {
-       switch (cr->sizeof_value) {
+	switch (cr->sizeof_value) {
 #define L(T) case sizeof(uint##T##_t): return *(uint##T##_t*)cr->value
-               L(8);
-               L(16);
-               L(32);
-               L(64);
+		L(8);
+		L(16);
+		L(32);
+		L(64);
 #undef L
-       default:
-               bad_case(cr->sizeof_value);
-       }
+	default:
+		bad_case(cr->sizeof_value);
+	}
 }
 
 static void lswlog_impairment(struct lswlog *buf, const struct impairment *cr)
@@ -428,11 +475,15 @@ static void lswlog_impairment(struct lswlog *buf, const struct impairment *cr)
 		}
 	} else {
 		/* only bool for now */
-		if (value_of(cr) != 0) {
-			lswlogs(buf, cr->what);
-		} else {
+		uintmax_t value = value_of(cr);
+		if (value == 0) {
 			/* parser accepts this */
-			lswlogf(buf, "%s:no", cr->what);
+			jam(buf, "%s:no", cr->what);
+		} else if (value == 1) {
+			/* parser accepts this */
+			jam(buf, "%s", cr->what);
+		} else {
+			jam(buf, "%s:%ju", cr->what, value);
 		}
 	}
 }
@@ -522,8 +573,9 @@ void process_impair(const struct whack_impair *wc)
 }
 
 /*
- * declare these last so that all references are forced to use the
- * declaration in the header.
+ * XXX: define these at the end of the file so that all references are
+ * forced to use the declaration in the header (help stop code
+ * referring to the wrong variable?).
  */
 
 bool impair_revival;
@@ -531,3 +583,9 @@ bool impair_emitting;
 enum send_impairment impair_ke_payload;
 enum send_impairment impair_ike_key_length_attribute;
 enum send_impairment impair_child_key_length_attribute;
+
+unsigned impair_log_rate_limit;
+
+bool impair_v1_hash_check;
+enum send_impairment impair_v1_hash_payload;
+enum exchange_impairment impair_v1_hash_exchange;

@@ -16,10 +16,10 @@ west #
  # remove this address from eth0. It will come back on vti
 west #
  ip addr show dev eth0 | grep 192.0.1.254 && ip addr del 192.0.1.254/24 dev eth0
-    inet 192.0.1.254/24 brd 192.0.1.255 scope global eth0
+    inet 192.0.1.254/24 scope global eth0
 west #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
@@ -37,12 +37,11 @@ west #
 initdone
 west #
  ipsec auto --up  westnet-eastnet-vti-01
-002 "westnet-eastnet-vti-01" #1: initiating v2 parent SA
-1v2 "westnet-eastnet-vti-01" #1: initiate
+1v2 "westnet-eastnet-vti-01" #1: initiating IKEv2 IKE SA
 1v2 "westnet-eastnet-vti-01" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
 1v2 "westnet-eastnet-vti-01" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
 002 "westnet-eastnet-vti-01" #2: IKEv2 mode peer ID is ID_FQDN: '@east'
-003 "westnet-eastnet-vti-01" #2: Authenticated using RSA
+003 "westnet-eastnet-vti-01" #2: Authenticated using RSA with IKEv2_AUTH_HASH_SHA2_512
 002 "westnet-eastnet-vti-01" #2: up-client output: net.ipv4.conf.ipsec0.disable_policy = 1
 002 "westnet-eastnet-vti-01" #2: up-client output: net.ipv4.conf.ipsec0.rp_filter = 0
 002 "westnet-eastnet-vti-01" #2: up-client output: net.ipv4.conf.ipsec0.forwarding = 1
@@ -91,39 +90,33 @@ west #
  grep -v -P "\t0$" /proc/net/xfrm_stat
 west #
  ip addr show
-1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 state UNKNOWN
     link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
     inet 127.0.0.1/8 scope host lo
        valid_lft forever preferred_lft forever
-2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP
     link/ether 12:00:00:ab:cd:ff brd ff:ff:ff:ff:ff:ff
-3: eth1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default
+3: eth1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP
     link/ether 12:00:00:64:64:45 brd ff:ff:ff:ff:ff:ff
-    inet 192.1.2.45/24 brd 192.1.2.255 scope global eth1
+    inet 192.1.2.45/24 scope global eth1
        valid_lft forever preferred_lft forever
-4: eth2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default
-    link/ether 12:00:00:32:64:45 brd ff:ff:ff:ff:ff:ff
-    inet 192.9.4.45/24 brd 192.9.4.255 scope global eth2
-       valid_lft forever preferred_lft forever
-5: ip_vti0@NONE: <NOARP> mtu XXXX qdisc noop state DOWN group default
+4: ip_vti0@NONE: <NOARP> mtu XXXX qdisc noop state DOWN group default
     link/ipip 0.0.0.0 brd 0.0.0.0
-6: ipsec0@NONE: <NOARP,UP,LOWER_UP> mtu 1480 qdisc noqueue state UNKNOWN group default
+X: ipsec0@NONE: <NOARP,UP,LOWER_UP> mtu 1480 state UNKNOWN
     link/ipip 192.1.2.45 brd 0.0.0.0
     inet 192.0.1.254/24 scope global ipsec0
        valid_lft forever preferred_lft forever
 west #
  ip link show
-1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 state UNKNOWN
     link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
 2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default
     link/ether 12:00:00:ab:cd:ff brd ff:ff:ff:ff:ff:ff
 3: eth1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default
     link/ether 12:00:00:64:64:45 brd ff:ff:ff:ff:ff:ff
-4: eth2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default
-    link/ether 12:00:00:32:64:45 brd ff:ff:ff:ff:ff:ff
-5: ip_vti0@NONE: <NOARP> mtu XXXX qdisc noop state DOWN mode DEFAULT group default
+4: ip_vti0@NONE: <NOARP> mtu XXXX qdisc state DOWN
     link/ipip 0.0.0.0 brd 0.0.0.0
-6: ipsec0@NONE: <NOARP,UP,LOWER_UP> mtu 1480 qdisc noqueue state UNKNOWN mode DEFAULT group default
+X: ipsec0@NONE: <NOARP,UP,LOWER_UP> mtu 1480 state UNKNOWN
     link/ipip 192.1.2.45 brd 0.0.0.0
 west #
  ip route show
@@ -133,48 +126,72 @@ default via 192.1.2.254 dev eth1
 192.0.2.0/24 dev ipsec0 scope link
 192.1.2.0/24 dev eth1 proto kernel scope link src 192.1.2.45
 192.1.2.254 dev eth1 scope link
-192.9.4.0/24 dev eth2 proto kernel scope link src 192.9.4.45
 west #
  ip xfrm state
 src 192.1.2.23 dst 192.1.2.45
 	proto esp spi 0xSPISPI reqid REQID mode tunnel
+	replay-window 32 flag af-unspec
 	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
 src 192.1.2.45 dst 192.1.2.23
 	proto esp spi 0xSPISPI reqid REQID mode tunnel
+	replay-window 32 flag af-unspec
 	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
 src 192.1.2.23 dst 192.1.2.45
 	proto esp spi 0xSPISPI reqid REQID mode tunnel
+	replay-window 32 flag af-unspec
 	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
 src 192.1.2.45 dst 192.1.2.23
 	proto esp spi 0xSPISPI reqid REQID mode tunnel
+	replay-window 32 flag af-unspec
 	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
 west #
  ip xfrm policy
 src 10.0.1.0/24 dst 10.0.2.0/24 
-	dir out priority 1042407 ptype main 
-	mark 0x15/0xffffffff
+	dir out priority 2084814 ptype main 
+	mark 0x15/0xffffffff 
 	tmpl src 192.1.2.45 dst 192.1.2.23
+		proto esp reqid REQID mode tunnel
 src 10.0.2.0/24 dst 10.0.1.0/24 
-	dir fwd priority 1042407 ptype main 
-	mark 0x14/0xffffffff
+	dir fwd priority 2084814 ptype main 
+	mark 0x14/0xffffffff 
 	tmpl src 192.1.2.23 dst 192.1.2.45
+		proto esp reqid REQID mode tunnel
 src 10.0.2.0/24 dst 10.0.1.0/24 
-	dir in priority 1042407 ptype main 
-	mark 0x14/0xffffffff
+	dir in priority 2084814 ptype main 
+	mark 0x14/0xffffffff 
 	tmpl src 192.1.2.23 dst 192.1.2.45
+		proto esp reqid REQID mode tunnel
 src 192.0.1.0/24 dst 192.0.2.0/24 
-	dir out priority 1042407 ptype main 
-	mark 0x15/0xffffffff
+	dir out priority 2084814 ptype main 
+	mark 0x15/0xffffffff 
 	tmpl src 192.1.2.45 dst 192.1.2.23
+		proto esp reqid REQID mode tunnel
 src 192.0.2.0/24 dst 192.0.1.0/24 
-	dir fwd priority 1042407 ptype main 
-	mark 0x14/0xffffffff
+	dir fwd priority 2084814 ptype main 
+	mark 0x14/0xffffffff 
 	tmpl src 192.1.2.23 dst 192.1.2.45
+		proto esp reqid REQID mode tunnel
 src 192.0.2.0/24 dst 192.0.1.0/24 
-	dir in priority 1042407 ptype main 
-	mark 0x14/0xffffffff
+	dir in priority 2084814 ptype main 
+	mark 0x14/0xffffffff 
 	tmpl src 192.1.2.23 dst 192.1.2.45
-west #
+		proto esp reqid REQID mode tunnel
+src 0.0.0.0/0 dst 0.0.0.0/0 
+	socket out priority 0 ptype main 
+src 0.0.0.0/0 dst 0.0.0.0/0 
+	socket in priority 0 ptype main 
+src 0.0.0.0/0 dst 0.0.0.0/0 
+	socket out priority 0 ptype main 
+src 0.0.0.0/0 dst 0.0.0.0/0 
+	socket in priority 0 ptype main 
+src 0.0.0.0/0 dst 0.0.0.0/0 
+	socket out priority 0 ptype main 
+src 0.0.0.0/0 dst 0.0.0.0/0 
+	socket in priority 0 ptype main 
+src 0.0.0.0/0 dst 0.0.0.0/0 
+	socket out priority 0 ptype main 
+src 0.0.0.0/0 dst 0.0.0.0/0 
+	socket in priority 0 ptype main 
 west #
  ../bin/check-for-core.sh
 west #

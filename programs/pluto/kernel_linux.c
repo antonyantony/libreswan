@@ -36,7 +36,6 @@
 
 #include <linux/if_addr.h>
 
-#include <libreswan.h>
 
 #include "sysdep.h"
 #include "socketwrapper.h"
@@ -50,7 +49,7 @@
 #include "state.h"
 #include "timer.h"
 #include "kernel.h"
-#include "kernel_netlink.h"
+#include "kernel_xfrm.h"
 #include "kernel_pfkey.h"
 #include "kernel_nokernel.h"
 #include "packet.h"
@@ -60,6 +59,7 @@
 #include "whack.h"      /* for RC_LOG_SERIOUS */
 #include "keys.h"
 #include "ip_address.h"
+#include "ip_info.h"
 
 #ifdef HAVE_BROKEN_POPEN
 /*
@@ -136,14 +136,12 @@ struct raw_iface *find_raw_ifaces4(void)
 
 	/* bind the socket */
 	{
-		ip_address any;
-
-		happy(anyaddr(AF_INET, &any));
-		setportof(htons(pluto_port), &any);
-		if (bind(master_sock, sockaddrof(&any),
-			 sockaddrlenof(&any)) < 0)
-			EXIT_LOG_ERRNO(errno,
-				       "bind() failed in find_raw_ifaces4()");
+		ip_address any = address_any(&ipv4_info);
+		ip_endpoint any_ep = endpoint(&any, pluto_port);
+		ip_sockaddr any_sa;
+		size_t any_sa_size = endpoint_to_sockaddr(&any_ep, &any_sa);
+		if (bind(master_sock, &any_sa.sa, any_sa_size) < 0)
+			EXIT_LOG_ERRNO(errno, "bind() failed in %s()", __func__);
 	}
 
 	/* a million interfaces is probably the maximum, ever... */
@@ -248,15 +246,9 @@ struct raw_iface *find_raw_ifaces4(void)
 			continue;
 		}
 
-		happy(initaddr((const void *)&rs->sin_addr,
-			       sizeof(struct in_addr),
-			       AF_INET, &ri.addr));
-
-		DBG(DBG_CONTROLMORE, {
-			ipstr_buf b;
-			DBG_log("found %s with address %s",
-				ri.name, ipstr(&ri.addr, &b));
-		});
+		ri.addr = address_from_in_addr(&rs->sin_addr);
+		ipstr_buf b;
+		dbg("found %s with address %s", ri.name, ipstr(&ri.addr, &b));
 		ri.next = rifaces;
 		rifaces = clone_thing(ri, "struct raw_iface");
 	}
@@ -279,10 +271,11 @@ static int cmp_iface(const void *lv, const void *rv)
 	if (i != 0) {
 		return i;
 	}
-	/* loopback=0 < addr=1 < any=2 < ??? */
-#define SCORE(I) (isloopbackaddr(&I->addr) ? 0				\
-		  : isanyaddr(&I->addr) ? 2				\
-		  : 1)
+	/* loopback=0 < addr=1 < any=2 < invalid */
+#define SCORE(I) (address_is_loopback(&I->addr) ? 0			\
+		  : address_is_specified(&I->addr) ? 1			\
+		  : address_is_any(&I->addr) ? 2			\
+		  : 3/*invalid*/)
 	i = SCORE(l) - SCORE(r);
 	if (i != 0) {
 		return i;
@@ -293,18 +286,12 @@ static int cmp_iface(const void *lv, const void *rv)
 	if (i != 0) {
 		return i;
 	}
-	/*
-	 * address
-	 */
+	/* address */
 	i = addrcmp(&l->addr, &r->addr);
 	if (i != 0) {
 		return i;
 	}
-	/* port */
-	i = hportof(&l->addr) - hportof(&r->addr);
-	if (i != 0) {
-		return i;
-	}
+	/* Interface addresses don't have ports. */
 	/* what else */
 	dbg("interface sort not stable or duplicate");
 	return 0;
@@ -414,10 +401,9 @@ struct raw_iface *find_raw_ifaces6(void)
 
 			happy(ttoaddr_num(sb, 0, AF_INET6, &ri.addr));
 
-			if (!isunspecaddr(&ri.addr)) {
-				DBG(DBG_CONTROL,
-				    DBG_log("found %s with address %s",
-					    ri.name, sb));
+			if (address_is_specified(&ri.addr)) {
+				dbg("found %s with address %s",
+				    ri.name, sb);
 				ri.next = rifaces;
 				rifaces = clone_thing(ri, "struct raw_iface");
 			}

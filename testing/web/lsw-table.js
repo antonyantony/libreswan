@@ -14,23 +14,23 @@
 // This is effectively a leaf walk.
 
 function lsw_table_headers(recursion, start, table, headers) {
-    var this_row = 0
+    let this_row = 0
     if (table.length) {
 	table.span = 0
-	table.forEach(function(column) {
+	for (const column of table) {
 	    // Keep track of the number of rows below this one.
-	    var rows_below = lsw_table_headers(recursion + 1,
+	    let rows_below = lsw_table_headers(recursion + 1,
 					       start + table.span,
 					       column, headers)
 	    // If this column is short a few rows, add them.
-	    for (var row = rows_below; row < this_row; row++) {
+	    for (let row = rows_below; row < this_row; row++) {
 		headers[row].push({
 		    span: column.span
 		})
 	    }
 	    this_row = Math.max(this_row, rows_below)
 	    table.span += column.span
-	})
+	}
 	// If this row is missing, add it with skips to the left; but
 	// not the very first row as that has no title.
 	if (recursion > 0) {
@@ -58,8 +58,8 @@ function lsw_table(table) {
 
     // Fuge up "table.column" inheritance
 
-    table.headers.forEach(function(header) {
-	header.forEach(function(column) {
+    for (const header of table.headers) {
+	for (const column of header) {
 	    if (column.title === undefined) {
 		column.title = ""
 	    }
@@ -74,8 +74,8 @@ function lsw_table(table) {
 	    }
 	    if (column.sort === undefined) {
 		column.sort = function(l, r) {
-		    var lv = column.value(l)
-		    var rv = column.value(r)
+		    let lv = column.value(l)
+		    let rv = column.value(r)
 		    if (lv < rv) {
 			return -1
 		    } else if (lv > rv) {
@@ -85,8 +85,8 @@ function lsw_table(table) {
 		    }
 		}
 	    }
-	})
-    })
+	}
+    }
 
     // Fudge up "table.sort" inheritance.
 
@@ -109,23 +109,23 @@ function lsw_table(table) {
     // Compute the table rows from the table.data
 
     table.rows = []
-    table.data.forEach(function(data) {
-	var row = {
+    for (const data of table.data) {
+	let row = {
 	    data: data,
 	    // XXX: selected used to rebuild the table after a sort.
 	    selected: false,
 	    table: table,
 	    columns: []
 	}
-	table.headers[table.headers.length - 1].forEach(function(column) {
+	for (const column of table.headers[table.headers.length - 1]) {
 	    row.columns.push({
 		text: column.html(data),
 		row: row,
 		column: column,
 	    })
-	})
+	}
 	table.rows.push(row)
-    })
+    }
 
     // Create the table; and save the table wide data.
 
@@ -156,13 +156,13 @@ function lsw_table(table) {
 	    return column && column.title || ""
 	})
 	.each(function(column) {
-	    var styles = column.style && column.style.header
+	    let styles = column.style && column.style.header
 	    if (styles) {
-		var selection = d3.select(this)
-		Object.keys(styles).forEach(function(name) {
+		let selection = d3.select(this)
+		for (const name of Object.keys(styles)) {
 		    value = styles[name]
 		    selection.style(name, value)
-		})
+		}
 	    }
 	})
 	.attr("colspan", function(column) {
@@ -203,13 +203,13 @@ function lsw_table_body(table) {
     d3.selectAll("tbody." + table.id)
 	.remove()
 
-    var tr = d3.select("table." + table.id)
+    let tr = d3.select("table." + table.id)
 	.append("tbody").attr("class", table.id)
 	.selectAll("tr")
 	.data(function(table) {
 	    return table.rows
 	})
-        // add the table row
+	// add the table row
 	.enter()
 	.append("tr")
 	.style("background-color", function(row) {
@@ -217,10 +217,11 @@ function lsw_table_body(table) {
 	})
 	.on("click", function(row) {
 	    if (row.table.select.row) {
-		lsw_table_select_row(table.id, row.data)
+		console.log("click row", row.data)
+		lsw_table_select_rows(table.id, new Set([row.data]))
 	    }
- 	})
-        // add the row data
+	})
+	// add the row data
 	.selectAll("td")
 	.data(function(row) {
 	    return row.columns
@@ -231,28 +232,31 @@ function lsw_table_body(table) {
 	    return element.text
 	})
 	.each(function(element, index) {
-	    var styles = element.column.style && element.column.style.body
+	    let styles = element.column.style && element.column.style.body
 	    if (styles) {
-		var selection = d3.select(this)
-		Object.keys(styles).forEach(function(name) {
+		let selection = d3.select(this)
+		for (const name of Object.keys(styles)) {
 		    value = styles[name]
 		    selection.style(name, value)
-		})
+		}
 	    }
 	})
 }
 
-function lsw_table_select_row(table_id, selection) {
+function lsw_table_select_rows(table_id, selections) {
+
+    console.log("selecting rows", selections)
+
     // toggle SELECTION's "background"
     d3.selectAll("tbody." + table_id + " > tr")
 	.filter(function(row) {
-	    return row.data == selection
+	    return selections.has(row.data)
 	})
 	.style("background-color", function(row) {
 	    // XXX: row.selected still used when rebuilding the table
 	    // after a sort.
 	    row.selected = !row.selected
-	    // var background = d3.select(this).style("background-color")
+	    // let background = d3.select(this).style("background-color")
 	    //
 	    // lightgrey comes back as some rgb value, chrome and
 	    // firefox have different defaults.  Perhaps a style?
@@ -262,10 +266,11 @@ function lsw_table_select_row(table_id, selection) {
 		    ? "lightgrey"
 		    : "transparent")
 	})
-    // select all with non-blank backgrounds
-    var data = d3.selectAll("tbody." + table_id + " > tr")
+
+    // select rows all with non-blank (i.e., selected) backgrounds
+    let data = d3.selectAll("tbody." + table_id + " > tr")
 	.filter(function(row) {
-	    // var background = d3.select(this).style("background-color")
+	    // let background = d3.select(this).style("background-color")
 	    // return background != "" && background != "transparent"
 	    return row.selected
 	})
@@ -275,6 +280,6 @@ function lsw_table_select_row(table_id, selection) {
 	})
 
     // now tell the client found in the table's data.
-    var table = d3.select("table." + table_id).data()[0]
+    let table = d3.select("table." + table_id).data()[0]
     table.select.row(data)
 }

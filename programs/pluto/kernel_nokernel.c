@@ -49,18 +49,17 @@ static bool nokernel_raw_eroute(const ip_address *this_host UNUSED,
 			       const ip_subnet *that_client UNUSED,
 			       ipsec_spi_t cur_spi UNUSED,
 			       ipsec_spi_t new_spi UNUSED,
-			       int sa_proto UNUSED,
+			       const struct ip_protocol *unused_sa_proto UNUSED,
 			       unsigned int transport_proto UNUSED,
 			       unsigned int satype UNUSED,
 			       const struct pfkey_proto_info *proto_info UNUSED,
 			       deltatime_t use_lifetime UNUSED,
 			       uint32_t sa_priority UNUSED,
 			       const struct sa_marks *sa_marks UNUSED,
+			       const uint32_t xfrm_if_id UNUSED,
 			       unsigned int op UNUSED,
-			       const char *text_said UNUSED
-#ifdef HAVE_LABELED_IPSEC
-			       , const char *policy_label UNUSED
-#endif
+			       const char *text_said UNUSED,
+			       const char *policy_label UNUSED
 			       )
 {
 	return TRUE;

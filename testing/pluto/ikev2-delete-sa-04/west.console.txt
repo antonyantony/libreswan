@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 west #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
@@ -46,8 +46,7 @@ west #
 west #
  # confirm the revive conn code triggered
 west #
- hostname | grep east > /dev/null && grep EVENT_REVIVE_CONNS /tmp/pluto.log | sed "s/@.*$//"
-west #
+ hostname | grep east > /dev/null && grep -e 'but must remain up per local policy' -e '^[^|].*EVENT_REVIVE_CONNS' /tmp/pluto.log
 west #
  ../bin/check-for-core.sh
 west #

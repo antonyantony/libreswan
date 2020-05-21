@@ -19,7 +19,7 @@
 #include "ike_alg_encrypt.h"
 #include "ike_alg_integ.h"
 #include "ike_alg_dh.h"
-#include "ike_alg_dh_nss_modp_ops.h"
+#include "ike_alg_dh_ops.h"
 #include "sadb.h"
 
 /*
@@ -33,7 +33,7 @@ const struct encrypt_desc ike_alg_encrypt_null =
 	.common = {
 		.name = "null",
 		.fqn = "NULL",
-		.names = { "null", },
+		.names = "null",
 		.algo_type = IKE_ALG_ENCRYPT,
 		.id = {
 			[IKEv1_OAKLEY_ID] = -1,
@@ -63,7 +63,7 @@ const struct integ_desc ike_alg_integ_none = {
 	.common = {
 		.name = "none",
 		.fqn = "NONE",
-		.names = { "none", "null", },
+		.names = "none,null",
 		.algo_type = IKE_ALG_INTEG,
 		.id = {
 			/*
@@ -104,11 +104,11 @@ const struct integ_desc ike_alg_integ_none = {
 /*
  * Blame RFC7296!
  */
-const struct oakley_group_desc ike_alg_dh_none = {
+const struct dh_desc ike_alg_dh_none = {
 	.common = {
 		.name = "NONE",
 		.fqn = "NONE",
-		.names = { "none", "null", "dh0", },
+		.names = "none,null,dh0",
 		.algo_type = IKE_ALG_DH,
 		.id = {
 			[IKEv1_OAKLEY_ID] = -1,

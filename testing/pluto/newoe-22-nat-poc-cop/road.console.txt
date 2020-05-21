@@ -5,7 +5,7 @@ road #
  echo "192.1.2.0/24"  >> /etc/ipsec.d/policies/private-or-clear
 road #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 road #
  /testing/pluto/bin/wait-until-pluto-started
 road #
@@ -40,7 +40,6 @@ road #
 000 192.1.3.209/32:0 -0-> 192.1.2.23/32:0 => %pass 0    oe-failing
 road #
  killall ip > /dev/null 2> /dev/null
-[1]+  Terminated              ip -s xfrm monitor > /tmp/xfrm-monitor.out
 road #
  cp /tmp/xfrm-monitor.out OUTPUT/road.xfrm-monitor.txt
 road #
@@ -66,29 +65,29 @@ src 192.1.3.209 dst 192.1.2.23
 	sel src 192.1.3.209/32 dst 192.1.2.23/32 proto icmp type 8 code 0 dev eth0 
 XFRM policy:
 src 192.1.2.253/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.2.253/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.2.253/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.3.253/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.3.254/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.253/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.3.253/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.3.254/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.3.254/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
+src 192.1.3.209/32 dst 192.1.2.23/32
+	dir out priority 4177854 ptype main
 src 192.1.3.209/32 dst 192.1.2.0/24
-	dir out priority 2088935 ptype main
+	dir out priority 4177870 ptype main
 	tmpl src 0.0.0.0 dst 0.0.0.0
 		proto esp reqid REQID mode transport
-src 192.1.3.209/32 dst 192.1.2.23/32
-	dir out priority 2088935 ptype main
 XFRM done
 IPSEC mangle TABLES
 NEW_IPSEC_CONN mangle TABLES
@@ -102,7 +101,6 @@ road #
  # a tunnel should have established
 road #
  grep "negotiated connection" /tmp/pluto.log
-road #
 road #
  ../bin/check-for-core.sh
 road #

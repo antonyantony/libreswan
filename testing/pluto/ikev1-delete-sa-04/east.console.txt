@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -24,7 +24,6 @@ east #
 east #
  ipsec status |grep EVENT_RETRANSMIT | sed "s/EVENT_RETRANSMIT in .*$/EVENT_RETRANSMIT in .../"
 000 #5: "west-east-auto":500 STATE_MAIN_I1 (sent MI1, expecting MR1); EVENT_RETRANSMIT in ...
-east #
 east #
  ../bin/check-for-core.sh
 east #

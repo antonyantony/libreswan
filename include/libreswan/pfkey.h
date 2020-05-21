@@ -19,6 +19,7 @@
 
 #include "pfkeyv2.h"
 #include <linux/version.h>
+#include "libreswan.h" /* for IPsecSAref_t */
 #ifdef __KERNEL__
 extern struct proto_ops pfkey_proto_ops;
 typedef struct sock pfkey_sock;
@@ -127,8 +128,8 @@ extern int pfkey_expire(struct ipsec_sa *, int);
 extern int pfkey_acquire(struct ipsec_sa *);
 #endif /* __KERNEL__ */
 
-extern uint8_t satype2proto(uint8_t satype);
-extern uint8_t proto2satype(uint8_t proto);
+extern const struct ip_protocol *satype2proto(uint8_t satype);
+extern uint8_t proto2satype(const struct ip_protocol *proto);
 extern char *satype2name(uint8_t satype);
 
 struct key_opt {

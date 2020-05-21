@@ -13,78 +13,145 @@
  * for more details.
  */
 
-#include <unistd.h>
+#include <unistd.h>	/* for close() */
 #include <errno.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <fcntl.h>
 
-#include "lswlog.h"
 #include "fd.h"
+#include "lswalloc.h"
+#include "refcnt.h"
 
-/*
- * UNIX FDs are always non-negative
- */
-const fd_t null_fd = {
-	.fd = -1,
+struct fd {
+#define FD_MAGIC 0xf00d1e
+	unsigned magic;
+	int fd;
+	refcnt_t refcnt;
 };
 
-bool fd_p(fd_t fd)
+struct fd *dup_any_fd(struct fd *fd, where_t where)
 {
-	return fd.fd >= 0;
+	pexpect(fd == NULL || fd->magic == FD_MAGIC);
+	ref_add(fd, where);
+	return fd;
 }
 
-fd_t new_fd(int fd, const char *code, const char *func, const char *file, unsigned long line)
-
+static void free_fd(struct fd **fdp, where_t where)
 {
-	fd_t fdt = { .fd = fd, };
-	int e = errno; /* don't loose 'errno' */
-	bool error = fd < 0 && e != 0; /* guess */
-	LSWDBGP(DBG_CONTROL, buf) {
-		lswlogf(buf, "%s -> "PRI_FD, code, PRI_fd(fdt));
-		if (error) {
-			lswlog_errno(buf, e);
-		}
-		lswlog_source_line(buf, func, file, line);
+	struct fd *fd = *fdp;
+	*fdp = NULL;
+	pexpect(fd->magic == FD_MAGIC);
+	if (close(fd->fd) != 0) {
+		dbg("freeref "PRI_FD" close(%d) failed: "PRI_ERRNO" "PRI_WHERE"",
+		    pri_fd(fd), fd->fd, pri_errno(errno), pri_where(where));
+	} else {
+		dbg("freeref "PRI_FD" "PRI_WHERE"",
+		    pri_fd(fd), pri_where(where));
 	}
-	errno = e;
+	fd->magic = ~FD_MAGIC;
+	pfree(fd);
+}
+
+void close_any_fd(struct fd **fdp, where_t where)
+{
+	ref_delete(fdp, free_fd, where);
+}
+
+void fd_leak(struct fd **fdp, where_t where)
+{
+	dbg("leaking "PRI_FD"'s FD; will be closed when pluto exits "PRI_WHERE"",
+	    pri_fd(*fdp), pri_where(where));
+	/* leave the old fd hanging */
+	(*fdp)->fd = dup((*fdp)->fd);
+	ref_delete(fdp, free_fd, where);
+}
+
+ssize_t fd_sendmsg(struct fd *fd, const struct msghdr *msg,
+		   int flags, where_t where)
+{
+	if (fd == NULL) {
+		/*
+		 * XXX: passert() / pexpect() / ... would be recursive
+		 * - they write to whack using fd_sendsmg(), fake it.
+		 */
+		LSWBUF(buf) {
+			jam(buf, "EXPECTATION FAILED: fd is NULL "PRI_WHERE"",
+			    pri_where(where));
+			log_jambuf(LOG_STREAM, null_fd, buf);
+		}
+		return -1;
+	}
+	if (fd->magic != FD_MAGIC) {
+		/*
+		 * XXX: passert() / pexpect() / ... would be recursive
+		 * - they write to whack using fd_sendmsg(), fake it.
+		 */
+		LSWBUF(buf) {
+			jam(buf, "EXPECTATION FAILED: fd is not magic "PRI_WHERE"",
+			    pri_where(where));
+			log_jambuf(LOG_STREAM, null_fd, buf);
+		}
+		return -1;
+	}
+	return sendmsg(fd->fd, msg, flags);
+}
+
+struct fd *fd_accept(int socket, where_t where)
+{
+	struct sockaddr_un addr;
+	socklen_t addrlen = sizeof(addr);
+
+	int fd = accept(socket, (struct sockaddr *)&addr, &addrlen);
+	if (fd < 0) {
+		LOG_ERRNO(errno, "accept() failed in "PRI_WHERE"",
+			  pri_where(where));
+		return NULL;
+	}
+
+	if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
+		LOG_ERRNO(errno, "failed to set CLOEXEC in "PRI_WHERE"",
+			  pri_where(where));
+		close(fd);
+		return NULL;
+	}
+
+	struct fd *fdt = alloc_thing(struct fd, where.func);
+	fdt->fd = fd;
+	fdt->magic = FD_MAGIC;
+	ref_init(fdt, where);
+	dbg("%s: new "PRI_FD" "PRI_WHERE"",
+	    __func__, pri_fd(fdt), pri_where(where));
 	return fdt;
 }
 
-fd_t dup_any_fd(fd_t fd, const char *func, const char *file, unsigned long line)
+ssize_t fd_read(struct fd *fd, void *buf, size_t nbytes, where_t where)
 {
-	fd_t nfd;
-	bool error;
-	if (fd_p(fd)) {
-		nfd.fd = dup(fd.fd);
-		error = nfd.fd < 0;
-	} else {
-		nfd = null_fd;
-		error = false;
+	if (fd == NULL) {
+		log_pexpect(where, "null "PRI_FD"", pri_fd(fd));
+		return -1;
 	}
-	int e = errno; /* don't loose 'errno' */
-	LSWDBGP(DBG_CONTROL, buf) {
-		lswlogf(buf, "dup_any("PRI_FD") -> "PRI_FD,
-			PRI_fd(fd), PRI_fd(nfd));
-		if (error) {
-			lswlog_errno(buf, e);
-		}
-		lswlog_source_line(buf, func, file, line);
+	if (fd->magic != FD_MAGIC) {
+		log_pexpect(where, "wrong magic for "PRI_FD"", pri_fd(fd));
+		return -1;
 	}
-	errno = e;
-	return nfd;
+	return read(fd->fd, buf, nbytes);
 }
 
-void close_any_fd(fd_t *fd, const char *func, const char *file, unsigned long line)
+bool fd_p(struct fd *fd)
 {
-	if (fd_p(*fd)) {
-		bool error = (close(fd->fd) != 0);
-		int e = errno; /* don't loose 'errno' */
-		LSWDBGP(DBG_CONTROL, buf) {
-			lswlogf(buf, "close_any("PRI_FD")", PRI_fd(*fd));
-			if (error) {
-				lswlog_errno(buf, e);
-			}
-			lswlog_source_line(buf, func, file, line);
-		}
-		errno = e;
-		*fd = null_fd;
+	if (fd == NULL) {
+		return false;
 	}
+	if (fd->magic != FD_MAGIC) {
+		log_pexpect(HERE, "wrong magic for "PRI_FD"", pri_fd(fd));
+		return false;
+	}
+	return true;
+}
+
+bool same_fd(struct fd *l, struct fd *r)
+{
+	return fd_p(l) && fd_p(r) && l == r;
 }

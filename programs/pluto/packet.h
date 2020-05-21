@@ -8,7 +8,7 @@
  * Copyright (C) 2011-2012 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2012-2013 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 Wolfgang Nothdurft <wolfgang@linogate.de>
- * Copyright (C) 2018 Andrew Cagney
+ * Copyright (C) 2018-2019 Andrew Cagney
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -26,6 +26,10 @@
 
 #include "lswcdefs.h"
 #include "chunk.h"
+#include "shunk.h"
+#include "ip_address.h"
+
+struct ip_info;
 
 /* a struct_desc describes a structure for the struct I/O routines.
  * This requires arrays of field_desc values to describe struct fields.
@@ -57,7 +61,7 @@ enum field_type {
 
 typedef const struct {
 	enum field_type field_type;
-	int size;		/* size, in bytes, of field */
+	size_t size;		/* size, in bytes, of field */
 	const char *name;
 	/*
 	 * cheap union:
@@ -93,7 +97,16 @@ struct fixup {
  *
  * Note: it is safe to copy a PBS with no children because a PBS
  * is only pointed to by its children.  This is done in out_struct().
+ *
+ * XXX: packet_byte_stream should be split into 'struct pbs_{in,out}':
+ *
+ * - pbs_in's underlying structure is read-only (shunk_t?)
+ *
+ * - pbs_out's underlying structure is read-write (chunk_t?)
+ *
+ * - half of packet_byte_stream is pbs_out specific
  */
+
 struct packet_byte_stream {
 	struct packet_byte_stream *container;	/* PBS of which we are part */
 	struct_desc *desc;
@@ -163,18 +176,29 @@ extern const pb_stream empty_pbs;
  *	pbs_offset is current size of stream.
  *	pbs_room is maximum size allowed.
  *	pbs_left is amount of space remaining
+ *
+ * XXX: How can an input pbs have room()?
  */
 #define pbs_ok(PBS) ((PBS)->start != NULL)
 #define pbs_offset(pbs) ((size_t)((pbs)->cur - (pbs)->start))
 #define pbs_room(pbs) ((size_t)((pbs)->roof - (pbs)->start))
 #define pbs_left(pbs) ((size_t)((pbs)->roof - (pbs)->cur))
 
+#define DBG_dump_pbs(pbs) DBG_dump((pbs)->name, (pbs)->start, pbs_offset(pbs))
+
 /*
- * Map/clone the current contents (i.e., everything written so far)
- * [start..cur) of an output PBS as a chunk.
+ * Input PBS
  */
-extern chunk_t same_out_pbs_as_chunk(pb_stream *pbs);
-extern chunk_t clone_out_pbs_as_chunk(pb_stream *pbs, const char *name);
+
+#define pbs_in packet_byte_stream
+
+/*
+ * Initializers; point PBS at a pre-allocated (or static) buffer.
+ *
+ * XXX: should the buffer instead be allocated as part of the PBS?
+ */
+extern void init_pbs(pb_stream *pbs, uint8_t *start, size_t len,
+		     const char *name);
 
 /*
  * Map an input PBS onto CHUNK.
@@ -185,15 +209,23 @@ extern pb_stream same_chunk_as_in_pbs(chunk_t chunk, const char *name);
  * Map/Clone the entire contents [start..pbs_room()) of an input PBS
  * as a chunk.
  */
-extern chunk_t same_in_pbs_as_chunk(pb_stream *pbs);
-extern chunk_t clone_in_pbs_as_chunk(pb_stream *pbs, const char *name);
+extern shunk_t pbs_in_as_shunk(pb_stream *pbs);
 
 /*
  * Map/Clone the remaining contents [cur..pbs_left()) of an input PBS
  * as a chunk.
  */
-extern chunk_t same_in_pbs_left_as_chunk(pb_stream *pbs);
-extern chunk_t clone_in_pbs_left_as_chunk(pb_stream *pbs, const char *name);
+extern shunk_t pbs_in_left_as_shunk(const pb_stream *pbs);
+
+extern bool in_struct(void *struct_ptr, struct_desc *sd,
+		      pb_stream *ins, pb_stream *obj_pbs) MUST_USE_RESULT;
+extern bool in_raw(void *bytes, size_t len, pb_stream *ins, const char *name) MUST_USE_RESULT;
+
+/*
+ * Output PBS
+ */
+
+#define pbs_out packet_byte_stream
 
 /*
  * Initializers; point PBS at a pre-allocated (or static) buffer.
@@ -203,16 +235,18 @@ extern chunk_t clone_in_pbs_left_as_chunk(pb_stream *pbs, const char *name);
  *
  * XXX: should the buffer instead be allocated as part of the PBS?
  */
-extern void init_pbs(pb_stream *pbs, uint8_t *start, size_t len,
-		     const char *name);
 extern void init_out_pbs(pb_stream *pbs, uint8_t *start, size_t len,
 			 const char *name);
 extern pb_stream open_out_pbs(const char *name, uint8_t *buffer,
 			      size_t sizeof_buffer);
 
-extern bool in_struct(void *struct_ptr, struct_desc *sd,
-		      pb_stream *ins, pb_stream *obj_pbs) MUST_USE_RESULT;
-extern bool in_raw(void *bytes, size_t len, pb_stream *ins, const char *name) MUST_USE_RESULT;
+/*
+ * Map/clone the current contents (i.e., everything written so far)
+ * [start..cur) of an output PBS as a chunk.
+ */
+
+extern chunk_t same_out_pbs_as_chunk(pb_stream *pbs);
+extern chunk_t clone_out_pbs_as_chunk(pb_stream *pbs, const char *name);
 
 extern bool out_struct(const void *struct_ptr, struct_desc *sd,
 		       pb_stream *outs, pb_stream *obj_pbs) MUST_USE_RESULT;
@@ -234,7 +268,6 @@ extern bool out_raw(const void *bytes, size_t len, pb_stream *outs,
 
 extern void close_output_pbs(pb_stream *pbs);
 
-#define DBG_dump_pbs(pbs) DBG_dump((pbs)->name, (pbs)->start, pbs_offset(pbs))
 
 /* ISAKMP Header: for all messages
  * layout from RFC 2408 "ISAKMP" section 3.1
@@ -293,6 +326,8 @@ extern void close_output_pbs(pb_stream *pbs);
 #include "isakmp_hdr.h"
 
 extern struct_desc isakmp_hdr_desc;
+/* treat length as raw */
+extern struct_desc raw_isakmp_hdr_desc;
 
 /* Generic portion of all ISAKMP payloads.
  * layout from RFC 2408 "ISAKMP" section 3.2
@@ -807,53 +842,6 @@ struct isakmp_ikefrag {
 extern struct_desc isakmp_ikefrag_desc;
 
 /*
- * Maximum data (inluding IKE HDR) allowed in a packet.
- *
- * v1 fragmentation is non-IETF magic voodoo we need to consider for interop:
- * - www.cisco.com/en/US/docs/ios/sec_secure_connectivity/configuration/guide/sec_fragment_ike_pack.html
- * - www.cisco.com/en/US/docs/ios-xml/ios/sec_conn_ikevpn/configuration/15-mt/sec-fragment-ike-pack.pdf
- * - msdn.microsoft.com/en-us/library/cc233452.aspx
- * - iOS/Apple racoon source ipsec-164.9 at www.opensource.apple.com (frak length 1280)
- * - stock racoon source (frak length 552)
- *
- * v2 fragmentation is RFC7383.
- *
- * What is a sane and safe value? iOS/Apple uses 1280, stock racoon uses 552.
- * Why is there no RFC to guide interop people here :/
- *
- * UDP packet overhead: the number of bytes of header and pseudo header
- * - v4 UDP: 20 source addr, dest addr, protocol, length, source port, destination port, length, checksum
- * - v6 UDP: 48 (similar)
- *
- * Other considerations:
- * - optional non-ESP Marker: 4 NON_ESP_MARKER_SIZE
- * - ISAKMP header
- * - encryption representation overhead
- */
-#define MIN_MAX_UDP_DATA_v4	(576 - 20)	/* this length must work */
-#define MIN_MAX_UDP_DATA_v6	(1280 - 48)	/* this length must work */
-
-// #define OVERHEAD_NON_FRAG_v1	(2*4 + 16)	/* ??? what is this number? */
-// #define OVERHEAD_NON_FRAG_v2	(2*4 + 16)	/* ??? what is this number? */
-
-/*
- * ??? perhaps all current uses are not about fragment size, but how large
- * the content of a packet (ie. excluding UDP headers) can be allowed before
- * fragmentation must be considered.
- */
-
-#define ISAKMP_V1_FRAG_OVERHEAD_IPv4	(2*4 + 16)	/* ??? */
-#define ISAKMP_V1_FRAG_MAXLEN_IPv4	(MIN_MAX_UDP_DATA_v4 - ISAKMP_V1_FRAG_OVERHEAD_IPv4)
-#define ISAKMP_V1_FRAG_OVERHEAD_IPv6	40	/* ??? */
-#define ISAKMP_V1_FRAG_MAXLEN_IPv6	(MIN_MAX_UDP_DATA_v6 - ISAKMP_V1_FRAG_OVERHEAD_IPv6)
-
-/* ??? it is unlikely that the v2 numbers should match the v1 numbers */
-#define ISAKMP_V2_FRAG_OVERHEAD_IPv4	(2*4 + 16)	/* ??? !!! */
-#define ISAKMP_V2_FRAG_MAXLEN_IPv4	(MIN_MAX_UDP_DATA_v4 - ISAKMP_V2_FRAG_OVERHEAD_IPv4)
-#define ISAKMP_V2_FRAG_OVERHEAD_IPv6	40	/* ??? !!! */
-#define ISAKMP_V2_FRAG_MAXLEN_IPv6	(MIN_MAX_UDP_DATA_v6 - ISAKMP_V1_FRAG_OVERHEAD_IPv6)
-
-/*
  * This a really the least significant bit in the flags octet, but it's the
  * only flag at the moment. Should really change from ft_nat to ft_set so we
  * can do proper bit naming/setting
@@ -958,7 +946,7 @@ extern struct_desc ikev2_id_i_desc;
 extern struct_desc ikev2_id_r_desc;
 
 /* rfc4306, section 3.8 */
-struct ikev2_a {
+struct ikev2_auth {
 	uint8_t isaa_np;		/* Next payload */
 	uint8_t isaa_critical;
 	uint16_t isaa_length;		/* Payload length */
@@ -966,7 +954,7 @@ struct ikev2_a {
 	uint8_t isaa_res1;
 	uint16_t isaa_res2;
 };
-extern struct_desc ikev2_a_desc;
+extern struct_desc ikev2_auth_desc;
 
 /* rfc4306 section 3.6 CERT Payload */
 struct ikev2_cert {
@@ -1138,7 +1126,7 @@ union payload {
 	struct ikev2_prop v2prop;
 	struct ikev2_sa v2sa;
 	struct ikev2_id v2id;
-	struct ikev2_a v2a;
+	struct ikev2_auth v2auth;
 	struct ikev2_ts v2ts;
 	struct ikev2_cert v2cert;
 	struct ikev2_certreq v2certreq;
@@ -1167,9 +1155,7 @@ struct ikev2_notify_ipcomp_data {
 };
 extern struct_desc ikev2notify_ipcomp_data_desc;
 
-#ifdef HAVE_LABELED_IPSEC
 extern struct_desc sec_ctx_desc;
-#endif
 
 /*
  * Nasty evil global packet buffer.
@@ -1182,5 +1168,17 @@ struct pbs_reply_backup {
 	pb_stream stream;
 	uint8_t *buffer;
 };
+
+/*
+ * Utilities:
+ *
+ * XXX: is there a better place to be adding these in functions that
+ * build on the primitives?
+ */
+
+bool pbs_in_address(ip_address *address, const struct ip_info *af,
+		    struct pbs_in *input_pbs,
+		    const char *WHAT) MUST_USE_RESULT;
+bool pbs_out_address(const ip_address *address, struct pbs_out *output_pbs, const char *what);
 
 #endif /* _PACKET_H */

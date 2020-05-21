@@ -28,7 +28,7 @@ WEB_UTILSDIR ?= testing/utils
 WEB_SOURCEDIR ?= testing/web
 WEB_REPODIR ?= .
 # these are verbose so multiple invocations can be spotted
-WEB_SUBDIR ?= $(shell set -x ; $(WEB_SOURCEDIR)/gime-git-description.sh $(WEB_REPODIR))
+WEB_SUBDIR ?= $(shell $(WEB_SOURCEDIR)/gime-git-description.sh $(WEB_REPODIR))
 
 # shortcuts to use when web is enabled, set up to evaluate once as
 # they can be a little expensive.  These make variable can only be
@@ -36,7 +36,7 @@ WEB_SUBDIR ?= $(shell set -x ; $(WEB_SOURCEDIR)/gime-git-description.sh $(WEB_RE
 
 ifdef WEB_ENABLED
 ifndef WEB_HASH
-WEB_HASH := $(shell set -x ; cd $(WEB_REPODIR) ; git show --no-patch --format=%H HEAD)
+WEB_HASH := $(shell cd $(WEB_REPODIR) ; git show --no-patch --format=%H HEAD)
 endif
 ifndef WEB_RESULTSDIR
 WEB_RESULTSDIR := $(WEB_SUMMARYDIR)/$(WEB_SUBDIR)
@@ -46,6 +46,9 @@ WEB_SOURCES := $(wildcard $(addprefix $(WEB_SOURCEDIR)/, *.css *.js *.html))
 endif
 ifndef WEB_TIME
 WEB_TIME := $(shell $(WEB_SOURCEDIR)/now.sh)
+endif
+ifndef WEB_TESTSDIR
+WEB_TESTSDIR := $(WEB_SUMMARYDIR)/tests
 endif
 endif
 
@@ -73,10 +76,12 @@ $(WEB_SUMMARYDIR):
 # directory, do a full update so that all the previous runs are
 # included.
 
-.PHONY: web-test-prep web-page web
+.PHONY: web-test-prep web-test-post web-page web
 web-test-prep:
+web-test-post:
 ifdef WEB_ENABLED
-web-test-prep: web-results-html web-summarydir
+web-test-prep: web-results-html web-summarydir web-testsdir
+web-test-post: web-tests-json
 endif
 
 #
@@ -107,6 +112,22 @@ web-summarydir:
 web-resultsdir:
 
 #
+# Create the tests directory
+#
+
+ifdef WEB_ENABLED
+
+web-testsdir: | $(WEB_TESTSDIR)
+$(WEB_TESTSDIR):
+	mkdir $@
+
+.PHONY:
+web-tests-json:
+	$(WEB_SOURCEDIR)/json-tests.sh $(WEB_REPODIR) $(WEB_TESTSDIR) $(WEB_RESULTSDIR)
+
+endif
+
+#
 # Create or update just the summary web page.
 #
 # This is a cheap short-cut that, unlike "web", doesn't update the
@@ -118,24 +139,31 @@ ifdef WEB_ENABLED
 .PHONY: web-summary-html
 web-site web-summarydir: web-summary-html
 web-summary-html: $(WEB_SUMMARYDIR)/index.html
-$(WEB_SUMMARYDIR)/index.html: $(WEB_SOURCES) | $(WEB_SUMMARYDIR)
-	cp $(WEB_SOURCES) $(WEB_SUMMARYDIR)
+$(WEB_SUMMARYDIR)/index.html: $(WEB_SOURCES) $(WEB_SUMMARYDIR)/tsconfig.json | $(WEB_SUMMARYDIR)
+	tsc --project $(WEB_SUMMARYDIR)/tsconfig.json
+	cp $(filter-out %.js, $(WEB_SOURCES)) $(WEB_SUMMARYDIR)
 	cp $(WEB_SOURCEDIR)/summary.html $(WEB_SUMMARYDIR)/index.html
 
 endif
 
 #
-# Update the pooled summaries from all the test runs
+# Update the pooled summary (summaries.json) of all the test runs
 #
+# Note that $(WEB_SUMMARYDIR) may be a soft-link.
+#
+# Because the number of summaries can get large a FIND and not a GLOB
+# is used to generate the list.
 
 ifdef WEB_ENABLED
 
 .PHONY: web-summaries-json
 web-site web-summarydir web-summaries-json: $(WEB_SUMMARYDIR)/summaries.json
-$(WEB_SUMMARYDIR)/summaries.json: $(wildcard $(WEB_SUMMARYDIR)/*-g*/summary.json) $(WEB_SOURCEDIR)/json-summaries.sh
-	find $(WEB_SUMMARYDIR) \
+$(WEB_SUMMARYDIR)/summaries.json: $(wildcard $(WEB_SUMMARYDIR)/*/summary.json) $(WEB_SOURCEDIR)/json-summaries.sh
+	: -H - follow any $(WEB_SUMMARYDIR) link
+	: -maxdepth 2 - stop before $(WEB_SUMMARYDIR)/*/*/
+	find -H $(WEB_SUMMARYDIR) \
+		-maxdepth 2 \
 		\( -type f -name summary.json -print \) \
-		-o \( -type d -path '$(WEB_SUMMARYDIR)/*/*' -prune \) \
 	| $(WEB_SOURCEDIR)/json-summaries.sh $(WEB_REPODIR) - > $@.tmp
 	mv $@.tmp $@
 
@@ -233,12 +261,14 @@ web-resultsdir: web-results-html web-results-json
 web-results-html: $(WEB_RESULTSDIR)/index.html
 web-results-json: $(WEB_RESULTSDIR)/summary.json
 
-$(WEB_RESULTSDIR)/index.html: $(WEB_SOURCES) | $(WEB_RESULTSDIR)
-	cp $(WEB_SOURCES) $(WEB_RESULTSDIR)
+$(WEB_RESULTSDIR)/index.html: $(WEB_SOURCES) $(WEB_RESULTSDIR)/tsconfig.json | $(WEB_RESULTSDIR)
+	tsc --project $(WEB_RESULTSDIR)/tsconfig.json
+	cp $(filter-out %.js, $(WEB_SOURCES)) $(WEB_RESULTSDIR)
 	cp $(WEB_SOURCEDIR)/results.html $(WEB_RESULTSDIR)/index.html
 
 $(WEB_RESULTSDIR)/summary.json: | $(WEB_RESULTSDIR)
 	$(WEB_UTILSDIR)/kvmresults.py \
+		--exit-ok \
 		--quick \
 		--test-kind '' \
 		--test-status '' \
@@ -247,6 +277,13 @@ $(WEB_RESULTSDIR)/summary.json: | $(WEB_RESULTSDIR)
 		--publish-results $(WEB_RESULTSDIR) \
 		--publish-hash $(WEB_HASH) \
 		testing/pluto
+	mv $@.tmp $@
+
+%/tsconfig.json: $(WEB_SOURCEDIR)/tsconfig.json.in mk/web-targets.mk | %
+	sed -e 's;@@DEST_DIR@@;$(realpath $(dir $@));' \
+	    -e 's;@@SOURCE_DIR@@;$(realpath $(WEB_SOURCEDIR));' \
+	    $(WEB_SOURCEDIR)/tsconfig.json.in \
+	    > $@.tmp
 	mv $@.tmp $@
 
 $(WEB_RESULTSDIR): | $(WEB_SUMMARYDIR)

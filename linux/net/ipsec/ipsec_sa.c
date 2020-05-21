@@ -107,7 +107,7 @@ typedef struct {
 static int ipsec_saref_verify_slot(IPsecSAref_t ref);
 static int ipsec_SArefSubTable_alloc(unsigned table);
 static int ipsec_saref_freelist_init(void);
-static IPsecSAref_t ipsec_SAref_alloc(int *erorr); /* pass in error var by pointer */
+static IPsecSAref_t ipsec_SAref_alloc(int *error); /* pass in error var by pointer */
 
 static int ipsec_SAref_recycle(void)
 {
@@ -452,7 +452,6 @@ void ipsec_sa_untern(struct ipsec_sa *ips)
 			    "ref=%u -> %p but untern'ing %p\n", ref,
 			    IPsecSAref2SA(ref), ips);
 	}
-
 }
 
 int ipsec_sa_intern(struct ipsec_sa *ips)

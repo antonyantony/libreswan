@@ -21,9 +21,10 @@
 #include "packet.h"		/* for pb_stream */
 
 struct msg_digest;
-struct oakley_group_desc;
+struct dh_desc;
 struct ike_sa;
 struct state;
+struct end;
 
 pb_stream open_v2_message(pb_stream *reply,
 			  struct ike_sa *ike, struct msg_digest *md,
@@ -48,7 +49,6 @@ bool close_v2SK_payload(v2SK_payload_t *sk);
 stf_status encrypt_v2SK_payload(v2SK_payload_t *sk);
 
 stf_status record_outbound_v2SK_msg(struct state *msg_sa,
-				    struct msg_digest *md,
 				    pb_stream *msg,
 				    v2SK_payload_t *sk,
 				    const char *what);
@@ -56,5 +56,7 @@ stf_status record_outbound_v2SK_msg(struct state *msg_sa,
 uint8_t build_ikev2_critical(bool impair);
 
 bool ikev2_decrypt_msg(struct state *st, struct msg_digest *md);
+
+struct ikev2_id build_v2_id_payload(const struct end *end, shunk_t *body);
 
 #endif

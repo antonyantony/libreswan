@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 west #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
@@ -43,7 +43,6 @@ west #
  ipsec status |grep west-east |grep STATE_
 000 #1: "west-east-auto2":500 STATE_MAIN_R3 (sent MR3, ISAKMP SA established); EVENT_SA_REPLACE in XXs; newest ISAKMP; lastdpd=-1s(seq in:0 out:0); idle;
 000 #2: "west-east-auto2":500 STATE_QUICK_R2 (IPsec SA established); EVENT_SA_REPLACE in XXs; newest IPSEC; eroute owner; isakmp#1; idle;
-west #
 west #
  ../bin/check-for-core.sh
 west #

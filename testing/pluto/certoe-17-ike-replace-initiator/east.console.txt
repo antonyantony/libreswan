@@ -1,0 +1,21 @@
+/testing/guestbin/swan-prep --x509
+Preparing X.509 files
+east #
+ cp policies/* /etc/ipsec.d/policies/
+east #
+ ipsec start
+Redirecting to: [initsystem]
+east #
+ /testing/pluto/bin/wait-until-pluto-started
+east #
+ # give OE policies time to load
+east #
+ sleep 5
+east #
+ echo "initdone"
+initdone
+east #
+ ../bin/check-for-core.sh
+east #
+ if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
+

@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -12,7 +12,6 @@ east #
 east #
  echo initdone
 initdone
-east #
 east #
  grep "^leak" /tmp/pluto.log
 leak-detective enabled

@@ -39,7 +39,6 @@
 #include "socketwrapper.h"
 #include "lswtool.h"
 #include "lswlog.h"
-
 #include "libreswan/pfkey.h"
 #include "libreswan/pfkeyv2.h"
 #include "pfkey_help.h"
@@ -172,6 +171,7 @@ int debug = 0;
 int main(int argc, char *argv[])
 {
 	tool_init_log(argv[0]);
+
 	/* force pfkey logging */
 	cur_debugging = DBG_BASE;
 
@@ -259,18 +259,11 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (stat("/proc/sys/net/core/xfrm_acq_expires", &sts) == 0) {
-		fprintf(stderr,
-			"%s: XFRM does not support virtual interfaces.\n",
-			progname);
-		exit(1);
-	}
-
 	if (argcount == 1) {
 		int ret = 1;
 		if ((stat("/proc/net/ipsec_tncfg", &sts)) != 0) {
 			fprintf(stderr,
-				"%s: No tncfg - no IPsec support in kernel (are the modules loaded?)\n",
+				"%s: No tncfg - no KLIPS IPsec support in kernel\n",
 				progname);
 		} else {
 			ret = system("cat /proc/net/ipsec_tncfg");

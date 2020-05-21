@@ -10,7 +10,7 @@ west #
  echo "192.1.2.0/24" >> /etc/ipsec.d/policies/private-or-clear
 west #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
@@ -27,7 +27,7 @@ west #
 west #
  ipsec whack --oppohere 192.1.2.45 --oppothere 192.1.2.23
 002 initiate on demand from 192.1.2.45:0 to 192.1.2.23:0 proto=0 because: whack
-1v2 "private-or-clear#192.1.2.0/24"[1] ...192.1.2.23 #1: initiate
+1v2 "private-or-clear#192.1.2.0/24"[1] ...192.1.2.23 #1: initiating IKEv2 IKE SA
 002 "private-or-clear#192.1.2.0/24"[1] ...192.1.2.23 #2: IKE SA authentication request rejected by peer: AUTHENTICATION_FAILED
 000 "private-or-clear#192.1.2.0/24"[1] ...192.1.2.23 #2: scheduling retry attempt 1 of an unlimited number, but releasing whack
 west #
@@ -43,31 +43,31 @@ src 192.1.2.23 dst 192.1.2.45
 	sel src 192.1.2.23/32 dst 192.1.2.45/32 
 XFRM policy:
 src 127.0.0.1/32 dst 192.1.2.45/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 127.0.0.1/32 dst 192.1.2.45/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.2.253/32 dst 192.1.2.45/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.2.253/32 dst 192.1.2.45/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.2.254/32 dst 192.1.2.45/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.2.254/32 dst 192.1.2.45/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.2.45/32 dst 127.0.0.1/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.2.45/32 dst 192.1.2.253/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.2.45/32 dst 192.1.2.254/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.2.45/32 dst 192.1.3.253/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.253/32 dst 192.1.2.45/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.3.253/32 dst 192.1.2.45/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.2.45/32 dst 192.1.2.0/24
-	dir out priority 1564647 ptype main
+	dir out priority 3129294 ptype main
 	tmpl src 0.0.0.0 dst 0.0.0.0
 		proto esp reqid REQID mode transport
 XFRM done
@@ -78,7 +78,6 @@ default via 192.1.2.254 dev eth1
 192.0.1.0/24 dev eth0 proto kernel scope link src 192.0.1.254
 192.0.2.0/24 via 192.1.2.23 dev eth1
 192.1.2.0/24 dev eth1 proto kernel scope link src 192.1.2.45
-192.9.4.0/24 dev eth2 proto kernel scope link src 192.9.4.45
 NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
@@ -91,7 +90,6 @@ north                                                        P,,
 road                                                         P,,  
 signedbyother                                                u,u,u
 west                                                         u,u,u
-west #
 west #
  ../bin/check-for-core.sh
 west #

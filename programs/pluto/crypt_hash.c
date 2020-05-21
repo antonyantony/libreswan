@@ -17,10 +17,10 @@
 
 #include <stdlib.h>
 
-//#include "libreswan.h"
 #include "lswalloc.h"
 #include "lswlog.h"
 #include "ike_alg.h"
+#include "ike_alg_hash_ops.h"
 #include "crypt_hash.h"
 #include "crypt_symkey.h"
 
@@ -48,18 +48,6 @@ struct crypt_hash *crypt_hash_init(const char *name, const struct hash_desc *has
 	return hash;
 }
 
-void crypt_hash_digest_chunk(struct crypt_hash *hash,
-			     const char *name, chunk_t chunk)
-{
-	if (DBGP(DBG_CRYPT)) {
-		DBG_log("%s hash %s digest %s-chunk@%p (length %zu)",
-			hash->name, hash->desc->common.name,
-			name, chunk.ptr, chunk.len);
-		DBG_dump_chunk(NULL, chunk);
-	}
-	hash->desc->hash_ops->digest_bytes(hash->context, name, chunk.ptr, chunk.len);
-}
-
 void crypt_hash_digest_symkey(struct crypt_hash *hash,
 			      const char *name, PK11SymKey *symkey)
 {
@@ -79,7 +67,7 @@ void crypt_hash_digest_byte(struct crypt_hash *hash,
 		DBG_log("%s hash %s digest %s-byte@0x%x (%d)",
 			hash->name, hash->desc->common.name,
 			name, byte, byte);
-		DBG_dump(NULL, &byte, sizeof(byte));
+		DBG_dump_thing(NULL, byte);
 	}
 	hash->desc->hash_ops->digest_bytes(hash->context, name, &byte, 1);
 }
@@ -115,20 +103,20 @@ void crypt_hash_final_bytes(struct crypt_hash **hashp,
 	*hashp = hash = NULL;
 }
 
-chunk_t crypt_hash_final_chunk(struct crypt_hash **hashp)
+struct crypt_mac crypt_hash_final_mac(struct crypt_hash **hashp)
 {
 	struct crypt_hash *hash = *hashp;
-	chunk_t chunk = alloc_chunk(hash->desc->hash_digest_size, hash->name);
-	hash->desc->hash_ops->final_bytes(&hash->context, chunk.ptr, chunk.len);
+	struct crypt_mac output = { .len = hash->desc->hash_digest_size, };
+	passert(output.len <= sizeof(output.ptr/*array*/));
+	hash->desc->hash_ops->final_bytes(&hash->context, output.ptr, output.len);
 	if (DBGP(DBG_CRYPT)) {
-		DBG_log("%s hash %s final chunk@%p (length %zu)",
-			hash->name, hash->desc->common.name,
-			chunk.ptr, chunk.len);
-		DBG_dump_chunk(NULL, chunk);
+		DBG_log("%s hash %s final length %zu",
+			hash->name, hash->desc->common.name, output.len);
+		DBG_dump_hunk(NULL, output);
 	}
 	pfree(*hashp);
 	*hashp = hash = NULL;
-	return chunk;
+	return output;
 }
 
 PK11SymKey *crypt_hash_symkey(const char *name, const struct hash_desc *hash_desc,
@@ -137,6 +125,9 @@ PK11SymKey *crypt_hash_symkey(const char *name, const struct hash_desc *hash_des
 	DBGF(DBG_CRYPT, "%s hash %s %s-key@%p (size %zu)",
 	     name, hash_desc->common.name,
 	     symkey_name, symkey, sizeof_symkey(symkey));
-	return hash_desc->hash_ops->symkey_to_symkey(hash_desc, name,
-						     symkey_name, symkey);
+	struct crypt_hash *hash = crypt_hash_init(name, hash_desc);
+	crypt_hash_digest_symkey(hash, symkey_name, symkey);
+	struct crypt_mac out = crypt_hash_final_mac(&hash);
+	PK11SymKey *key = symkey_from_hunk(name, out);
+	return key;
 }

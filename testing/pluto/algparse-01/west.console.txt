@@ -2,7 +2,7 @@
 west #
  # run the parser tests
 west #
- ../bin/algparse.sh 'ipsec algparse' algparse*.txt
+ ../bin/algparse.sh 'ipsec algparse' algparse*.txt > /dev/null
 ipsec algparse -v1 -pfs -t # algparse.v1.pfs.txt
 ipsec algparse -v1 -t # algparse.v1.txt
 ipsec algparse -v2 -pfs -t # algparse.v2.pfs.txt
@@ -11,22 +11,19 @@ ipsec algparse -v # algparse.v.txt
 west #
  # run the algorithm tests
 west #
- ipsec algparse -ta
+ ipsec algparse -ta > /dev/null
 west #
  # check pluto is starting in the correct mode
 west #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
  grep ^FIPS /tmp/pluto.log
-FIPS Product: NO
-FIPS Kernel: NO
 FIPS Mode: NO
-FIPS HMAC integrity support [enabled]
 FIPS mode disabled for pluto daemon
-FIPS HMAC integrity verification self-test passed
+FIPS HMAC integrity support [disabled]
 west #
  # check pluto algorithm list
 west #
@@ -74,7 +71,6 @@ Integrity algorithms:
   NONE                    IKEv1:     ESP     IKEv2: IKE ESP     FIPS  null
 DH algorithms:
   NONE                    IKEv1:             IKEv2: IKE ESP AH  FIPS  null, dh0
-  MODP1024                IKEv1: IKE ESP AH  IKEv2: IKE ESP AH        dh2
   MODP1536                IKEv1: IKE ESP AH  IKEv2: IKE ESP AH        dh5
   MODP2048                IKEv1: IKE ESP AH  IKEv2: IKE ESP AH  FIPS  dh14
   MODP3072                IKEv1: IKE ESP AH  IKEv2: IKE ESP AH  FIPS  dh15

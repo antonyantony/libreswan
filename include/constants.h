@@ -26,10 +26,19 @@
 #define _CONSTANTS_H_
 
 #include <stddef.h> /* for size_t */
+#include <string.h>		/* for strcmp() */
 
 #include "shunk.h"
 
 struct lswlog;
+
+/* Some constants code likes to use. Useful? */
+
+enum {
+	secs_per_minute = 60,
+	secs_per_hour = 60 * secs_per_minute,
+	secs_per_day = 24 * secs_per_hour
+};
 
 /*
  * This file was split into internal contants (Libreswan/pluto related),
@@ -44,12 +53,7 @@ struct lswlog;
  * NOTE:For debugging purposes, constants.c has tables to map
  * numbers back to names.
  * Any changes here should be reflected there.
- *
- * elemsof() returns the unsgiend size_t.
  */
-
-#define elemsof(array) (sizeof(array) / sizeof(*(array)))	/* number of elements in an array */
-
 
 /*
  * min()/max() macros that also do
@@ -211,8 +215,12 @@ typedef const struct enum_names enum_names;
 extern const char *enum_name(enum_names *ed, unsigned long val);
 extern const char *enum_short_name(enum_names *ed, unsigned long val);
 
+/* old names */
 size_t lswlog_enum(struct lswlog *, enum_names *en, unsigned long val);
 size_t lswlog_enum_short(struct lswlog *, enum_names *en, unsigned long val);
+/* new names */
+#define jam_enum lswlog_enum
+#define jam_enum_short lswlog_enum
 
 /* caller-allocated buffer for enum_showb */
 struct esb_buf {
@@ -282,10 +290,14 @@ const char *enum_enum_name(enum_enum_names *e, unsigned long table,
 const char *enum_enum_showb(enum_enum_names *e, unsigned long table,
 			    unsigned long val, struct esb_buf *buf);
 
+/* old */
 size_t lswlog_enum_enum(struct lswlog *log, enum_enum_names *een,
 			unsigned long table, unsigned long val);
 size_t lswlog_enum_enum_short(struct lswlog *log, enum_enum_names *een,
 			      unsigned long table, unsigned long val);
+/* new */
+#define jam_enum_enum lswlog_enum_enum
+#define jam_enum_enum_short lswlog_enum_enum_short
 
 /*
  * The sparser_name should be transformed into keyword_enum_value

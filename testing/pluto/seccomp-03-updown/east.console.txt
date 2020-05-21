@@ -3,7 +3,7 @@ east #
  # confirm that the network is alive
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -17,7 +17,6 @@ east #
 east #
  hostname | grep east > /dev/null && ausearch -ts recent -i -m SECCOMP
 <no matches>
-east #
 east #
  ../bin/check-for-core.sh
 east #

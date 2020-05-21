@@ -17,19 +17,41 @@
 
 #include "state_db.h"
 #include "state.h"
+#include "connections.h"
 #include "lswlog.h"
 #include "hash_table.h"
 
-#define STATE_TABLE_SIZE 499
+static struct hash_table state_hashes[];
 
-static size_t log_state(struct lswlog *buf, void *data)
+static void jam_state(struct lswlog *buf, const void *data)
 {
 	if (data == NULL) {
-		return lswlogf(buf, "state #0");
+		jam(buf, "#0");
 	} else {
-		struct state *st = (struct state*) data;
-		return lswlogf(buf, "state #%lu", st->st_serialno);
+		const struct state *st = data;
+		jam(buf, "#%lu", st->st_serialno);
 	}
+}
+
+static bool state_plausable(struct state *st,
+			    enum ike_version ike_version,
+			    const so_serial_t *clonedfrom,
+			    const msgid_t *v1_msgid,
+			    const enum sa_role *role)
+{
+	if (st->st_ike_version != ike_version) {
+		return false;
+	}
+	if (v1_msgid != NULL && st->st_v1_msgid.id != *v1_msgid) {
+		return false;
+	}
+	if (role != NULL && st->st_sa_role != *role) {
+		return false;
+	}
+	if (clonedfrom != NULL && st->st_clonedfrom != *clonedfrom) {
+		return false;
+	}
+	return true;
 }
 
 /*
@@ -38,7 +60,7 @@ static size_t log_state(struct lswlog *buf, void *data)
 
 static const struct list_info serialno_list_info = {
 	.name = "serialno list",
-	.log = log_state,
+	.jam = jam_state,
 };
 
 struct list_head serialno_list_head;
@@ -47,34 +69,24 @@ struct list_head serialno_list_head;
  * A table hashed by serialno.
  */
 
-static size_t serialno_hash(void *data)
+static hash_t serialno_hasher(const so_serial_t *serialno)
+{
+	return hasher(shunk2(serialno, sizeof(*serialno)), zero_hash);
+}
+
+static hash_t serialno_state_hasher(const void *data)
+{
+	const struct state *st = data;
+	return serialno_hasher(&st->st_serialno);
+}
+
+static struct list_entry *serialno_state_entry(void *data)
 {
 	struct state *st = data;
-	return st->st_serialno;
+	return &st->st_hash_entries[SERIALNO_STATE_HASH];
 }
 
 static struct list_head serialno_hash_slots[STATE_TABLE_SIZE];
-static struct hash_table serialno_hash_table = {
-	.info = {
-		.name = "serialno table",
-		.log = log_state,
-	},
-	.hash = serialno_hash,
-	.nr_slots = STATE_TABLE_SIZE,
-	.slots = serialno_hash_slots,
-};
-
-static struct list_head *serialno_chain(so_serial_t serialno)
-{
-	struct list_head *head = hash_table_slot_by_hash(&serialno_hash_table,
-							 serialno);
-	if (DBGP(DBG_TMI)) {
-		DBG_log("%s: hash serialno #%lu to head %p",
-			serialno_hash_table.info.name,
-			serialno, head);
-	}
-	return head;
-}
 
 struct state *state_by_serialno(so_serial_t serialno)
 {
@@ -83,7 +95,9 @@ struct state *state_by_serialno(so_serial_t serialno)
 	 * SOS_NOBODY always returns NULL.
 	 */
 	struct state *st;
-	FOR_EACH_LIST_ENTRY_NEW2OLD(serialno_chain(serialno), st) {
+	hash_t hash = serialno_hasher(&serialno);
+	struct list_head *bucket = hash_table_bucket(&state_hashes[SERIALNO_STATE_HASH], hash);
+	FOR_EACH_LIST_ENTRY_NEW2OLD(bucket, st) {
 		if (st->st_serialno == serialno) {
 			return st;
 		}
@@ -91,227 +105,253 @@ struct state *state_by_serialno(so_serial_t serialno)
 	return NULL;
 }
 
-/*
- * Hash table indexed by just the IKE SPIi.
- */
-
-static size_t ike_initiator_spi_hasher(const ike_spi_t *ike_initiator_spi)
+struct ike_sa *ike_sa_by_serialno(so_serial_t serialno)
 {
-	/*
-	 * 251 is a prime close to 256 (so like <<8).
-	 *
-	 * There's no real rationale for doing this.
-	 */
-	size_t hash = 0;
-	for (unsigned j = 0; j < sizeof(ike_initiator_spi->bytes); j++) {
-		hash = hash * 251 + ike_initiator_spi->bytes[j];
-	}
-	return hash;
+	return pexpect_ike_sa(state_by_serialno(serialno));
 }
 
-static size_t ike_initiator_spi_hash(void *data)
+struct child_sa *child_sa_by_serialno(so_serial_t serialno)
 {
-	struct state *st = (struct state*) data;
+	return pexpect_child_sa(state_by_serialno(serialno));
+}
+
+/*
+ * A table hashed by the connection's address.
+ */
+
+static hash_t connection_hasher(struct connection *const *connection)
+{
+	return hasher(shunk2(connection, sizeof(*connection)), zero_hash);
+}
+
+static hash_t connection_state_hasher(const void *data)
+{
+	const struct state *st = data;
+	return connection_hasher(&st->st_connection);
+}
+
+static struct list_entry *connection_state_entry(void *data)
+{
+	struct state *st = data;
+	return &st->st_hash_entries[CONNECTION_STATE_HASH];
+}
+
+static struct list_head connection_hash_slots[STATE_TABLE_SIZE];
+
+struct state *state_by_connection(struct connection *connection,
+				  state_by_predicate *predicate /*optional*/,
+				  void *predicate_context,
+				  const char *reason)
+{
+	/*
+	 * Note that since SOS_NOBODY is never hashed, a lookup of
+	 * SOS_NOBODY always returns NULL.
+	 */
+	struct state *st;
+	hash_t hash = connection_hasher(&connection);
+	struct list_head *bucket = hash_table_bucket(&state_hashes[CONNECTION_STATE_HASH], hash);
+	FOR_EACH_LIST_ENTRY_NEW2OLD(bucket, st) {
+		if (st->st_connection != connection) {
+			continue;
+		}
+		if (predicate != NULL &&
+		    !predicate(st, predicate_context)) {
+			continue;
+		}
+		dbg("State DB: found state #%lu in %s (%s)",
+		    st->st_serialno, st->st_state->short_name, reason);
+		return st;
+	}
+	dbg("State DB: state not found (%s)", reason);
+	return NULL;
+}
+
+void rehash_state_connection(struct state *st)
+{
+	rehash_table_entry(&state_hashes[CONNECTION_STATE_HASH], st);
+}
+
+/*
+ * A table hashed by reqid.
+ */
+
+static hash_t reqid_hasher(const reqid_t *reqid)
+{
+	return hasher(shunk2(reqid, sizeof(*reqid)), zero_hash);
+}
+
+static hash_t reqid_state_hasher(const void *data)
+{
+	const struct state *st = data;
+	return reqid_hasher(&st->st_reqid);
+}
+
+static struct list_entry *reqid_state_entry(void *data)
+{
+	struct state *st = data;
+	return &st->st_hash_entries[REQID_STATE_HASH];
+}
+
+static struct list_head reqid_hash_slots[STATE_TABLE_SIZE];
+
+struct state *state_by_reqid(reqid_t reqid,
+			     state_by_predicate *predicate /*optional*/,
+			     void *predicate_context,
+			     const char *reason)
+{
+	/*
+	 * Note that since SOS_NOBODY is never hashed, a lookup of
+	 * SOS_NOBODY always returns NULL.
+	 */
+	struct state *st;
+	hash_t hash = reqid_hasher(&reqid);
+	struct list_head *bucket = hash_table_bucket(&state_hashes[REQID_STATE_HASH], hash);
+	FOR_EACH_LIST_ENTRY_NEW2OLD(bucket, st) {
+		if (st->st_reqid != reqid) {
+			continue;
+		}
+		if (predicate != NULL &&
+		    !predicate(st, predicate_context)) {
+			continue;
+		}
+		dbg("State DB: found state #%lu in %s (%s)",
+		    st->st_serialno, st->st_state->short_name, reason);
+		return st;
+	}
+	dbg("State DB: state not found (%s)", reason);
+	return NULL;
+}
+
+void rehash_state_reqid(struct state *st)
+{
+	rehash_table_entry(&state_hashes[REQID_STATE_HASH], st);
+}
+
+/*
+ * Hash table indexed by just the IKE SPIi.
+ *
+ * The response to an IKE_SA_INIT contains an as yet unknown SPIr
+ * value.  Hence, when looking for the initiator of an IKE_SA_INIT
+ * response, only the SPIi key is used.
+ *
+ * When a CHILD SA is emancipated creating a new IKE SA its IKE SPIs
+ * are replaced, hence a rehash is required.
+ */
+
+static hash_t ike_initiator_spi_hasher(const ike_spi_t *ike_initiator_spi)
+{
+	return hasher(shunk2(ike_initiator_spi, sizeof(*ike_initiator_spi)), zero_hash);
+}
+
+static hash_t ike_initiator_spi_state_hasher(const void *data)
+{
+	const struct state *st = data;
 	return ike_initiator_spi_hasher(&st->st_ike_spis.initiator);
 }
 
-static size_t ike_initiator_spi_log(struct lswlog *buf, void *data)
+static struct list_entry *ike_initiator_spi_state_entry(void *data)
 {
-	struct state *st = (struct state *) data;
-	size_t size = 0;
-	size += log_state(buf, st);
-	size += lswlogs(buf, ": ");
-	size += lswlog_bytes(buf, st->st_ike_spis.initiator.bytes,
-			     sizeof(st->st_ike_spis.initiator.bytes));
-	return size;
+	struct state *st = data;
+	return &st->st_hash_entries[IKE_INITIATOR_SPI_STATE_HASH];
+}
+
+static void jam_ike_initiator_spi(struct lswlog *buf, const void *data)
+{
+	const struct state *st = data;
+	jam_state(buf, st);
+	jam(buf, ": ");
+	jam_dump_bytes(buf, st->st_ike_spis.initiator.bytes,
+		       sizeof(st->st_ike_spis.initiator.bytes));
 }
 
 static struct list_head ike_initiator_spi_hash_slots[STATE_TABLE_SIZE];
-static struct hash_table ike_initiator_spi_hash_table = {
-	.info = {
-		.name = "IKE SPIi table",
-		.log = ike_initiator_spi_log,
-	},
-	.hash = ike_initiator_spi_hash,
-	.nr_slots = STATE_TABLE_SIZE,
-	.slots = ike_initiator_spi_hash_slots,
-};
-
-static struct list_head *ike_initiator_spi_slot(const ike_spi_t *initiator)
-{
-	size_t hash = ike_initiator_spi_hasher(initiator);
-	struct list_head *slot = hash_table_slot_by_hash(&ike_initiator_spi_hash_table, hash);
-	if (DBGP(DBG_TMI)) {
-		LSWLOG_DEBUG(buf) {
-			lswlogf(buf, "%s: hash IKE SPIi ", ike_initiator_spi_hash_table.info.name);
-			lswlog_bytes(buf, initiator->bytes,
-				     sizeof(initiator->bytes));
-			lswlogf(buf, " to %zu slot %p", hash, slot);
-		}
-	}
-	return slot;
-}
-
-/*
- * Hash table indexed by both IKE_INITIATOR_SPI and IKE_RESPONDER_SPI.
- */
-
-/*
- * A table hashed by IKE SPIi+SPIr.
- */
-
-static size_t ike_spis_hasher(const ike_spis_t *ike_spis)
-{
-	/*
-	 * 251 is a prime close to 256 aka <<8.  65521 is a prime
-	 * close to 65536 aka <<16.
-	 *
-	 * There's no real rationale for doing this.
-	 */
-	size_t hash = 0;
-	for (unsigned j = 0; j < sizeof(ike_spis->initiator.bytes); j++) {
-		hash = (hash * 65521 +
-			ike_spis->initiator.bytes[j] * 251 +
-			ike_spis->responder.bytes[j]);
-	}
-	return hash;
-}
-
-static size_t ike_spis_hash(void *data)
-{
-	struct state *st = (struct state *)data;
-	return ike_spis_hasher(&st->st_ike_spis);
-}
-
-static size_t ike_spis_log(struct lswlog *buf, void *data)
-{
-	struct state *st = (struct state *) data;
-	size_t size = 0;
-	size += log_state(buf, st);
-	size += lswlogs(buf, ": ");
-	size += lswlog_bytes(buf, st->st_ike_spis.initiator.bytes,
-			     sizeof(st->st_ike_spis.initiator.bytes));
-	size += lswlogs(buf, "  ");
-	size += lswlog_bytes(buf, st->st_ike_spis.responder.bytes,
-			     sizeof(st->st_ike_spis.responder.bytes));
-	return size;
-}
-
-static struct list_head ike_spis_hash_slots[STATE_TABLE_SIZE];
-static struct hash_table ike_spis_hash_table = {
-	.info = {
-		.name = "IKE SPIi:SPIr table",
-		.log = ike_spis_log,
-	},
-	.hash = ike_spis_hash,
-	.nr_slots = STATE_TABLE_SIZE,
-	.slots = ike_spis_hash_slots,
-};
-
-static struct list_head *ike_spis_slot(const ike_spis_t *ike_spis)
-{
-	size_t hash = ike_spis_hasher(ike_spis);
-	struct list_head *slot = hash_table_slot_by_hash(&ike_spis_hash_table, hash);
-	if (DBGP(DBG_TMI)) {
-		LSWLOG_DEBUG(buf) {
-			lswlogf(buf, "%s: hash IKE SPIi ", ike_spis_hash_table.info.name);
-			lswlog_bytes(buf, ike_spis->initiator.bytes, sizeof(ike_spis->initiator.bytes));
-			lswlogs(buf, " SPIr ");
-			lswlog_bytes(buf, ike_spis->responder.bytes, sizeof(ike_spis->responder.bytes));
-			lswlogf(buf, " to %zu slot %p", hash, slot);
-		}
-	}
-	return slot;
-}
-
-/*
- * Add/remove just the SPI[ir] tables.  Unlike serialno, these can
- * change over time.
- */
-
-static void add_to_ike_spi_tables(struct state *st)
-{
-	add_hash_table_entry(&ike_spis_hash_table, st,
-			     &st->st_ike_spis_hash_entry);
-	add_hash_table_entry(&ike_initiator_spi_hash_table, st,
-			     &st->st_ike_initiator_spi_hash_entry);
-}
-
-static void del_from_ike_spi_tables(struct state *st)
-{
-	del_hash_table_entry(&ike_spis_hash_table,
-			     &st->st_ike_spis_hash_entry);
-	del_hash_table_entry(&ike_initiator_spi_hash_table,
-			     &st->st_ike_initiator_spi_hash_entry);
-}
-
-static bool state_plausable(struct state *st, enum ike_version ike_version,
-			    so_serial_t clonedfrom, const msgid_t *msgid)
-{
-	if (st->st_ike_version != ike_version) {
-		return false;
-	}
-	if (msgid != NULL && st->st_msgid != *msgid) {
-		return false;
-	}
-	switch (clonedfrom) {
-	case SOS_NOBODY:
-		if (!IS_IKE_SA(st)) {
-			return false;
-		}
-		break;
-	case SOS_IGNORE:
-		break;
-	case SOS_SOMEBODY:
-		if (!IS_CHILD_SA(st)) {
-			return false;
-		}
-		break;
-	default:
-		if (st->st_clonedfrom != clonedfrom) {
-			return false;
-		}
-		break;
-	}
-	return true;
-}
 
 struct state *state_by_ike_initiator_spi(enum ike_version ike_version,
-					 so_serial_t clonedfrom,
-					 const msgid_t *msgid,
+					 const so_serial_t *clonedfrom, /*optional*/
+					 const msgid_t *v1_msgid, /*optional*/
+					 const enum sa_role *role, /*optional*/
 					 const ike_spi_t *ike_initiator_spi,
 					 const char *name)
 {
+	hash_t hash = ike_initiator_spi_hasher(ike_initiator_spi);
+	struct list_head *bucket = hash_table_bucket(&state_hashes[IKE_INITIATOR_SPI_STATE_HASH], hash);
 	struct state *st = NULL;
-	FOR_EACH_LIST_ENTRY_NEW2OLD(ike_initiator_spi_slot(ike_initiator_spi),
-				    st) {
-		if (!state_plausable(st, ike_version, clonedfrom, msgid)) {
+	FOR_EACH_LIST_ENTRY_NEW2OLD(bucket, st) {
+		if (!state_plausable(st, ike_version, clonedfrom, v1_msgid, role)) {
 			continue;
 		}
 		if (!ike_spi_eq(&st->st_ike_spis.initiator, ike_initiator_spi)) {
 			continue;
 		}
-		dbg("State DB: %s state object #%lu found, in %s (%s)",
+		dbg("State DB: found %s state #%lu in %s (%s)",
 		    enum_name(&ike_version_names, ike_version),
-		    st->st_serialno, st->st_state_name, name);
+		    st->st_serialno, st->st_state->short_name, name);
 		return st;
 	}
-	dbg("State DB: %s state object not found (%s)",
+	dbg("State DB: %s state not found (%s)",
 	    enum_name(&ike_version_names, ike_version), name);
 	return NULL;
 }
 
+/*
+ * Hash table indexed by both both IKE SPIi+SPIr.
+ *
+ * Note that these values change over time and when this happens a
+ * rehash is required:
+ *
+ * - initially SPIr=0, but then when the first response is received
+ *   SPIr changes to the value in that response
+ *
+ * - when a CHILD SA is emancipated creating a new IKE SA, the IKE
+ *   SPIs of the child change to those from the CREATE_CHILD_SA
+ *   exchange
+ */
+
+static hash_t ike_spis_hasher(const ike_spis_t *ike_spis)
+{
+	return hasher(shunk2(ike_spis, sizeof(*ike_spis)), zero_hash);
+}
+
+static hash_t ike_spis_state_hasher(const void *data)
+{
+	const struct state *st = data;
+	return ike_spis_hasher(&st->st_ike_spis);
+}
+
+static struct list_entry *ike_spis_state_entry(void *data)
+{
+	struct state *st = data;
+	return &st->st_hash_entries[IKE_SPIS_STATE_HASH];
+}
+
+static void jam_ike_spis(struct lswlog *buf, const void *data)
+{
+	const struct state *st = data;
+	jam_state(buf, st);
+	jam(buf, ": ");
+	jam_dump_bytes(buf, st->st_ike_spis.initiator.bytes,
+		       sizeof(st->st_ike_spis.initiator.bytes));
+	jam(buf, "  ");
+	jam_dump_bytes(buf, st->st_ike_spis.responder.bytes,
+		       sizeof(st->st_ike_spis.responder.bytes));
+}
+
+static struct list_head ike_spis_hash_slots[STATE_TABLE_SIZE];
+
 struct state *state_by_ike_spis(enum ike_version ike_version,
-				so_serial_t clonedfrom,
-				const msgid_t *msgid,
+				const so_serial_t *clonedfrom,
+				const msgid_t *v1_msgid, /*optional*/
+				const enum sa_role *sa_role, /*optional*/
 				const ike_spis_t *ike_spis,
 				state_by_predicate *predicate,
 				void *predicate_context,
 				const char *name)
 {
+	hash_t hash = ike_spis_hasher(ike_spis);
+	struct list_head *bucket = hash_table_bucket(&state_hashes[IKE_SPIS_STATE_HASH], hash);
 	struct state *st = NULL;
-	FOR_EACH_LIST_ENTRY_NEW2OLD(ike_spis_slot(ike_spis), st) {
-		if (!state_plausable(st, ike_version, clonedfrom, msgid)) {
+	FOR_EACH_LIST_ENTRY_NEW2OLD(bucket, st) {
+		if (!state_plausable(st, ike_version, clonedfrom, v1_msgid, sa_role)) {
 			continue;
 		}
 		if (!ike_spis_eq(&st->st_ike_spis, ike_spis)) {
@@ -322,70 +362,116 @@ struct state *state_by_ike_spis(enum ike_version ike_version,
 				continue;
 			}
 		}
-		dbg("State DB: %s state object #%lu found, in %s (%s)",
+		dbg("State DB: found %s state #%lu in %s (%s)",
 		    enum_name(&ike_version_names, ike_version),
-		    st->st_serialno, st->st_state_name, name);
+		    st->st_serialno, st->st_state->short_name, name);
 		return st;
 	}
-	dbg("State DB: %s state object not found (%s)",
+	dbg("State DB: %s state not found (%s)",
 	    enum_name(&ike_version_names, ike_version), name);
 	return NULL;
 }
 
 /*
- * State Table Functions
+ * Maintain the contents of the hash tables.
  *
- * The statetable is organized as a hash table.
- *
- * The hash is purely based on the SPIi and SPIr.  Each has chain is a
- * doubly linked list.
- *
- * The IKEv2 initial initiator not know the responder's SPIr, so the
- * state will have to be rehashed when that becomes known.
- *
- * In IKEv2, all CHILD SAs have the same SPIi:SPIr as their parent IKE
- * SA.  This means that you can look along that single chain for your
- * relatives.
- *
- * In IKEv1, SPIs are renamed cookies.
+ * Unlike serialno, the IKE SPI[ir] keys can change over time.
  */
+static struct hash_table state_hashes[STATE_HASH_ROOF] = {
+	[SERIALNO_STATE_HASH] = {
+		.info = {
+			.name = "st_serialno table",
+			.jam = jam_state,
+		},
+		.hasher = serialno_state_hasher,
+		.entry = serialno_state_entry,
+		.nr_slots = STATE_TABLE_SIZE,
+		.slots = serialno_hash_slots,
+	},
+	[CONNECTION_STATE_HASH] = {
+		.info = {
+			.name = "st_connection table",
+			.jam = jam_state,
+		},
+		.hasher = connection_state_hasher,
+		.entry = connection_state_entry,
+		.nr_slots = STATE_TABLE_SIZE,
+		.slots = connection_hash_slots,
+	},
+	[REQID_STATE_HASH] = {
+		.info = {
+			.name = "st_reqid table",
+			.jam = jam_state,
+		},
+		.hasher = reqid_state_hasher,
+		.entry = reqid_state_entry,
+		.nr_slots = STATE_TABLE_SIZE,
+		.slots = reqid_hash_slots,
+	},
+	[IKE_INITIATOR_SPI_STATE_HASH] = {
+		.info = {
+			.name = "IKE SPIi table",
+			.jam = jam_ike_initiator_spi,
+		},
+		.hasher = ike_initiator_spi_state_hasher,
+		.entry = ike_initiator_spi_state_entry,
+		.nr_slots = STATE_TABLE_SIZE,
+		.slots = ike_initiator_spi_hash_slots,
+	},
+	[IKE_SPIS_STATE_HASH] = {
+		.info = {
+			.name = "IKE SPI[ir] table",
+			.jam = jam_ike_spis,
+		},
+		.hasher = ike_spis_state_hasher,
+		.entry = ike_spis_state_entry,
+		.nr_slots = STATE_TABLE_SIZE,
+		.slots = ike_spis_hash_slots,
+	},
+};
 
 void add_state_to_db(struct state *st)
 {
-	dbg("State DB: adding state object #%lu", st->st_serialno);
+	dbg("State DB: adding %s state #%lu in %s",
+	    enum_name(&ike_version_names, st->st_ike_version),
+	    st->st_serialno, st->st_state->short_name);
 	passert(st->st_serialno != SOS_NOBODY);
+
 	/* serial NR list, entries are only added */
 	st->st_serialno_list_entry = list_entry(&serialno_list_info, st);
 	insert_list_entry(&serialno_list_head,
 			  &st->st_serialno_list_entry);
 
-	/* serial NR to state hash table */
-	add_hash_table_entry(&serialno_hash_table, st,
-			     &st->st_serialno_hash_entry);
-
-	add_to_ike_spi_tables(st);
+	for (unsigned h = 0; h < elemsof(state_hashes); h++) {
+		add_hash_table_entry(&state_hashes[h], st);
+	}
 }
 
 void rehash_state_cookies_in_db(struct state *st)
 {
-	dbg("State DB: re-hashing state #%lu SPIs",
+	dbg("State DB: re-hashing %s state #%lu IKE SPIi and SPI[ir]",
+	    enum_name(&ike_version_names, st->st_ike_version),
 	    st->st_serialno);
-	del_from_ike_spi_tables(st);
-	add_to_ike_spi_tables(st);
+
+	rehash_table_entry(&state_hashes[IKE_SPIS_STATE_HASH], st);
+	rehash_table_entry(&state_hashes[IKE_INITIATOR_SPI_STATE_HASH], st);
 }
 
 void del_state_from_db(struct state *st)
 {
+	dbg("State DB: deleting %s state #%lu in %s",
+	    enum_name(&ike_version_names, st->st_ike_version),
+	    st->st_serialno, st->st_state->short_name);
 	remove_list_entry(&st->st_serialno_list_entry);
-	del_hash_table_entry(&serialno_hash_table,
-			     &st->st_serialno_hash_entry);
-	del_from_ike_spi_tables(st);
+	for (unsigned h = 0; h < elemsof(state_hashes); h++) {
+		del_hash_table_entry(&state_hashes[h], st);
+	}
 }
 
 void init_state_db(void)
 {
 	init_list(&serialno_list_info, &serialno_list_head);
-	init_hash_table(&serialno_hash_table);
-	init_hash_table(&ike_spis_hash_table);
-	init_hash_table(&ike_initiator_spi_hash_table);
+	for (unsigned h = 0; h < elemsof(state_hashes); h++) {
+		init_hash_table(&state_hashes[h]);
+	}
 }

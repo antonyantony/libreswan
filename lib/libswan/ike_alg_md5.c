@@ -25,15 +25,17 @@
 #include "ike_alg.h"
 #include "ike_alg_hash.h"
 #include "ike_alg_prf.h"
-#include "ike_alg_hash_nss_ops.h"
-#include "ike_alg_prf_hmac_ops.h"
+#include "ike_alg_hash_ops.h"
+#include "ike_alg_prf_mac_ops.h"
+#include "ike_alg_prf_ikev1_ops.h"
+#include "ike_alg_prf_ikev2_ops.h"
 #include "sadb.h"
 
 const struct hash_desc ike_alg_hash_md5 = {
 	.common = {
 		.name = "md5",
 		.fqn = "MD5",
-		.names = { "md5", },
+		.names = "md5",
 		.algo_type = IKE_ALG_HASH,
 		.id = {
 			[IKEv1_OAKLEY_ID] = OAKLEY_MD5,
@@ -51,11 +53,11 @@ const struct hash_desc ike_alg_hash_md5 = {
 };
 
 
-const struct prf_desc ike_alg_prf_md5 = {
+const struct prf_desc ike_alg_prf_hmac_md5 = {
 	.common = {
 		.name = "md5",
 		.fqn = "HMAC_MD5",
-		.names = { "md5", "hmac_md5", },
+		.names = "md5,hmac_md5",
 		.algo_type = IKE_ALG_PRF,
 		.id = {
 			[IKEv1_OAKLEY_ID] = OAKLEY_MD5,
@@ -66,15 +68,17 @@ const struct prf_desc ike_alg_prf_md5 = {
 	.prf_key_size = MD5_DIGEST_SIZE,
 	.prf_output_size = MD5_DIGEST_SIZE,
 	.hasher = &ike_alg_hash_md5,
-	.prf_ops = &ike_alg_prf_hmac_ops,
+	.prf_mac_ops = &ike_alg_prf_mac_hmac_ops,
+	.prf_ikev1_ops = &ike_alg_prf_ikev1_mac_ops,
+	.prf_ikev2_ops = &ike_alg_prf_ikev2_mac_ops,
 	.prf_ike_audit_name = "md5",
 };
 
-const struct integ_desc ike_alg_integ_md5 = {
+const struct integ_desc ike_alg_integ_hmac_md5_96 = {
 	.common = {
 		.name = "md5",
 		.fqn = "HMAC_MD5_96",
-		.names = { "md5", "hmac_md5", "hmac_md5_96", },
+		.names = "md5,hmac_md5,hmac_md5_96",
 		.algo_type = IKE_ALG_INTEG,
 		.id = {
 			[IKEv1_OAKLEY_ID] = OAKLEY_MD5,
@@ -85,7 +89,7 @@ const struct integ_desc ike_alg_integ_md5 = {
 	.integ_keymat_size = MD5_DIGEST_SIZE,
 	.integ_output_size = MD5_DIGEST_SIZE_96,
 	.integ_ikev1_ah_transform = AH_MD5,
-	.prf = &ike_alg_prf_md5,
+	.prf = &ike_alg_prf_hmac_md5,
 #ifdef SADB_AALG_MD5HMAC
 	.integ_sadb_aalg_id = SADB_AALG_MD5HMAC,
 #endif

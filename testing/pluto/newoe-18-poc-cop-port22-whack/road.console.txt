@@ -7,7 +7,7 @@ road #
  echo "192.1.2.0/24  tcp  0  22"  >> /etc/ipsec.d/policies/private-or-clear
 road #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 road #
  /testing/pluto/bin/wait-until-pluto-started
 road #
@@ -24,7 +24,7 @@ initdone
 road #
  ipsec whack --oppohere 192.1.3.209 --oppothere 192.1.2.23 --oppoproto 6 --oppodport 22
 002 initiate on demand from 192.1.3.209:0 to 192.1.2.23:22 proto=6 because: whack
-1v2 "private-or-clear#192.1.2.0/24-(0--6--22)"[1] ...192.1.2.23 #1: initiate
+1v2 "private-or-clear#192.1.2.0/24-(0--6--22)"[1] ...192.1.2.23 #1: initiating IKEv2 IKE SA
 003 "private-or-clear#192.1.2.0/24-(0--6--22)"[1] ...192.1.2.23 #2: Authenticated using authby=null
 002 "private-or-clear#192.1.2.0/24-(0--6--22)"[1] ...192.1.2.23 #2: negotiated connection [192.1.3.209-192.1.3.209:0-65535 6] -> [192.1.2.23-192.1.2.23:22-22 6]
 road #
@@ -45,14 +45,16 @@ road #
 road #
  echo TRIGGER-OE | nc -s 192.1.3.209 192.1.2.23 22
 SSH-2.0-OpenSSH_XXX
-Protocol mismatch.
+Invalid SSH identification string.
 road #
  sleep 1
 road #
  # show non-zero counters
 road #
- ipsec whack --trafficstatus
-006 #2: "private-or-clear#192.1.2.0/24-(0--6--22)"[1] ...192.1.2.23, type=ESP, add_time=1234567890, inBytes=308, outBytes=383, id='ID_NULL'
+ # workaround for diff err msg between fedora versions resulting in diff byte count
+road #
+ ipsec whack --trafficstatus | grep -v "inBytes=0" | sed "s/type=ESP.*$/[...]/"
+006 #2: "private-or-clear#192.1.2.0/24-(0--6--22)"[1] ...192.1.2.23, [...]
 road #
  echo done
 done
@@ -70,43 +72,43 @@ src 192.1.3.209 dst 192.1.2.23
 	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
 XFRM policy:
 src 192.1.2.253/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.2.253/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.2.254/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.2.254/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.2.253/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.2.254/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.3.253/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.3.254/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.253/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.3.253/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.3.254/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.3.254/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.2.23/32 dst 192.1.3.209/32 proto tcp sport 22
-	dir fwd priority 1892319 ptype main
+	dir fwd priority 3784639 ptype main
 	tmpl src 192.1.2.23 dst 192.1.3.209
 		proto esp reqid REQID mode tunnel
 src 192.1.2.23/32 dst 192.1.3.209/32 proto tcp sport 22
-	dir in priority 1892319 ptype main
+	dir in priority 3784639 ptype main
 	tmpl src 192.1.2.23 dst 192.1.3.209
 		proto esp reqid REQID mode tunnel
 src 192.1.3.209/32 dst 192.1.2.23/32 proto tcp dport 22
-	dir out priority 1892319 ptype main
+	dir out priority 3784639 ptype main
 	tmpl src 192.1.3.209 dst 192.1.2.23
 		proto esp reqid REQID mode tunnel
 src 192.1.3.209/32 dst 192.1.2.0/24 proto tcp dport 22
-	dir out priority 1892327 ptype main
+	dir out priority 3784654 ptype main
 	tmpl src 0.0.0.0 dst 0.0.0.0
 		proto esp reqid REQID mode transport
 XFRM done
@@ -123,7 +125,6 @@ road #
 road #
  grep "negotiated connection" /tmp/pluto.log
 "private-or-clear#192.1.2.0/24-(0--6--22)"[1] ...192.1.2.23 #2: negotiated connection [192.1.3.209-192.1.3.209:0-65535 6] -> [192.1.2.23-192.1.2.23:22-22 6]
-road #
 road #
  ../bin/check-for-core.sh
 road #

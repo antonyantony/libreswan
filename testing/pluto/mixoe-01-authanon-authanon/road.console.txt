@@ -1,4 +1,4 @@
-/testing/guestbin/swan-prep --x509
+/testing/guestbin/swan-prep --x509 --x509name semiroad
 Preparing X.509 files
 road #
  certutil -D -n east -d sql:/etc/ipsec.d
@@ -10,15 +10,11 @@ road #
  echo "192.1.2.23/32"  >> /etc/ipsec.d/policies/private-or-clear
 road #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 road #
  /testing/pluto/bin/wait-until-pluto-started
 road #
  ipsec whack --impair suppress-retransmits
-road #
- # ensure for tests acquires expire before our failureshunt=2m
-road #
- echo 30 > /proc/sys/net/core/xfrm_acq_expires
 road #
  # give OE policies time to load
 road #
@@ -69,8 +65,7 @@ road #
  # Authentication should be RSA
 road #
  hostname | grep nic > /dev/null || grep Authenticated /tmp/pluto.log
-"private-or-clear#192.1.2.23/32"[1] ...192.1.2.23 #2: Authenticated using RSA
-road #
+"private-or-clear#192.1.2.23/32"[1] ...192.1.2.23 #2: Authenticated using RSA with IKEv2_AUTH_HASH_SHA2_512
 road #
  ../bin/check-for-core.sh
 road #

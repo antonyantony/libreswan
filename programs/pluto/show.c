@@ -23,7 +23,6 @@
  *
  */
 
-#include <libreswan.h>
 
 #include "sysdep.h"
 #include "constants.h"
@@ -43,55 +42,50 @@
 #include "crypto.h"
 #include "db_ops.h"
 
-static void show_system_security(void)
+static void show_system_security(struct fd *whackfd)
 {
 	int selinux = libreswan_selinux();
-#ifdef FIPS_CHECK
 	bool fips = libreswan_fipsmode();
-#else
-	int fips = FALSE;
-#endif
 
-	whack_log(RC_COMMENT, " ");     /* spacer */
+	whack_comment(whackfd, " ");     /* spacer */
 
-	whack_log(RC_COMMENT, "fips mode=%s;", fips ? "enabled" : "disabled");
+	whack_comment(whackfd, "fips mode=%s;", fips ? "enabled" : "disabled");
 
-	whack_log(RC_COMMENT, "SElinux=%s",
+	whack_comment(whackfd, "SElinux=%s",
 		selinux == 0 ? "disabled" : selinux == 1 ? "enabled" : "indeterminate");
 #ifdef HAVE_SECCOMP
-	whack_log(RC_COMMENT, "seccomp=%s",
+	whack_comment(whackfd, "seccomp=%s",
 		pluto_seccomp_mode == SECCOMP_ENABLED ? "enabled" :
 			pluto_seccomp_mode == SECCOMP_TOLERANT ? "tolerant" : "disabled");
 #else
-	whack_log(RC_COMMENT, "seccomp=unsupported");
+	whack_comment(whackfd, "seccomp=unsupported");
 #endif
-	whack_log(RC_COMMENT, " ");     /* spacer */
-
+	whack_comment(whackfd, " ");     /* spacer */
 }
 
-void show_global_status(void)
+void show_global_status(struct fd *whackfd)
 {
-	show_globalstate_status();
-	show_pluto_stats();
+	show_globalstate_status(whackfd);
+	show_pluto_stats(whackfd);
 }
 
-void show_status(void)
+void show_status(struct fd *whackfd)
 {
-	show_kernel_interface();
-	show_ifaces_status();
-	whack_log(RC_COMMENT, " ");     /* spacer */
-	show_system_security();
-	show_setup_plutomain();
+	show_kernel_interface(whackfd);
+	show_ifaces_status(whackfd);
+	whack_comment(whackfd, " ");     /* spacer */
+	show_system_security(whackfd);
+	show_setup_plutomain(whackfd);
 	show_debug_status();
-	show_setup_natt();
-	show_virtual_private();
-	kernel_alg_show_status();
-	ike_alg_show_status();
-	db_ops_show_status();
-	show_connections_status();
-	show_states_status(FALSE);
+	show_setup_natt(whackfd);
+	show_virtual_private(whackfd);
+	kernel_alg_show_status(whackfd);
+	ike_alg_show_status(whackfd);
+	db_ops_show_status(whackfd);
+	show_connections_status(whackfd);
+	show_states_status(whackfd, FALSE);
 #if defined(NETKEY_SUPPORT) || defined(KLIPS)
-	show_shunt_status();
+	show_shunt_status(whackfd);
 #endif
 }
 
@@ -156,7 +150,7 @@ static void connection_state(struct state *st, void *data)
 	}
 
 	/* ignore undefined states (i.e. just deleted) */
-	if (st->st_state == STATE_UNDEFINED)
+	if (st->st_state->kind == STATE_UNDEFINED)
 		return;
 
 	if (IS_IKE_SA(st)) {
@@ -169,7 +163,7 @@ static void connection_state(struct state *st, void *data)
 		} else {
 			if (lc->phase1 < p1_init)
 				lc->phase1 = p1_init;
-			if (IS_ISAKMP_ENCRYPTED(st->st_state) &&
+			if (IS_ISAKMP_ENCRYPTED(st->st_state->kind) &&
 			    lc->phase1 < p1_encrypt)
 				lc->phase1 = p1_encrypt;
 			if (IS_ISAKMP_AUTHENTICATED(st->st_state) &&
@@ -184,7 +178,7 @@ static void connection_state(struct state *st, void *data)
 	if (st->st_connection != lc->conn)
 		return;
 
-	if (IS_PHASE15(st->st_state)) {
+	if (IS_PHASE15(st->st_state->kind)) {
 		if (lc->tunnel < tun_phase15)
 			lc->tunnel = tun_phase15;
 	}
@@ -235,12 +229,11 @@ void binlog_state(struct state *st, enum state_kind new_state)
 	};
 
 	{
-		const struct finite_state *save_state = st->st_finite_state;
+		const struct finite_state *save_state = st->st_state;
 
-		st->st_finite_state = finite_states[new_state];
-		dbg("FOR_EACH_STATE_... via for_each_state in %s", __func__);
-		for_each_state(connection_state, &lc);
-		st->st_finite_state = save_state;
+		st->st_state = finite_states[new_state];
+		for_each_state(connection_state, &lc, __func__);
+		st->st_state = save_state;
 	}
 
 	{

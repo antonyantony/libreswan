@@ -34,14 +34,17 @@
       <arg choice="opt">--help</arg>
       <arg choice="opt">--version</arg>
       <arg choice="opt">--leak-detective</arg>
+      <arg choice="opt">--efence-protect</arg>
       <arg choice="opt">--config <replaceable>filename</replaceable></arg>
       <arg choice="opt">--vendorid <replaceable>VID</replaceable></arg>
       <arg choice="opt">--nofork</arg>
       <arg choice="opt">--stderrlog</arg>
-      <arg choice="opt">----plutostderrlogtime</arg>
       <arg choice="opt">--logfile <replaceable>filename</replaceable></arg>
+      <arg choice="opt">--log-no-time</arg>
+      <arg choice="opt">--log-no-append</arg>
+      <arg choice="opt">--log-no-ip</arg>
+      <arg choice="opt">--log-no-audit</arg>
       <arg choice="opt">--use-klips</arg>
-      <arg choice="opt">--use-mast</arg>
       <arg choice="opt">--use-netkey</arg>
       <arg choice="opt">--use-nostack</arg>
       <arg choice="opt">--uniqueids</arg>
@@ -143,9 +146,6 @@
 
       <group choice="opt">
         <arg choice="opt">--client <replaceable>subnet</replaceable></arg>
-
-        <arg choice="opt">--clientwithin
-        <replaceable>subnet</replaceable></arg>
       </group>
 
       <arg choice="opt">--clientprotoport
@@ -209,8 +209,6 @@
       <arg choice="opt">--nexthop <replaceable>ip-address</replaceable></arg>
 
       <arg choice="opt">--client <replaceable>subnet</replaceable></arg>
-
-      <arg choice="opt">--clientwithin <replaceable>subnet</replaceable></arg>
 
       <arg choice="opt">--clientprotoport
       <replaceable>protocol</replaceable>/<replaceable>port</replaceable></arg>
@@ -369,7 +367,6 @@
 
       <group choice="plain">
         <arg choice="plain">--listen</arg>
-
         <arg choice="plain">--unlisten</arg>
       </group>
 
@@ -385,9 +382,9 @@
       <arg choice="plain"><replaceable>whack</replaceable></arg>
 
       <group choice="plain">
-        <arg choice="plain">--busy</arg>
-
-        <arg choice="plain">--relax</arg>
+        <arg choice="plain">--ddos-auto</arg>
+        <arg choice="plain">--ddos-busy</arg>
+        <arg choice="plain">--ddos-unlimited</arg>
       </group>
 
       <arg choice="opt">--rundir <replaceable>path</replaceable></arg>
@@ -424,6 +421,8 @@
           <arg choice="opt">--remote-host <replaceable>ip-address</replaceable></arg>
 
         <arg choice="plain">--terminate</arg>
+        <arg choice="plain">--rekey-ike</arg>
+        <arg choice="plain">--rekey-ipsec</arg>
       </group>
 
       <arg choice="plain">--name
@@ -467,24 +466,6 @@
       <arg choice="plain">--crash</arg>
 
       <arg choice="opt">ipaddress</arg>
-    </cmdsynopsis>
-
-    <cmdsynopsis>
-      <command>ipsec</command>
-
-      <arg choice="plain"><replaceable>whack</replaceable></arg>
-
-      <arg choice="plain">--whackrecord</arg>
-
-      <arg choice="opt">filename</arg>
-    </cmdsynopsis>
-
-    <cmdsynopsis>
-      <command>ipsec</command>
-
-      <arg choice="plain"><replaceable>whack</replaceable></arg>
-
-      <arg choice="plain">--whackstoprecord</arg>
     </cmdsynopsis>
 
     <cmdsynopsis>
@@ -608,6 +589,14 @@
 
       <arg choice="plain"><replaceable>whack</replaceable></arg>
 
+      <arg choice="plain">--ddns</arg>
+    </cmdsynopsis>
+
+    <cmdsynopsis>
+      <command>ipsec</command>
+
+      <arg choice="plain"><replaceable>whack</replaceable></arg>
+
       <arg choice="plain">--listevents</arg>
     </cmdsynopsis>
 
@@ -626,6 +615,8 @@
       <arg choice="plain"><replaceable>whack</replaceable></arg>
 
       <arg choice="plain">--status</arg>
+      <arg choice="plain">--trafficstatus</arg>
+      <arg choice="plain">--shuntstatus</arg>
 
       <arg choice="opt">--rundir <replaceable>path</replaceable></arg>
       <arg choice="opt">--ctlsocket <replaceable>path/file</replaceable></arg>
@@ -638,8 +629,8 @@
 
       <arg choice="plain"><replaceable>whack</replaceable></arg>
 
-      <arg choice="plain">--trafficstatus</arg>
-      <arg choice="plain">--shuntstatus</arg>
+      <arg choice="plain">--globalstats</arg>
+      <arg choice="plain">--clearstats</arg>
 
       <arg choice="opt">--rundir <replaceable>path</replaceable></arg>
       <arg choice="opt">--ctlsocket <replaceable>path/file</replaceable></arg>
@@ -688,7 +679,7 @@
     transmission of packets is the responsibility of other parts of the system
     - the kernel. Pluto can talk to various kernel implementations, such as
     <emphasis remap="B">KLIPS</emphasis>, such as <emphasis
-    remap="B">NETKEY</emphasis>, and such as <emphasis
+    remap="B">XFRM/NETKEY</emphasis>, and such as <emphasis
     remap="B">KAME</emphasis> IPsec stacks. <citerefentry>
         <refentrytitle>ipsec_auto</refentrytitle>
 
@@ -757,7 +748,7 @@
       <para><emphasis remap="B">pluto</emphasis> is an implementation of IKE.
       It runs as a daemon on a network node. Currently, this network node must
       be a LINUX system running the <emphasis remap="B">KLIPS</emphasis> or
-      <emphasis remap="B">NETKEY</emphasis> implementation of IPsec, or a
+      <emphasis remap="B">XFRM/NETKEY</emphasis> implementation of IPsec, or a
       FreeBSD/NetBSD/Mac OSX system running the <emphasis
       remap="B">KAME</emphasis> implementation of IPsec.</para>
 
@@ -888,14 +879,12 @@
     </refsect2>
 
     <refsect2 id="setting_up_netkey_for_pluto">
-      <title>Setting up <emphasis remap="B">NETKEY</emphasis> for <emphasis
+      <title>Setting up <emphasis remap="B">XFRM/NETKEY</emphasis> for <emphasis
       remap="B">pluto</emphasis></title>
 
-      <para>No special requirements are necessary to use NETKEY - it ships
-      with all modern versions of Linux 2.4 and 2.6. however, note that
-      certain vendors or older distributions use old versions or backports of
-      NETKEY that are broken. If possible use a NETKEY version that is at
-      least based on, or backported from Linux 2.6.11 or newer.</para>
+      <para>No special requirements are necessary to use XFRM/NETKEY - it ships
+      with all modern versions of Linux 2.4 and later.
+      </para>
     </refsect2>
 
     <refsect2 id="ipsecsecrets_file">
@@ -1058,6 +1047,15 @@
       causes the system or pluto to die, shut down pluto in the regular
       way. pluto will display a list of leaks it has detected.  </para>
 
+      <para>
+	If you are investigating a potential use-after-free or
+	double-free in pluto, first build pluto with USE_EFENCE=true
+	and then start pluto with --efence-protect.  See
+	<citerefentry> <refentrytitle>efence</refentrytitle>
+	<manvolnum>2</manvolnum> </citerefentry> and EF_PROTECT_BELOW
+	and EF_PROTECT_FREE.
+      </para>
+
       <para>The <emphasis remap="I">(potential) connection</emphasis> database
       describes attributes of a connection. These include the IP addresses of
       the hosts and client subnets and the security characteristics desired.
@@ -1089,7 +1087,7 @@
       remap="B">pluto</emphasis> takes the responsibility of managing both of
       these special kinds of routes.</para>
 
-      <para><emphasis remap="B">NETKEY</emphasis> requires no special
+      <para><emphasis remap="B">XFRM/NETKEY</emphasis> requires no special
       routing.</para>
 
       <para>Each connection may be routed, and must be while it has an IPsec
@@ -1133,7 +1131,7 @@
 
       <para>All of these routing characteristics are expected change when
       <emphasis remap="B">KLIPS</emphasis> and <emphasis
-      remap="B">NETKEY</emphasis> merge into a single new stack.</para>
+      remap="B">XFRM/NETKEY</emphasis> merge into a single new stack.</para>
     </refsect2>
 
     <refsect2 id="using_whack">
@@ -1459,16 +1457,6 @@
         </varlistentry>
 
         <varlistentry>
-          <term><option>--clientwithin</option>&nbsp;<emphasis
-          remap="I">subnet</emphasis></term>
-
-          <listitem>
-            <para>This option is obsolete and will be removed. Do not use this
-            option anymore.</para>
-          </listitem>
-        </varlistentry>
-
-        <varlistentry>
           <term><option>--clientprotoport</option>&nbsp;<emphasis
           remap="I">protocol/port</emphasis></term>
 
@@ -1495,7 +1483,7 @@
             make the gateway itself use its internal IP, which is part of the
             <option>--client subnet</option>. Otherwise it will use its
             nearest IP address, which is its public IP address, which is not
-            part of the subnet-subnet IPsec tunnel, and would therefor not get
+            part of the subnet-subnet IPsec tunnel, and would therefore not get
             encrypted.</para>
           </listitem>
         </varlistentry>
@@ -2026,8 +2014,10 @@
       <option>--rereadall</option>,
       and <option>--rereadcrls</option> options reread this information from their
       respective sources, and purge all the online obtained information. The
-      option <option>--listevents</option> lists all pending CRL fetch
-      commands.</para>
+      option <option>--listevents</option> lists all pending events, and the
+      <option>--ddns</option> triggers the Dynamic DNS update event that is normally
+      scheduled to run once every minute.
+      </para>
 
       <variablelist remap="TP">
         <varlistentry>
@@ -2257,7 +2247,37 @@
         </varlistentry>
       </variablelist>
 
-      <para>Ending an connection</para>
+      <para>Rekeying a connection</para>
+
+      <variablelist remap="tp">
+        <varlistentry>
+          <term><option>--rekey-ipsec</option></term>
+
+          <term><option>--name</option>&nbsp;<emphasis
+          remap="i">connection-name</emphasis></term>
+
+          <listitem>
+            <para>the rekey-ipsec form tells <emphasis
+            remap="b">pluto</emphasis> to rekey the IPsec SA (child SA) of
+            the specified connection. It does not affect the IKE SA (parent SA)</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--rekey-ike</option></term>
+
+          <term><option>--name</option>&nbsp;<emphasis
+          remap="i">connection-name</emphasis></term>
+
+          <listitem>
+            <para>the rekey-ike form tells <emphasis
+            remap="b">pluto</emphasis> to rekey the IKE SA (parent SA) of
+            the specified connection. It does not affect the IPsec SAs (child SAs)</para>
+          </listitem>
+        </varlistentry>
+      </variablelist>
+
+      <para>Ending a connection</para>
 
       <variablelist remap="tp">
         <varlistentry>
@@ -2280,7 +2300,7 @@
           remap="i">ip-address</emphasis></term>
 
           <listitem>
-            <para>If the remote peer has crashed, and therefor did not notify
+            <para>If the remote peer has crashed, and therefore did not notify
             us, we keep sending encrypted traffic, and rejecting all plaintext
             (non-IKE) traffic from that remote peer. The
             <option>--crash</option> brings our end down as well for all the
@@ -2292,39 +2312,10 @@
 
       <variablelist remap="tp">
         <varlistentry>
-          <term><option>--whackrecord</option><emphasis
-          remap="i">filename</emphasis></term>
-
-          <term><option>--whackstoprecord</option></term>
-
-          <listitem>
-            <para>this causes <emphasis remap="b">pluto</emphasis>to open the
-            given filename for write, and record each of the messages received
-            from whack or addconn. This continues until the whackstoprecord
-            option is used. This option may not be combined with any other
-            command. The start/stop commands are not recorded themselves.
-            These files are usually used to create input files for unit tests,
-            particularly for complex setups where policies may in fact
-            overlap. </para>
-
-            <para>The format of the file consists of a line starting with
-            #!pluto-whack and the date that the file was started, as well as
-            the hostname, and a linefeed. What follows are binary format
-            records consisting of a 32-bit record length in bytes, (including
-            the length record itself), a 64-bit timestamp, and then the
-            literal contents of the whack message that was received. All
-            integers are in host format. In order to unambigously determine
-            the host order, the first record is an empty record that contains
-            only the current WHACK_MAGIC value. This record is 16 bytes
-            long.</para>
-          </listitem>
-        </varlistentry>
-
-        <varlistentry>
           <term><emphasis remap="i">ip-address</emphasis></term>
 
           <listitem>
-            <para>If the remote peer has crashed, and therefor did not notify
+            <para>If the remote peer has crashed, and therefore did not notify
             us, we keep sending encrypted traffic, and rejecting all plaintext
             (non-IKE) traffic from that remote peer. The
             <option>--crash</option> brings our end down as well for all the
@@ -2414,16 +2405,19 @@
         </varlistentry>
       </variablelist>
 
-      <para>The busy and relax options tells <emphasis remap="B">pluto</emphasis> to
-      explicitly activate or deactivate additional DDoS protection. Normally, these
-      meassures are automatically activate or deactivate based on the number of
-      states inside pluto. One of these DDoS protection methods is to active IKEv2
-      DCOOKIEs to defend against spoofed IKE packets.
+      <para>The --ddos-auto, --ddos-busy and --ddos-unlimited options
+      tells <emphasis remap="B">pluto</emphasis> to update the DDoS
+      protection state. Normally, these measures are automatically
+      activated or deactivated based on the number of states inside
+      pluto. The busy and unlimited option tells pluto to activate or
+      deactivate the DDoS protection mode manually.  One of these DDoS
+      protection methods is to activate IKEv2 DCOOKIEs to defend against
+      spoofed IKE packets.
       </para>
 
       <variablelist remap="TP">
         <varlistentry>
-          <term><option>--busy</option></term>
+          <term><option>--ddos-busy</option></term>
 
           <listitem>
             <para>place pluto into busy mode and activate anti-DDoS measures.</para>
@@ -2431,10 +2425,17 @@
         </varlistentry>
 
         <varlistentry>
-          <term><option>--relax</option></term>
+          <term><option>--ddos-unlimited</option></term>
 
           <listitem>
             <para>pull pluto out of busy mode and deactivate anti-DDoS measures.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>--ddos-auto</option></term>
+          <listitem>
+            <para>activate the built-in detection mechanism for the anti-DDoS measures.</para>
           </listitem>
         </varlistentry>
       </variablelist>
@@ -2444,6 +2445,10 @@
       potential connection, about each state object, and about each shunt that
       <emphasis remap="B">pluto</emphasis> is managing without an associated
       connection.</para>
+
+      <para>Statistics can be seen using <emphasis remap="B">ipsec whack --globalstats</emphasis>
+      and reset using <emphasis remap="B">ipsec whack --clearstats</emphasis>.
+      This can be used with the munin software to monitor VPN services.</para>
 
       <variablelist remap="TP">
         <varlistentry>

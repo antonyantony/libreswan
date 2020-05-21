@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep --46
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -13,7 +13,6 @@ initdone
 east #
  ipsec whack --trafficstatus
 006 #2: "westnet-eastnet-4in6", type=ESP, add_time=1234567890, inBytes=336, outBytes=336, id='@west'
-east #
 east #
  ../bin/check-for-core.sh
 east #

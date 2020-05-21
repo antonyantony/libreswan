@@ -13,6 +13,7 @@
  */
 
 struct gcm_test_vector {
+	const char *description;
 	const char *key;
 	/*
 	 * NIST provides a simple IV, while we require a separate SALT
@@ -26,7 +27,7 @@ struct gcm_test_vector {
 	const char *tag;
 };
 
-const struct gcm_test_vector *const aes_gcm_tests;
+extern const struct gcm_test_vector *const aes_gcm_tests;
 
 bool test_gcm_vectors(const struct encrypt_desc *encrypt_desc,
 		      const struct gcm_test_vector *tests);

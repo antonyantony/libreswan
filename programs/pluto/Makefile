@@ -56,6 +56,7 @@ OBJS += ikev2_message.o
 OBJS += ikev2_cookie.o
 OBJS += ikev2_ts.o
 OBJS += ikev2_msgid.o
+OBJS += ikev2_sighash.o
 
 OBJS += state_db.o
 OBJS += show.o
@@ -66,6 +67,12 @@ ifeq ($(USE_XFRM_HEADER_COPY),true)
 CFLAGS+=-I ${LIBRESWANSRCDIR}/programs/pluto/linux-copy
 endif
 
+ifeq ($(USE_XFRM_INTERFACE), true)
+ifeq ($(USE_XFRM_INTERFACE_IFLA_HEADER), true)
+CFLAGS+=-I ${LIBRESWANSRCDIR}/programs/pluto/linux-extra-if-link -DUSE_XFRM_INTERFACE_IFLA_HEADER
+endif
+endif
+
 ifeq ($(USE_GLIBC_KERN_FLIP_HEADERS),true)
 CFLAGS+=-DGLIBC_KERN_FLIP_HEADERS
 endif
@@ -73,12 +80,15 @@ endif
 # where to find libreswan headers
 HDRDIRS +=-I${LIBRESWANSRCDIR}/include -I$(LIBRESWANSRCDIR)/lib/libcrypto
 
-ifeq ($(USE_PFKEYv2),true)
+ifeq ($(USE_KLIPS),true)
 OBJS += kernel_pfkey.o
 endif
 
 ifeq ($(USE_NETKEY),true)
-OBJS += kernel_netlink.o
+OBJS += kernel_xfrm.o
+ifeq ($(USE_XFRM_INTERFACE),true)
+OBJS += kernel_xfrm_interface.o
+endif
 endif
 
 ifeq ($(USE_KLIPS),true)
@@ -131,13 +141,6 @@ ifeq ($(USE_UNBOUND_EVENT_H_COPY),true)
 CFLAGS+=-I${LIBRESWANSRCDIR}/include/unbound
 endif
 
-OBJS += ike_alg_dh_nss_ecp_ops.o
-OBJS += ike_alg_dh_nss_modp_ops.o
-OBJS += ike_alg_hash_nss_ops.o
-OBJS += ike_alg_prf_hmac_ops.o
-OBJS += ike_alg_prf_nss_ops.o
-OBJS += ike_alg_prf_nss_xcbc_ops.o
-
 OBJS += db_ops.o
 
 # libefence is a free memory allocation debugger
@@ -166,11 +169,10 @@ ifneq ($(LD_LIBRARY_PATH),)
 LDFLAGS+=-L$(LD_LIBRARY_PATH)
 endif
 
-LDFLAGS += -lrt
 LDFLAGS += $(UNBOUND_LDFLAGS)
 LDFLAGS += $(LINUX_AUDIT_LDFLAGS)
 
-OBJS += $(call if-enabled, USE_LINUX_AUDIT, linux_audit.o)
+OBJS += linux_audit.o
 
 LDFLAGS += -levent
 LDFLAGS += -levent_pthreads
@@ -197,7 +199,7 @@ RMFLAGS = -f
 .SUFFIXES:
 .SUFFIXES: .c .o
 
-OBJS += connections.o initiate.o terminate.o
+OBJS += connections.o initiate.o terminate.o ikev2_rekey_now.o
 OBJS += cbc_test_vectors.o
 OBJS += ctr_test_vectors.o
 OBJS += gcm_test_vectors.o
@@ -208,14 +210,18 @@ OBJS += ike_spi.o
 OBJS += foodgroups.o log.o state.o plutomain.o plutoalg.o server.o
 OBJS += peerlog.o
 OBJS += hash_table.o list_entry.o
-OBJS += timer.o hmac.o hostpair.o
+OBJS += timer.o hostpair.o
 OBJS += retry.o
-OBJS += myid.o ipsec_doi.o
+OBJS += ipsec_doi.o
 ifeq ($(USE_DNSSEC),true)
 OBJS += ikev2_ipseckey.o
 endif
 OBJS += ikev1.o ikev1_main.o ikev1_quick.o ikev1_dpd.o ikev1_spdb_struct.o ikev1_msgid.o
+OBJS += ikev1_states.o
+OBJS += ikev1_hash.o
+OBJS += ikev1_message.o
 OBJS += ikev2.o ikev2_parent.o ikev2_child.o ikev2_spdb_struct.o
+OBJS += ikev2_states.o
 OBJS += ikev2_ecdsa.o ikev2_rsa.o ikev2_psk.o ikev2_ppk.o ikev2_crypto.o
 OBJS += ikev2_redirect.o
 OBJS += crypt_symkey.o crypt_prf.o ikev1_prf.o ikev2_prf.o
@@ -228,8 +234,8 @@ OBJS += crypt_dh_v1.o
 OBJS += crypt_dh_v2.o
 OBJS += rnd.o spdb.o spdb_struct.o
 OBJS += vendor.o nat_traversal.o virtual.o
-OBJS += packet.o pluto_constants.o readwhackmsg.o
-OBJS += nss_cert_load.o pem.o nss_cert_verify.o
+OBJS += packet.o pluto_constants.o
+OBJS += pem.o nss_cert_verify.o
 OBJS += nss_ocsp.o nss_crl_import.o
 OBJS += nss_err.o
 OBJS += root_certs.o

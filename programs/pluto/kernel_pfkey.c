@@ -66,7 +66,6 @@
 #include "lsw_select.h"
 #include "kernel_alg.h"
 #include "ip_address.h"
-#include "af_info.h"
 
 #define KLIPS_OP_MASK   0xFF
 #define KLIPS_OP_FLAG_SHIFT     8
@@ -161,7 +160,6 @@ static inline unsigned eroute_type_to_pfkey_satype(enum eroute_type esatype)
 	switch (esatype) {
 	default:
 		bad_case(esatype);
-		return -1;
 
 	case ET_UNSPEC:
 		return K_SADB_SATYPE_UNSPEC;
@@ -453,11 +451,8 @@ static void process_pfkey_acquire(pfkey_buf *buf,
 		NULL : "conflicting address types") &&
 	    !(ugh = addrtosubnet(src, &ours)) &&
 	    !(ugh = addrtosubnet(dst, &his)))
-		record_and_initiate_opportunistic(&ours, &his, 0,
-#ifdef HAVE_LABELED_IPSEC
-						  NULL,
-#endif
-						  "%acquire-pfkey");
+		record_and_initiate_opportunistic(&ours, &his, 0, NULL,
+			  "%acquire-pfkey");
 
 	if (ugh != NULL)
 		libreswan_log("K_SADB_ACQUIRE message from KLIPS malformed: %s", ugh);
@@ -475,9 +470,10 @@ static void nat_t_new_klips_mapp(struct state *st, void *data)
 	struct new_klips_mapp_nfo *nfo = (struct new_klips_mapp_nfo *)data;
 
 	if (st->st_esp.present &&
-	    sameaddr(&st->st_remoteaddr, &nfo->src) &&
+	    sameaddr(&st->st_remote_endpoint, &nfo->src) &&
 	    st->st_esp.our_spi == nfo->sa->sadb_sa_spi) {
-		nat_traversal_new_mapping(st, &nfo->dst, nfo->dport);
+		ip_endpoint remote_endpoint = endpoint(&nfo->dst, nfo->dport);
+		nat_traversal_new_mapping(ike_sa(st), &remote_endpoint);
 	}
 }
 
@@ -505,35 +501,29 @@ static void process_pfkey_nat_t_new_mapping(struct sadb_msg *msg UNUSED,
 	if (srca->sa_family != AF_INET || dsta->sa_family != AF_INET) {
 		ugh = "only AF_INET supported";
 	} else {
-		initaddr(
-			(const void *) &((const struct sockaddr_in *)srca)->sin_addr,
-			sizeof(((const struct sockaddr_in *)srca)->sin_addr),
-			srca->sa_family, &nfo.src);
+		/* XXX: endpoint */
+		nfo.src = address_from_in_addr(&((const struct sockaddr_in *)srca)->sin_addr);
 		nfo.sport =
 			ntohs(((const struct sockaddr_in *)srca)->sin_port);
-		initaddr(
-			(const void *) &((const struct sockaddr_in *)dsta)->sin_addr,
-			sizeof(((const struct sockaddr_in *)dsta)->sin_addr),
-			dsta->sa_family, &nfo.dst);
+		/* XXX: endpoint */
+		nfo.dst = address_from_in_addr(&((const struct sockaddr_in *)dsta)->sin_addr);
 		nfo.dport =
 			ntohs(((const struct sockaddr_in *)dsta)->sin_port);
 
 		DBG(DBG_NATT, {
-			char text_said[SATOT_BUF];
+			said_buf text_said;
 			ip_said said;
 			ipstr_buf bs;
 			ipstr_buf bd;
 
-			initsaid(&nfo.src, nfo.sa->sadb_sa_spi, SA_ESP,
-				&said);
-			satot(&said, 0, text_said, SATOT_BUF);
+			said = said3(&nfo.src, nfo.sa->sadb_sa_spi, SA_ESP);
 			DBG_log("new klips mapping %s %s:%d %s:%d",
-				text_said,
+				str_said(&said, 0, &text_said),
 				ipstr(&nfo.src, &bs), nfo.sport,
 				ipstr(&nfo.dst, &bd), nfo.dport);
 		});
 
-		for_each_state(nat_t_new_klips_mapp, &nfo);
+		for_each_state(nat_t_new_klips_mapp, &nfo, __func__);
 	}
 
 	if (ugh != NULL)
@@ -611,12 +601,8 @@ void pfkey_dequeue(void)
 	while (orphaned_holds != NULL && !pfkey_input_ready() && limit-- > 0)
 		record_and_initiate_opportunistic(&orphaned_holds->ours,
 						  &orphaned_holds->his,
-						  orphaned_holds->transport_proto
-#ifdef HAVE_LABELED_IPSEC
-						  , NULL
-#endif
-						  ,
-						  "%hold found-pfkey");
+						  orphaned_holds->transport_proto,
+						  NULL, "%hold found-pfkey");
 
 	if (limit <= 0) {
 		loglog(RC_LOG_SERIOUS,
@@ -664,19 +650,22 @@ static bool pfkey_msg_start(uint8_t msg_type,
 
 /* pfkey_build + pfkey_address_build */
 static bool pfkeyext_address(uint16_t exttype,
-			     const ip_address *address,
+			     const ip_endpoint *endpoint,
 			     const char *description,
 			     const char *text_said,
 			     struct sadb_ext *extensions[K_SADB_EXT_MAX + 1])
 {
-	/* the following variable is only needed to silence
-	 * a warning caused by the fact that the argument
-	 * to sockaddrof is NOT pointer to const!
+	/*
+	 *
+	 * XXX: pfkey_address_build() extracts both the address and
+	 * the port, hence this code should expect an endpoint.
 	 */
-	ip_address t = *address;
+	ip_sockaddr sa;
+	size_t sa_len = endpoint_to_sockaddr(endpoint, &sa);
+	passert(sa_len > 0);
 
 	return pfkey_build(pfkey_address_build(extensions + exttype,
-					       exttype, 0, 0, sockaddrof(&t)),
+					       exttype, 0, 0, &sa.sa),
 			   description, text_said, extensions);
 }
 
@@ -913,38 +902,31 @@ bool pfkey_raw_eroute(const ip_address *this_host,
 		      const ip_subnet *that_client,
 		      ipsec_spi_t cur_spi UNUSED,
 		      ipsec_spi_t new_spi,
-		      int sa_proto UNUSED,
+		      const struct ip_protocol *unused_sa_proto UNUSED,
 		      unsigned int transport_proto,
 		      enum eroute_type esatype,
 		      const struct pfkey_proto_info *proto_info UNUSED,
 		      deltatime_t use_lifetime UNUSED,
 		      uint32_t sa_priority UNUSED,
 		      const struct sa_marks *sa_marks UNUSED,
+		      const uint32_t xfrm_if_id UNUSED,
 		      enum pluto_sadb_operations op,
-		      const char *text_said
-#ifdef HAVE_LABELED_IPSEC
-		      , const char *policy_label UNUSED
-#endif
-		      )
+		      const char *text_said,
+		      const char *policy_label UNUSED)
 {
 	struct sadb_ext *extensions[K_SADB_EXT_MAX + 1];
-	ip_address
-		sflow_ska,
-		dflow_ska,
-		smask_ska,
-		dmask_ska;
 	int klips_op = kernelop2klips(op);
 
-	int sport = ntohs(portof(&this_client->addr));
-	int dport = ntohs(portof(&that_client->addr));
+	int sport = subnet_hport(this_client);
+	int dport = subnet_hport(that_client);
 	int satype;
 
-	networkof(this_client, &sflow_ska);
-	maskof(this_client, &smask_ska);
+	ip_address sflow_ska = subnet_prefix(this_client);
+	ip_address smask_ska = subnet_mask(this_client);
 	setportof(sport ? ~0 : 0, &smask_ska);
 
-	networkof(that_client, &dflow_ska);
-	maskof(that_client, &dmask_ska);
+	ip_address dflow_ska = subnet_prefix(that_client);
+	ip_address dmask_ska = subnet_mask(that_client);
 	setportof(dport ? ~0 : 0, &dmask_ska);
 
 	satype = eroute_type_to_pfkey_satype(esatype);
@@ -1384,16 +1366,13 @@ bool pfkey_shunt_eroute(const struct connection *c,
 	{
 		const ip_address *peer = &sr->that.host_addr;
 		char buf2[256];
-		const struct af_info *fam = aftoinfo(addrtypeof(peer));
-
-		if (fam == NULL)
-			fam = aftoinfo(AF_INET);
+		const ip_address any = address_any(address_type(peer));
 
 		snprintf(buf2, sizeof(buf2),
 			 "eroute_connection %s", opname);
 
 		return pfkey_raw_eroute(&sr->this.host_addr, &sr->this.client,
-					fam->any,
+					&any,
 					&sr->that.client,
 					htonl(spi),
 					htonl(spi),
@@ -1402,13 +1381,11 @@ bool pfkey_shunt_eroute(const struct connection *c,
 					ET_INT,
 					null_proto_info,
 					deltatime(0),
-					calculate_sa_prio(c),
+					calculate_sa_prio(c, false),
 					&c->sa_marks,
-					op, buf2
-#ifdef HAVE_LABELED_IPSEC
-					, c->policy_label
-#endif
-					);
+					0 /* xfrm_if_id */,
+					op, buf2,
+					c->policy_label);
 	}
 }
 
@@ -1416,7 +1393,6 @@ bool pfkey_shunt_eroute(const struct connection *c,
 bool pfkey_sag_eroute(const struct state *st, const struct spd_route *sr,
 		      unsigned op, const char *opname)
 {
-	unsigned int inner_proto;
 	enum eroute_type inner_esatype;
 	ipsec_spi_t inner_spi;
 	struct pfkey_proto_info proto_info[4];
@@ -1431,7 +1407,7 @@ bool pfkey_sag_eroute(const struct state *st, const struct spd_route *sr,
 	proto_info[i].proto = 0;
 	tunnel = FALSE;
 
-	inner_proto = 0;
+	const struct ip_protocol *inner_proto = NULL;
 	inner_esatype = ET_UNSPEC;
 	inner_spi = 0;
 
@@ -1495,11 +1471,10 @@ bool pfkey_sag_eroute(const struct state *st, const struct spd_route *sr,
 	return eroute_connection(sr,
 				 inner_spi, inner_spi, inner_proto,
 				 inner_esatype, proto_info + i,
-				 0 /* KLIPS does not support priority */, NULL, op, opname
-#ifdef HAVE_LABELED_IPSEC
-				 , NULL
-#endif
-				 );
+				 0 /* KLIPS does not support priority */, NULL, 
+				 0 /* xfrm_if_id */,
+				 op, opname,
+				 NULL /* KLIPS does not support secure labels */);
 }
 
 /*
@@ -1674,7 +1649,7 @@ void pfkey_scan_shunts(void)
 
 			context = "source subnet field malformed: ";
 			ugh = ttosubnet((char *)ff[0].ptr, ff[0].len, AF_UNSPEC,
-					&eri.ours);
+					'0', &eri.ours);
 			if (ugh != NULL)
 				break;
 
@@ -1682,7 +1657,7 @@ void pfkey_scan_shunts(void)
 
 			context = "destination subnet field malformed: ";
 			ugh = ttosubnet((char *)ff[2].ptr, ff[2].len, AF_UNSPEC,
-					&eri.his);
+					'0', &eri.his);
 			if (ugh != NULL)
 				break;
 
@@ -1725,30 +1700,16 @@ void pfkey_scan_shunts(void)
 						   eri.transport_proto) ==
 				    NULL &&
 				    shunt_owner(&eri.ours, &eri.his) == NULL) {
-					char ourst[SUBNETTOT_BUF];
-					char hist[SUBNETTOT_BUF];
-					char sat[SATOT_BUF];
-
-					subnettot(&eri.ours, 0, ourst,
-						  sizeof(ourst));
-					subnettot(&eri.his, 0, hist,
-						  sizeof(hist));
-					satot(&eri.said, 0, sat, sizeof(sat));
-
-					DBG(DBG_CONTROL, {
-						    int ourport =
-							    ntohs(portof(&eri.
-									 ours.
-									 addr));
-						    int hisport =
-							    ntohs(portof(&eri.
-									 his.
-									 addr));
-						    DBG_log("add orphaned shunt %s:%d -> %s:%d => %s:%d",
-							    ourst, ourport,
-							    hist, hisport, sat,
-							    eri.transport_proto);
-					    });
+					if (DBGP(DBG_BASE)) {
+						subnet_buf ourst;
+						subnet_buf hist;
+						said_buf sat;
+						DBG_log("add orphaned shunt %s -> %s => %s:%d",
+							str_subnet_port(&eri.ours, &ourst),
+							str_subnet_port(&eri.his, &hist),
+							str_said(&eri.said, 0, &sat),
+							eri.transport_proto);
+					}
 					eri.next = orphaned_holds;
 					orphaned_holds = clone_thing(eri,
 								     "orphaned %hold");
@@ -1799,10 +1760,9 @@ void pfkey_scan_shunts(void)
 	 */
 	while (expired != NULL) {
 		struct eroute_info *p = expired;
-		ip_address src, dst;
 
-		networkof(&p->ours, &src);
-		networkof(&p->his, &dst);
+		ip_address src = subnet_prefix(&p->ours);
+		ip_address dst = subnet_prefix(&p->his);
 
 		if (delete_bare_shunt(&src, &dst,
 				p->transport_proto, SPI_HOLD, /* what spi to use? */
@@ -1839,7 +1799,7 @@ bool pfkey_was_eroute_idle(struct state *st, deltatime_t idle_max)
 			char buf[1024];
 			char *line;
 			char text_said[SATOT_BUF];
-			uint8_t proto = 0;
+			const struct ip_protocol *proto = NULL;
 			ip_address dst;
 			ip_said said;
 			ipsec_spi_t spi = 0;
@@ -1862,8 +1822,9 @@ bool pfkey_was_eroute_idle(struct state *st, deltatime_t idle_max)
 				break;
 			}
 
-			initsaid(&dst, spi, proto, &said);
-			satot(&said, 'x', text_said, SATOT_BUF);
+			said = said3(&dst, spi, proto);
+			jambuf_t jam = ARRAY_AS_JAMBUF(text_said);
+			jam_said(&jam, &said, 'x');
 
 			line = fgets(buf, sizeof(buf), f);
 			if (line == NULL) {
@@ -1930,8 +1891,8 @@ void pfkey_remove_orphaned_holds(int transport_proto,
 			if (samesubnet(ours, &p->ours) &&
 			    samesubnet(his, &p->his) &&
 			    transport_proto == p->transport_proto &&
-			    portof(&ours->addr) == portof(&p->ours.addr) &&
-			    portof(&his->addr) == portof(&p->his.addr)) {
+			    subnet_hport(ours) == subnet_hport(&p->ours) &&
+			    subnet_hport(his) == subnet_hport(&p->his)) {
 				*pp = p->next;
 				pfree(p);
 				break;

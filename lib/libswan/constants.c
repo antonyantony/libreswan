@@ -29,7 +29,6 @@
 #include <limits.h>
 #include <netinet/in.h>
 
-#include <libreswan.h>
 #include <ietf_constants.h>
 #include <libreswan/passert.h>
 
@@ -154,17 +153,9 @@ enum_names version_names = {
 	&version_names_1
 };
 
-static const char *const ike_version_liveness_name[] = {
-	"IKEv1 DPD",
-	"IKEv2 liveness",
-};
-
-enum_names ike_version_liveness_names = {
-	IKEv1, IKEv2,
-	ARRAY_REF(ike_version_liveness_name),
-	"IKE", /* prefix */
-	NULL,
-};
+/*
+ * IKEv1 vs IKEv2 language.
+ */
 
 static const char *const ike_version_name[] = {
 	"IKEv1",
@@ -178,7 +169,44 @@ enum_names ike_version_names = {
 	NULL,
 };
 
+static const char *const ike_version_liveness_name[] = {
+	"DPD",
+	"liveness",
+};
+
+enum_names ike_version_liveness_names = {
+	IKEv1, IKEv2,
+	ARRAY_REF(ike_version_liveness_name),
+	NULL, /* prefix */
+	NULL,
+};
+
+static const char *const ike_version_child_name[] = {
+	"IPsec",
+	"CHILD",
+};
+
+enum_names ike_version_child_names = {
+	IKEv1, IKEv2,
+	ARRAY_REF(ike_version_child_name),
+	NULL, /* prefix */
+	NULL,
+};
+
+static const char *const ike_version_ike_name[] = {
+	"IKE",
+	"ISAKMP",
+};
+
+enum_names ike_version_ike_names = {
+	IKEv1, IKEv2,
+	ARRAY_REF(ike_version_ike_name),
+	NULL, /* prefix */
+	NULL,
+};
+
 /* Domain of Interpretation */
+
 static const char *const doi_name[] = {
 	"ISAKMP_DOI_ISAKMP",
 	"ISAKMP_DOI_IPSEC",
@@ -562,7 +590,7 @@ static const char *const ah_transform_name_private_use[] = {
 
 static enum_names ah_transformid_names_private_use = {
 	AH_AES_CMAC_96,
-	AH_SHA2_256_TRUNC,
+	AH_SHA2_256_TRUNCBUG,
 	ARRAY_REF(ah_transform_name_private_use),
 	NULL, /* prefix */
 	NULL
@@ -677,6 +705,28 @@ enum_names ipcomp_transformid_names = {
 	IPCOMP_LZJH,
 	ARRAY_REF(ipcomp_transform_name),
 	NULL, /* prefix */
+	NULL
+};
+
+/*
+ * IANA IKEv2 Hash Algorithms
+ * https://www.iana.org/assignments/ikev2-parameters/ikev2-parameters.xhtml#hash-algorithms
+ */
+static const char *const notify_hash_algo_name[] = {
+        "IKEv2_AUTH_HASH_RESERVED",
+        "IKEv2_AUTH_HASH_SHA1",
+        "IKEv2_AUTH_HASH_SHA2_256",
+        "IKEv2_AUTH_HASH_SHA2_384",
+        "IKEv2_AUTH_HASH_SHA2_512",
+        "IKEv2_AUTH_HASH_IDENTITY"
+	/* 6-1023 Unassigned */
+};
+
+enum_names notify_hash_algo_names = {
+	IKEv2_AUTH_HASH_RESERVED,
+	IKEv2_AUTH_HASH_IDENTITY,
+	ARRAY_REF(notify_hash_algo_name),
+	"IKEv2_AUTH_HASH_", /* prefix */
 	NULL
 };
 
@@ -2266,13 +2316,9 @@ const char *strip_prefix(const char *s, const char *prefix)
  */
 int enum_search(enum_names *ed, const char *str)
 {
-	enum_names  *p;
-
-	for (p = ed; p != NULL; p = p->en_next_range) {
-		unsigned long en;
-
+	for (enum_names *p = ed; p != NULL; p = p->en_next_range) {
 		passert(p->en_last - p->en_first + 1 == p->en_checklen);
-		for (en = p->en_first; en <= p->en_last; en++) {
+		for (unsigned long en = p->en_first; en <= p->en_last; en++) {
 			const char *ptr = p->en_names[en - p->en_first];
 
 			if (ptr != NULL && strcaseeq(ptr, str)) {
@@ -2286,13 +2332,9 @@ int enum_search(enum_names *ed, const char *str)
 
 int enum_match(enum_names *ed, shunk_t string)
 {
-	enum_names  *p;
-
-	for (p = ed; p != NULL; p = p->en_next_range) {
-		unsigned long en;
-
+	for (enum_names *p = ed; p != NULL; p = p->en_next_range) {
 		passert(p->en_last - p->en_first + 1 == p->en_checklen);
-		for (en = p->en_first; en <= p->en_last; en++) {
+		for (unsigned long en = p->en_first; en <= p->en_last; en++) {
 			const char *name = p->en_names[en - p->en_first];
 
 			if (name == NULL) {
@@ -2302,42 +2344,36 @@ int enum_match(enum_names *ed, shunk_t string)
 			passert(en <= INT_MAX);
 
 			/*
--			 * Try matching the entire name including any
--			 * prefix.  If needed, ignore any trailing
--			 * '(...)'
+			 * try matching all four variants of name:
+			 * with and without prefix en->en_prefix and
+			 * with and without suffix '(...)'
 			 */
-			if (strlen(name) == string.len &&
-			    strncaseeq(name, string.ptr, string.len)) {
-				return en;
-			}
-			if (strcspn(name, "(") == string.len &&
-			    name[strlen(name) - 1] == ')' &&
-			    strncaseeq(name, string.ptr, string.len)) {
-				return en;
-			}
+			size_t name_len = strlen(name);
 
-			/*
-			 * Try matching the name minus any prefix.  If
-			 * needed, ignore any trailing '(...)'.
-			 */
-			if (ed->en_prefix == NULL) {
-				continue;
-			}
-			const char *short_name = strip_prefix(name, ed->en_prefix);
-			if (short_name == name) {
-				continue;
-			}
+			/* pl: prefix length */
+			size_t pl = ed->en_prefix == NULL ? 0 :
+				strip_prefix(name, ed->en_prefix) - name;
 
-			if (strlen(short_name) == string.len &&
-			    strncaseeq(short_name, string.ptr, string.len)) {
+			/* suffix must not and will not overlap prefix */
+			const char *suffix = strchr(name + pl, '(');
+
+			/* sl: suffix length */
+			size_t sl = suffix != NULL && name[name_len - 1] == ')' ?
+				&name[name_len] - suffix : 0;
+
+#			define try(guard, f, b) ( \
+				(guard) && \
+				name_len - ((f) + (b)) == string.len && \
+				strncaseeq(name + (f), string.ptr, string.len))
+
+			if (try(true, 0, 0) ||
+			    try(sl > 0, 0, sl) ||
+			    try(pl > 0, pl, 0) ||
+			    try(pl > 0 && sl > 0, pl, sl))
+			{
 				return en;
 			}
-			if (strcspn(short_name, "(") == string.len &&
-			    short_name[strlen(short_name) - 1] == ')' &&
-			    strncaseeq(short_name, string.ptr, string.len)) {
-				return en;
-			}
-
+#			undef try
 		}
 	}
 	return -1;

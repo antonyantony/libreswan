@@ -7,7 +7,7 @@ east #
 pk12util: PKCS12 IMPORT SUCCESSFUL
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -20,7 +20,6 @@ east #
 000 "nss-cert":   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "nss-cert":   our auth:rsasig, their auth:rsasig
 000 "nss-cert":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:unset;
-000 "nss-cert":   labeled_ipsec:no;
 000 "nss-cert":   policy_label:unset;
 000 "nss-cert":   CAs: 'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=Libreswan test CA for mainca, E=testing@libreswan.org'...'%any'
 000 "nss-cert":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
@@ -49,7 +48,6 @@ hashsha1                                                     P,,
 west-ec                                                      P,,  
 nic                                                          P,,  
 usage-server                                                 u,u,u
-east #
 east #
  ../bin/check-for-core.sh
 east #

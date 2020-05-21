@@ -5,6 +5,7 @@
 #include "ikev1_continuations.h"
 #include "packet.h"		/* for pb_stream */
 #include "fd.h"
+#include "crypt_mac.h"
 
 struct child_proposals;
 struct ike_proposals;
@@ -13,7 +14,7 @@ struct ike_proposals;
 
 extern void init_ikev1(void);
 
-const struct oakley_group_desc *ikev1_quick_pfs(const struct child_proposals proposals);
+const struct dh_desc *ikev1_quick_pfs(const struct child_proposals proposals);
 
 void ikev1_init_out_pbs_echo_hdr(struct msg_digest *md, bool enc, uint8_t np,
 				 pb_stream *output_stream, uint8_t *output_buffer,
@@ -57,26 +58,22 @@ extern bool ikev1_ship_KE(struct state *st,
 /* **MAIN MODE FUNCTIONS** in ikev1_main.c */
 
 /* extern initiator_function main_outI1; */
-extern void main_outI1(fd_t whack_sock,
+extern void main_outI1(struct fd *whack_sock,
 		       struct connection *c,
 		       struct state *predecessor,
 		       lset_t policy,
-		       unsigned long try
-#ifdef HAVE_LABELED_IPSEC
-		       , struct xfrm_user_sec_ctx_ike *uctx
-#endif
-		       );
+		       unsigned long try,
+		       const threadtime_t *inception,
+		       struct xfrm_user_sec_ctx_ike *uctx);
 
 /* extern initiator_function aggr_outI1; */
-extern void aggr_outI1(fd_t whack_sock,
+extern void aggr_outI1(struct fd *whack_sock,
 		       struct connection *c,
 		       struct state *predecessor,
 		       lset_t policy,
-		       unsigned long try
-#ifdef HAVE_LABELED_IPSEC
-		       , struct xfrm_user_sec_ctx_ike *uctx
-#endif
-		       );
+		       unsigned long try,
+		       const threadtime_t *inception,
+		       struct xfrm_user_sec_ctx_ike *uctx);
 
 extern void send_v1_delete(struct state *st);
 
@@ -88,16 +85,12 @@ extern void send_v1_delete(struct state *st);
 extern bool ikev1_decode_peer_id(struct msg_digest *md, bool initiator,
 			   bool aggrmode);
 
-extern size_t RSA_sign_hash(const struct connection *c,
-			    u_char sig_val[RSA_MAX_OCTETS],
-			    const u_char *hash_val, size_t hash_len,
-			    enum notify_payload_hash_algorithms hash_algo);
+extern size_t v1_sign_hash_RSA(const struct connection *c,
+			       uint8_t *sig_val, size_t sig_size,
+			       const struct crypt_mac *hash);
 
-extern size_t                           /* length of hash */
-main_mode_hash(struct state *st,
-	       u_char *hash_val,        /* resulting bytes */
-	       bool hashi,              /* Initiator? */
-	       const pb_stream *idpl);  /* ID payload, as PBS; cur must be at end */
+struct crypt_mac main_mode_hash(struct state *st, enum sa_role role,
+				const pb_stream *idpl);  /* ID payload, as PBS; cur must be at end */
 
 /*
  * Note: oakley_id_and_auth may switch the connection being used!
@@ -144,5 +137,31 @@ extern ikev1_state_transition_fn aggr_inI2;
 extern ikev1_state_transition_fn quick_inI1_outR1;
 extern ikev1_state_transition_fn quick_inR1_outI2;
 extern ikev1_state_transition_fn quick_inI2;
+
+/* macros to manipulate IVs in state */
+
+#define update_iv(st)	{ \
+	(st)->st_v1_iv = (st)->st_v1_new_iv; \
+    }
+
+#define set_ph1_iv_from_new(st)	{ \
+	(st)->st_v1_ph1_iv = (st)->st_v1_new_iv; \
+ }
+
+#define save_iv(st, tmp) { \
+	(tmp) = (st)->st_v1_iv; \
+    }
+
+#define restore_iv(st, tmp) { \
+	(st)->st_v1_iv = (tmp); \
+    }
+
+#define save_new_iv(st, tmp)	{ \
+	(tmp) = (st)->st_v1_new_iv; \
+    }
+
+#define restore_new_iv(st, tmp)	{ \
+	(st)->st_v1_new_iv = (tmp); \
+    }
 
 #endif

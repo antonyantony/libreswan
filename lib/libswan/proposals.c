@@ -42,6 +42,7 @@ struct proposal {
 };
 
 struct proposals {
+	bool defaulted;
 	int ref_cnt;
 	struct proposal *proposals;
 };
@@ -238,7 +239,7 @@ void append_proposal(struct proposals *proposals, struct proposal **proposal)
 			}
 		}
 		if (same) {
-			/* parser->policy->warning("discarding duplicate proposal"); */
+			dbg("discarding duplicate proposal");
 			free_proposal(proposal);
 			return;
 		}
@@ -316,12 +317,33 @@ void free_proposal(struct proposal **proposals)
 	*proposals = NULL;
 }
 
+
+/*
+ * XXX: hack, need to come up with a type safe way of mapping an
+ * ike_alg onto an index.
+ */
+static enum proposal_algorithm ike_to_proposal_algorithm(const struct ike_alg *alg)
+{
+	if (alg->algo_type == IKE_ALG_ENCRYPT) {
+		return PROPOSAL_encrypt;
+	} else if (alg->algo_type == IKE_ALG_PRF) {
+		return PROPOSAL_prf;
+	} else if (alg->algo_type == IKE_ALG_INTEG) {
+		return PROPOSAL_integ;
+	} else if (alg->algo_type == IKE_ALG_DH) {
+		return PROPOSAL_dh;
+	} else {
+		PASSERT_FAIL("unexpected algorithm type %s",
+			     ike_alg_type_name(alg->algo_type));
+	}
+}
+
 void append_algorithm(struct proposal_parser *parser,
 		      struct proposal *proposal,
-		      enum proposal_algorithm algorithm,
 		      const struct ike_alg *alg,
 		      int enckeylen)
 {
+	enum proposal_algorithm algorithm = ike_to_proposal_algorithm(alg);
 	passert(algorithm < elemsof(proposal->algorithms));
 	struct algorithm **end = &proposal->algorithms[algorithm];
 	/* find end, and check for duplicates */
@@ -343,15 +365,17 @@ void append_algorithm(struct proposal_parser *parser,
 		.desc = alg,
 		.enckeylen = enckeylen,
 	};
+	DBGF(DBG_PROPOSAL_PARSER, "appending %s algorithm %s[_%d]",
+	     ike_alg_type_name(alg->algo_type), alg->name, enckeylen);
 	*end = clone_thing(new_algorithm, "alg");
 }
 
 void fmt_proposal(struct lswlog *log,
 		  const struct proposal *proposal)
 {
- 	const char *ps = "";
+	const char *ps = "";
 
- 	const char *as = "";
+	const char *as = "";
 
 	as = ps;
 	FOR_EACH_ALGORITHM(proposal, encrypt, alg) {
@@ -397,7 +421,7 @@ void fmt_proposal(struct lswlog *log,
 
 	as = ps;
 	FOR_EACH_ALGORITHM(proposal, dh, alg) {
-		const struct oakley_group_desc *dh = dh_desc(alg->desc);
+		const struct dh_desc *dh = dh_desc(alg->desc);
 		lswlogs(log, as); ps = "-"; as = "+";
 		lswlogs(log, dh->common.fqn);
 	}
@@ -415,7 +439,7 @@ void fmt_proposals(struct lswlog *log, const struct proposals *proposals)
 
 /*
  * When PFS=no ignore any DH algorithms, and when PFS=yes reject
- * mixing implict and explicit DH.
+ * mixing implicit and explicit DH.
  */
 static bool proposals_pfs_vs_dh_check(struct proposal_parser *parser,
 				      struct proposals *proposals)
@@ -563,6 +587,11 @@ struct proposals *proposals_from_str(struct proposal_parser *parser,
 	if (parser_version == 0) {
 		parser_version = parser->policy->version;
 	}
+	if (str == NULL) {
+		proposals->defaulted = true;
+		/* may still be null */
+		str = parser->protocol->defaults[parser->policy->version]->proposals;
+	}
 	bool ok;
 	switch (parser_version) {
 	case 2: ok = v2_proposals_parse_str(parser, proposals, shunk1(str)); break;
@@ -583,4 +612,9 @@ struct proposals *proposals_from_str(struct proposal_parser *parser,
 		return NULL;
 	}
 	return proposals;
+}
+
+bool default_proposals(struct proposals *proposals)
+{
+	return proposals == NULL || proposals->defaulted;
 }

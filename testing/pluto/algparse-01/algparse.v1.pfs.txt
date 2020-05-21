@@ -12,18 +12,18 @@ algparse -v1 -pfs 'esp=aes-sha1'
 	AES_CBC-HMAC_SHA1_96
 algparse -v1 -pfs 'esp=aes-sha1-modp2048'
 	AES_CBC-HMAC_SHA1_96-MODP2048
-algparse -v1 -pfs 'esp=aes-128'
-	AES_CBC_128-HMAC_SHA1_96
 algparse -v1 -pfs 'esp=aes-128-sha1'
 	AES_CBC_128-HMAC_SHA1_96
 algparse -v1 -pfs 'esp=aes-128-sha1'
 	AES_CBC_128-HMAC_SHA1_96
 algparse -v1 -pfs 'esp=aes-128-sha1-modp2048'
 	AES_CBC_128-HMAC_SHA1_96-MODP2048
+algparse -v1 -pfs 'esp=aes-128'
+	AES_CBC_128-HMAC_SHA1_96
 algparse -v1 -pfs 'esp=aes_gcm_a-128-null'
 	AES_GCM_8_128-NONE
 algparse -v1 -pfs 'esp=3des-sha1;modp1024'
-	3DES_CBC-HMAC_SHA1_96-MODP1024
+	ERROR: ESP DH algorithm 'modp1024' is not supported
 algparse -v1 -pfs 'esp=3des-sha1;modp1536'
 	3DES_CBC-HMAC_SHA1_96-MODP1536
 algparse -v1 -pfs 'esp=3des-sha1;modp2048'
@@ -46,6 +46,8 @@ algparse -v1 -pfs 'esp=aes-sha'
 	AES_CBC-HMAC_SHA1_96
 algparse -v1 -pfs 'esp=aes-sha1'
 	AES_CBC-HMAC_SHA1_96
+algparse -v1 -pfs 'esp=aes128-sha1'
+	AES_CBC_128-HMAC_SHA1_96
 algparse -v1 -pfs 'esp=aes-sha2'
 	AES_CBC-HMAC_SHA2_256_128
 algparse -v1 -pfs 'esp=aes-sha256'
@@ -54,8 +56,6 @@ algparse -v1 -pfs 'esp=aes-sha384'
 	AES_CBC-HMAC_SHA2_384_192
 algparse -v1 -pfs 'esp=aes-sha512'
 	AES_CBC-HMAC_SHA2_512_256
-algparse -v1 -pfs 'esp=aes128-sha1'
-	AES_CBC_128-HMAC_SHA1_96
 algparse -v1 -pfs 'esp=aes128-aes_xcbc'
 	AES_CBC_128-AES_XCBC_96
 algparse -v1 -pfs 'esp=aes192-sha1'
@@ -347,12 +347,12 @@ algparse -v1 -pfs 'ike'
 	AES_CBC-HMAC_SHA2_256-MODP2048
 	AES_CBC-HMAC_SHA2_512-MODP2048
 	AES_CBC-HMAC_SHA1-MODP2048
-	3DES_CBC-HMAC_SHA2_256-MODP2048
-	3DES_CBC-HMAC_SHA2_512-MODP2048
-	3DES_CBC-HMAC_SHA1-MODP2048
 	AES_CBC-HMAC_SHA2_256-MODP1536
 	AES_CBC-HMAC_SHA2_512-MODP1536
 	AES_CBC-HMAC_SHA1-MODP1536
+	3DES_CBC-HMAC_SHA2_256-MODP2048
+	3DES_CBC-HMAC_SHA2_512-MODP2048
+	3DES_CBC-HMAC_SHA1-MODP2048
 	3DES_CBC-HMAC_SHA2_256-MODP1536
 	3DES_CBC-HMAC_SHA2_512-MODP1536
 	3DES_CBC-HMAC_SHA1-MODP1536

@@ -9,7 +9,7 @@ east #
 pk12util: PKCS12 IMPORT SUCCESSFUL
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -26,7 +26,6 @@ east #
 east #
  ipsec whack --trafficstatus
 006 #2: "other"[1] 192.1.2.45, type=ESP, add_time=1234567890, inBytes=0, outBytes=0, id='@otherwest.other.libreswan.org'
-east #
 east #
  ../bin/check-for-core.sh
 east #

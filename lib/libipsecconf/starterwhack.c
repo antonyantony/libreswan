@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <ctype.h>
 
 #include "sysdep.h"
 
@@ -51,6 +52,7 @@
 #include "whack.h"
 #include "id.h"
 #include "ip_address.h"
+#include "ip_info.h"
 
 static void update_ports(struct whack_message * m)
 {
@@ -286,7 +288,7 @@ static int send_whack_msg(struct whack_message *msg, char *ctlsocket)
 
 static void init_whack_msg(struct whack_message *msg)
 {
-	/* properly initialzes pointers to NULL */
+	/* properly initializes pointers to NULL */
 	static const struct whack_message zwm;
 
 	*msg = zwm;
@@ -323,18 +325,18 @@ static void set_whack_end(char *lr,
 	case KH_DEFAULTROUTE:
 	case KH_IPHOSTNAME:
 		/* note: we always copy the name string below */
-		anyaddr(l->addr_family, &w->host_addr);
+		w->host_addr = address_any(aftoinfo(l->addr_family));
 		break;
 
 	case KH_OPPO:
 	case KH_GROUP:
 	case KH_OPPOGROUP:
 		/* policy should have been set to OPPO */
-		anyaddr(l->addr_family, &w->host_addr);
+		w->host_addr = address_any(aftoinfo(l->addr_family));
 		break;
 
 	case KH_ANY:
-		anyaddr(l->addr_family, &w->host_addr);
+		w->host_addr = address_any(aftoinfo(l->addr_family));
 		break;
 
 	default:
@@ -355,7 +357,7 @@ static void set_whack_end(char *lr,
 		 * but, get the family set up right
 		 * XXX the nexthop type has to get into the whack message!
 		 */
-		anyaddr(addrtypeof(&l->addr), &w->host_nexthop);
+		w->host_nexthop = address_any(address_type(&l->addr));
 		break;
 
 	default:
@@ -364,18 +366,20 @@ static void set_whack_end(char *lr,
 		break;
 	}
 
-	if (!isanyaddr(&l->sourceip))
+	if (address_is_specified(&l->sourceip))
 		w->host_srcip = l->sourceip;
 
-	if (!isanyaddr(&l->vti_ip.addr))
+	if (subnet_is_specified(&l->vti_ip))
 		w->host_vtiip = l->vti_ip;
+
+	if (!isanyaddr(&l->ifaceip.addr))
+		w->ifaceip = l->ifaceip;
 
 	w->has_client = l->has_client;
 	if (l->has_client) {
 		w->client = l->subnet;
 	} else {
-		/* ??? is this a crude way of seting client to anyaddr? */
-		w->client.addr.u.v4.sin_family = l->addr_family;
+		w->client = (aftoinfo(l->addr_family)->all_addresses);
 	}
 
 	w->host_port = IKE_UDP_PORT; /* XXX starter should support (nat)-ike-port */
@@ -548,6 +552,7 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	msg.sa_rekey_fuzz = conn->options[KNCF_REKEYFUZZ];
 	msg.sa_keying_tries = conn->options[KNCF_KEYINGTRIES];
 	msg.sa_replay_window = conn->options[KNCF_REPLAY_WINDOW];
+	msg.xfrm_if_id = conn->options[KNCF_XFRM_IF_ID];
 
 	msg.r_interval = deltatime_ms(conn->options[KNCF_RETRANSMIT_INTERVAL_MS]);
 	msg.r_timeout = deltatime(conn->options[KNCF_RETRANSMIT_TIMEOUT]);
@@ -658,9 +663,7 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 #endif
 
 #ifdef HAVE_LABELED_IPSEC
-	/* Labeled ipsec support */
-	if (conn->options_set[KNCF_LABELED_IPSEC]) {
-		msg.labeled_ipsec = conn->options[KNCF_LABELED_IPSEC];
+	if (conn->options_set[KSCF_POLICY_LABEL]) {
 		msg.policy_label = conn->policy_label;
 		starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" policy_label=%s",
 			conn->name, msg.policy_label);
@@ -754,7 +757,7 @@ static bool one_subnet_from_string(const struct starter_conn *conn,
 	while (*subnets != '\0' && !(isspace(*subnets) || *subnets == ','))
 		subnets++;
 
-	e = ttosubnet(eln, subnets - eln, af, sn);
+	e = ttosubnet(eln, subnets - eln, af, '6', sn);
 	if (e != NULL) {
 		starter_log(LOG_LEVEL_ERR,
 			"conn: \"%s\" warning '%s' is not a subnet declaration. (%ssubnets)",
@@ -775,7 +778,7 @@ static bool one_subnet_from_string(const struct starter_conn *conn,
  *
  * This function goes through the set of N x M combinations of the subnets
  * defined in conn's "subnets=" declarations and synthesizes conns with
- * the proper left/right subnet setttings, and then calls operation(),
+ * the proper left/right subnet settings, and then calls operation(),
  * (which is usually add/delete/route/etc.)
  *
  */

@@ -1,7 +1,7 @@
 /testing/guestbin/swan-prep
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -17,18 +17,15 @@ east #
 "westnet-eastnet-ipv4-psk-ikev2" #1: IKE_AUTH responder matching remote ESP/AH proposals failed, responder SA processing returned STF_FAIL+v2N_NO_PROPOSAL_CHOSEN
 | ikev2_child_sa_respond returned STF_FAIL+v2N_NO_PROPOSAL_CHOSEN
 | ikev2_parent_inI2outR2_continue_tail returned STF_FAIL+v2N_NO_PROPOSAL_CHOSEN
-| #2 complete v2 state transition from UNDEFINED md.from_state=PARENT_R1 svm.state=PARENT_R1 to V2_IPSEC_R with status STF_FAIL+v2N_NO_PROPOSAL_CHOSEN
+| #2 complete_v2_state_transition() UNDEFINED -> V2_IPSEC_R with status STF_FAIL+v2N_NO_PROPOSAL_CHOSEN; transition.[from]state=PARENT_R1
 "westnet-eastnet-ipv4-psk-ikev2" #2: responding to IKE_AUTH message (ID 1) from 192.1.2.45:500 with encrypted notification NO_PROPOSAL_CHOSEN
 |    Notify Message Type: v2N_NO_PROPOSAL_CHOSEN (0xe)
-| state transition function for STATE_UNDEFINED failed: v2N_NO_PROPOSAL_CHOSEN
 east #
  ipsec whack --shutdown
-002 shutting down
 east #
- grep leak /tmp/pluto.log
+ grep -e leak /tmp/pluto.log | grep -v -e '|'
 leak-detective enabled
 leak detective found no leaks
-east #
 east #
  ../bin/check-for-core.sh
 east #

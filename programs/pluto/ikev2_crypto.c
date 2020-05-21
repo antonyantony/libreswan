@@ -27,7 +27,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include <libreswan.h>
 
 #include "sysdep.h"
 #include "constants.h"
@@ -115,7 +114,7 @@ void ikev2_derive_child_keys(struct child_sa *child)
 	if (st->st_pfs_group != NULL) {
 		DBG(DBG_CRYPT, DBG_log("#%lu %s add g^ir to child key %p",
 					st->st_serialno,
-					st->st_state_name,
+					st->st_state->name,
 					st->st_shared_nss));
 		shared = st->st_shared_nss;
 	}
@@ -126,12 +125,12 @@ void ikev2_derive_child_keys(struct child_sa *child)
 						   st->st_ni,
 						   st->st_nr,
 						   ipi->keymat_len * 2);
-	PK11SymKey *ikey = key_from_symkey_bytes(keymat, 0, ipi->keymat_len);
+	PK11SymKey *ikey = key_from_symkey_bytes(keymat, 0, ipi->keymat_len, HERE);
 	ikeymat = chunk_from_symkey("initiator to responder keys", ikey);
 	release_symkey(__func__, "ikey", &ikey);
 
 	PK11SymKey *rkey = key_from_symkey_bytes(keymat, ipi->keymat_len,
-						 ipi->keymat_len);
+						 ipi->keymat_len, HERE);
 	rkeymat = chunk_from_symkey("responder to initiator keys:", rkey);
 	release_symkey(__func__, "rkey", &rkey);
 
@@ -145,16 +144,16 @@ void ikev2_derive_child_keys(struct child_sa *child)
 	switch (child->sa.st_sa_role) {
 	case SA_RESPONDER:
 		DBG(DBG_PRIVATE, {
-			    DBG_dump_chunk("our  keymat", ikeymat);
-			    DBG_dump_chunk("peer keymat", rkeymat);
+			    DBG_dump_hunk("our  keymat", ikeymat);
+			    DBG_dump_hunk("peer keymat", rkeymat);
 		    });
 		ipi->our_keymat = ikeymat.ptr;
 		ipi->peer_keymat = rkeymat.ptr;
 		break;
 	case SA_INITIATOR:
 		DBG(DBG_PRIVATE, {
-			    DBG_dump_chunk("our  keymat", rkeymat);
-			    DBG_dump_chunk("peer keymat", ikeymat);
+			    DBG_dump_hunk("our  keymat", rkeymat);
+			    DBG_dump_hunk("peer keymat", ikeymat);
 		    });
 		ipi->peer_keymat = ikeymat.ptr;
 		ipi->our_keymat = rkeymat.ptr;
@@ -162,5 +161,4 @@ void ikev2_derive_child_keys(struct child_sa *child)
 	default:
 		bad_case(child->sa.st_sa_role);
 	}
-
 }

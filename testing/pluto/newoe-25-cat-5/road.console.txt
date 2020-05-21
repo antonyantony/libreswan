@@ -7,7 +7,7 @@ road #
  echo "192.1.2.0/24"  >> /etc/ipsec.d/policies/private-or-clear
 road #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 road #
  /testing/pluto/bin/wait-until-pluto-started
 road #
@@ -19,10 +19,10 @@ road #
 road #
  ipsec auto --status
 000 using kernel interface: netkey
-000 interface lo/lo 127.0.0.1@4500
-000 interface lo/lo 127.0.0.1@500
-000 interface eth0/eth0 192.1.3.209@4500
-000 interface eth0/eth0 192.1.3.209@500
+000 interface lo/lo 127.0.0.1:4500
+000 interface lo/lo 127.0.0.1:500
+000 interface eth0/eth0 192.1.3.209:4500
+000 interface eth0/eth0 192.1.3.209:500
 000  
 000  
 000 fips mode=disabled;
@@ -94,7 +94,6 @@ road #
 000 algorithm IKE PRF: name=HMAC_SHA2_384, hashlen=48
 000 algorithm IKE PRF: name=HMAC_SHA2_512, hashlen=64
 000 algorithm IKE PRF: name=AES_XCBC, hashlen=16
-000 algorithm IKE DH Key Exchange: name=MODP1024, bits=1024
 000 algorithm IKE DH Key Exchange: name=MODP1536, bits=1536
 000 algorithm IKE DH Key Exchange: name=MODP2048, bits=2048
 000 algorithm IKE DH Key Exchange: name=MODP3072, bits=3072
@@ -115,7 +114,6 @@ road #
 000 "block":   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "block":   our auth:unset, their auth:unset
 000 "block":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:unset;
-000 "block":   labeled_ipsec:no;
 000 "block":   policy_label:unset;
 000 "block":   ike_life: 0s; ipsec_life: 0s; replay_window: 0; rekey_margin: 0s; rekey_fuzz: 0%; keyingtries: 0;
 000 "block":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
@@ -131,7 +129,6 @@ road #
 000 "clear":   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "clear":   our auth:unset, their auth:unset
 000 "clear":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:unset;
-000 "clear":   labeled_ipsec:no;
 000 "clear":   policy_label:unset;
 000 "clear":   ike_life: 0s; ipsec_life: 0s; replay_window: 0; rekey_margin: 0s; rekey_fuzz: 0%; keyingtries: 0;
 000 "clear":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
@@ -147,7 +144,6 @@ road #
 000 "clear#192.1.2.253/32":   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "clear#192.1.2.253/32":   our auth:unset, their auth:unset
 000 "clear#192.1.2.253/32":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:unset;
-000 "clear#192.1.2.253/32":   labeled_ipsec:no;
 000 "clear#192.1.2.253/32":   policy_label:unset;
 000 "clear#192.1.2.253/32":   ike_life: 0s; ipsec_life: 0s; replay_window: 0; rekey_margin: 0s; rekey_fuzz: 0%; keyingtries: 0;
 000 "clear#192.1.2.253/32":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
@@ -163,7 +159,6 @@ road #
 000 "clear#192.1.3.253/32":   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "clear#192.1.3.253/32":   our auth:unset, their auth:unset
 000 "clear#192.1.3.253/32":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:unset;
-000 "clear#192.1.3.253/32":   labeled_ipsec:no;
 000 "clear#192.1.3.253/32":   policy_label:unset;
 000 "clear#192.1.3.253/32":   ike_life: 0s; ipsec_life: 0s; replay_window: 0; rekey_margin: 0s; rekey_fuzz: 0%; keyingtries: 0;
 000 "clear#192.1.3.253/32":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
@@ -179,7 +174,6 @@ road #
 000 "clear#192.1.3.254/32":   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "clear#192.1.3.254/32":   our auth:unset, their auth:unset
 000 "clear#192.1.3.254/32":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:unset;
-000 "clear#192.1.3.254/32":   labeled_ipsec:no;
 000 "clear#192.1.3.254/32":   policy_label:unset;
 000 "clear#192.1.3.254/32":   ike_life: 0s; ipsec_life: 0s; replay_window: 0; rekey_margin: 0s; rekey_fuzz: 0%; keyingtries: 0;
 000 "clear#192.1.3.254/32":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
@@ -195,12 +189,12 @@ road #
 000 "clear-or-private":   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "clear-or-private":   our auth:null, their auth:null
 000 "clear-or-private":   modecfg info: us:client, them:server, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:set;
-000 "clear-or-private":   labeled_ipsec:no;
 000 "clear-or-private":   policy_label:unset;
 000 "clear-or-private":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "clear-or-private":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
 000 "clear-or-private":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "clear-or-private":   policy: AUTHNULL+ENCRYPT+TUNNEL+PFS+NEGO_PASS+OPPORTUNISTIC+GROUP+IKEV2_ALLOW+IKEV2_ALLOW_NARROWING+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO+failurePASS;
+000 "clear-or-private":   v2-auth-hash-policy: none;
 000 "clear-or-private":   conn_prio: 32,0; interface: eth0; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "clear-or-private":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
 000 "clear-or-private":   our idtype: ID_NULL; our id=ID_NULL; their idtype: ID_NULL; their id=ID_NULL
@@ -211,12 +205,12 @@ road #
 000 "private":   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "private":   our auth:null, their auth:null
 000 "private":   modecfg info: us:client, them:server, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:set;
-000 "private":   labeled_ipsec:no;
 000 "private":   policy_label:unset;
 000 "private":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "private":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
 000 "private":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "private":   policy: AUTHNULL+ENCRYPT+TUNNEL+PFS+OPPORTUNISTIC+GROUP+GROUTED+IKEV2_ALLOW+IKEV2_ALLOW_NARROWING+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO+failureDROP;
+000 "private":   v2-auth-hash-policy: none;
 000 "private":   conn_prio: 32,0; interface: eth0; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "private":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
 000 "private":   our idtype: ID_NULL; our id=ID_NULL; their idtype: ID_NULL; their id=ID_NULL
@@ -227,12 +221,12 @@ road #
 000 "private-or-clear":   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "private-or-clear":   our auth:null, their auth:null
 000 "private-or-clear":   modecfg info: us:client, them:server, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:set;
-000 "private-or-clear":   labeled_ipsec:no;
 000 "private-or-clear":   policy_label:unset;
 000 "private-or-clear":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "private-or-clear":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
 000 "private-or-clear":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "private-or-clear":   policy: AUTHNULL+ENCRYPT+TUNNEL+PFS+NEGO_PASS+OPPORTUNISTIC+GROUP+GROUTED+IKEV2_ALLOW+IKEV2_ALLOW_NARROWING+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO+failurePASS;
+000 "private-or-clear":   v2-auth-hash-policy: none;
 000 "private-or-clear":   conn_prio: 32,0; interface: eth0; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "private-or-clear":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
 000 "private-or-clear":   our idtype: ID_NULL; our id=ID_NULL; their idtype: ID_NULL; their id=ID_NULL
@@ -243,12 +237,12 @@ road #
 000 "private-or-clear#192.1.2.0/24":   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "private-or-clear#192.1.2.0/24":   our auth:null, their auth:null
 000 "private-or-clear#192.1.2.0/24":   modecfg info: us:client, them:server, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:set;
-000 "private-or-clear#192.1.2.0/24":   labeled_ipsec:no;
 000 "private-or-clear#192.1.2.0/24":   policy_label:unset;
 000 "private-or-clear#192.1.2.0/24":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
 000 "private-or-clear#192.1.2.0/24":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
 000 "private-or-clear#192.1.2.0/24":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "private-or-clear#192.1.2.0/24":   policy: AUTHNULL+ENCRYPT+TUNNEL+PFS+NEGO_PASS+OPPORTUNISTIC+GROUPINSTANCE+IKEV2_ALLOW+IKEV2_ALLOW_NARROWING+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO+failurePASS;
+000 "private-or-clear#192.1.2.0/24":   v2-auth-hash-policy: none;
 000 "private-or-clear#192.1.2.0/24":   conn_prio: 32,0; interface: eth0; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "private-or-clear#192.1.2.0/24":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
 000 "private-or-clear#192.1.2.0/24":   our idtype: ID_NULL; our id=ID_NULL; their idtype: ID_NULL; their id=ID_NULL
@@ -280,25 +274,25 @@ road NOW
 XFRM state:
 XFRM policy:
 src 192.1.2.253/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.2.253/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.2.253/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.3.253/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.3.254/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.253/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.3.253/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.3.254/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.3.254/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.2.0/24
-	dir out priority 2088935 ptype main
+	dir out priority 4177870 ptype main
 	tmpl src 0.0.0.0 dst 0.0.0.0
 		proto esp reqid REQID mode transport
 XFRM done
@@ -310,11 +304,6 @@ default via 192.1.3.254 dev eth0
 NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
-road #
- killall ip > /dev/null 2> /dev/null
-road #
- cp /tmp/xfrm-monitor.out OUTPUT/road.xfrm-monitor.txt
-cp: cannot stat '/tmp/xfrm-monitor.out': No such file or directory
 road #
  # ping should succeed through tunnel
 road #
@@ -367,41 +356,41 @@ src 192.1.3.209 dst 192.1.2.23
 	sel src 192.1.3.209/32 dst 192.1.2.23/32 proto icmp type 8 code 0 dev eth0 
 XFRM policy:
 src 192.1.2.253/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.2.253/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.2.253/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.3.253/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.3.254/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.253/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.3.253/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.3.254/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.3.254/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 10.0.10.1/32 dst 192.1.2.23/32
-	dir out priority 2088927 ptype main
+	dir out priority 4177855 ptype main
 	tmpl src 192.1.3.209 dst 192.1.2.23
 		proto esp reqid REQID mode tunnel
 src 192.1.2.23/32 dst 10.0.10.1/32
-	dir fwd priority 2088927 ptype main
+	dir fwd priority 4177855 ptype main
 	tmpl src 192.1.2.23 dst 192.1.3.209
 		proto esp reqid REQID mode tunnel
 src 192.1.2.23/32 dst 10.0.10.1/32
-	dir in priority 2088927 ptype main
+	dir in priority 4177855 ptype main
 	tmpl src 192.1.2.23 dst 192.1.3.209
 		proto esp reqid REQID mode tunnel
 src 192.1.3.209/32 dst 192.1.2.23/32
-	dir out priority 2088927 ptype main
+	dir out priority 4177855 ptype main
 	tmpl src 192.1.3.209 dst 192.1.2.23
 		proto esp reqid REQID mode tunnel
 src 192.1.3.209/32 dst 192.1.2.0/24
-	dir out priority 2088935 ptype main
+	dir out priority 4177870 ptype main
 	tmpl src 0.0.0.0 dst 0.0.0.0
 		proto esp reqid REQID mode transport
 XFRM done
@@ -413,7 +402,6 @@ default via 192.1.3.254 dev eth0
 NSS_CERTIFICATES
 Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
-road #
 road #
  ../bin/check-for-core.sh
 road #

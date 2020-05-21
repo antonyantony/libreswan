@@ -29,7 +29,6 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
-#include <libreswan.h>
 #include <libreswan/pfkeyv2.h>
 #include <libreswan/pfkey.h>
 
@@ -178,7 +177,6 @@ add_entry:
 					/* matches nothing -- create a new entry */
 					int fd = create_socket(ifp, v->name,
 							       pluto_port);
-					ipstr_buf b;
 
 					if (fd < 0)
 						break;
@@ -198,21 +196,20 @@ add_entry:
 								 "virtual device name klips");
 					id->id_count++;
 
-					q->ip_addr = ifp->addr;
+					q->local_endpoint = endpoint(&ifp->addr, pluto_port);
 					q->fd = fd;
 					q->next = interfaces;
 					q->change = IFN_ADD;
-					q->port = pluto_port;
 					q->ike_float = FALSE;
 
 					interfaces = q;
 
+					endpoint_buf b;
 					libreswan_log(
-						"adding interface %s/%s %s:%d",
+						"adding interface %s/%s %s",
 						q->ip_dev->id_vname,
 						q->ip_dev->id_rname,
-						ipstr(&q->ip_addr, &b),
-						q->port);
+						str_endpoint(&q->local_endpoint, &b));
 
 					/*
 					 * right now, we do not support NAT-T on IPv6, because
@@ -235,21 +232,15 @@ add_entry:
 						q->ip_dev = id;
 						id->id_count++;
 
-						q->ip_addr = ifp->addr;
-						setportof(htons(pluto_nat_port),
-							  &q->ip_addr);
-						q->port = pluto_nat_port;
+						q->local_endpoint = endpoint(&ifp->addr, pluto_nat_port);
 						q->fd = fd;
 						q->next = interfaces;
 						q->change = IFN_ADD;
 						q->ike_float = TRUE;
 						interfaces = q;
-						libreswan_log(
-							"adding interface %s/%s %s:%d",
-							q->ip_dev->id_vname, q->ip_dev->id_rname,
-							ipstr(&q->
-							       ip_addr, &b),
-							q->port);
+						plog_global("adding interface %s/%s %s",
+							    q->ip_dev->id_vname, q->ip_dev->id_rname,
+							    str_endpoint(&q->local_endpoint, &b));
 					}
 					break;
 				}
@@ -257,7 +248,7 @@ add_entry:
 				/* search over if matching old entry found */
 				if (streq(q->ip_dev->id_rname, ifp->name) &&
 				    streq(q->ip_dev->id_vname, v->name) &&
-				    sameaddr(&q->ip_addr, &ifp->addr)) {
+				    sameaddr(&q->local_endpoint, &ifp->addr)) {
 					/* matches -- rejuvinate old entry */
 					q->change = IFN_KEEP;
 
@@ -267,7 +258,7 @@ add_entry:
 							  ifp->name) &&
 						    streq(q->ip_dev->id_vname,
 							  v->name) &&
-						    sameaddr(&q->ip_addr,
+						    sameaddr(&q->local_endpoint,
 							     &ifp->addr))
 							q->change = IFN_KEEP;
 					}
@@ -296,9 +287,9 @@ static bool klips_do_command(const struct connection *c, const struct spd_route 
 	char cmd[2048]; /* arbitrary limit on shell command length */
 	char common_shell_out_str[2048];
 
-	if (fmt_common_shell_out(common_shell_out_str,
-				 sizeof(common_shell_out_str), c, sr,
-				 st) == -1) {
+	if (!fmt_common_shell_out(common_shell_out_str,
+				  sizeof(common_shell_out_str), c, sr,
+				  st)) {
 		loglog(RC_LOG_SERIOUS, "%s%s command too long!", verb,
 		       verb_suffix);
 		return FALSE;

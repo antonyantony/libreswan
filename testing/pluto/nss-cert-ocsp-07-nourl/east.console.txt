@@ -10,7 +10,7 @@ east #
  certutil -A -i /testing/x509/certs/nic-nourl.crt -d sql:/etc/ipsec.d -n nic -t "P,,"
 east #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
@@ -38,9 +38,8 @@ east #
 east #
  hostname |grep nic && journalctl /sbin/ocspd --no-pager | tail -n 20 |grep TRYLATER
 east #
-east #
  ipsec stop
-Redirecting to: systemctl stop ipsec.service
+Redirecting to: [initsystem]
 east #
  ipsec status
 whack: Pluto is not running (no "/run/pluto/pluto.ctl")

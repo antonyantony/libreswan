@@ -30,16 +30,13 @@ extern void db_destroy(struct db_context *ctx);
 extern void db_trans_add(struct db_context *ctx, uint8_t transid);
 
 /*	Add a new attribute by value */
-extern void db_attr_add_values(struct db_context *ctx, enum ikev1_oakley_attr type, uint16_t val);
+extern void db_attr_add_values(struct db_context *ctx, enum ikev1_ipsec_attr type, uint16_t val);
 
 /*	Get proposal from db object */
-static __inline__ struct db_prop *db_prop_get(struct db_context *ctx)
-{
-	return &ctx->prop;
-}
+struct db_prop *db_prop_get(struct db_context *ctx);
 
 /*	Show stats (allocation, etc) */
-void db_ops_show_status(void);
+void db_ops_show_status(struct fd *whackfd);
 
 extern void db_print(struct db_context *ctx);
 

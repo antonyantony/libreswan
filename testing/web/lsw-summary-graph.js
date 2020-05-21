@@ -25,25 +25,25 @@ function lsw_summary_graph(graph_id, table_id, summary) {
 	return
     }
 
-    var margin = {
+    let margin = {
 	top: 10,
 	right: 90,
 	bottom: 30,
 	left: 50
     }
-    var width = 960 - margin.left - margin.right
-    var height = 500 - margin.top - margin.bottom
-    var radius = 3.0
+    let width = 900 - margin.left - margin.right
+    let height = 450 - margin.top - margin.bottom
+    let radius = 3.0
 
-    var now = new Date()
+    let now = new Date()
 
     //
     // Split the results into "full" (has at least some real data) and
     // "empty" (no data to talk of)
     //
-    var empty_test_runs = []
-    var full_test_runs = []
-    summary.test_runs.forEach(function(test_run) {
+    let empty_test_runs = []
+    let full_test_runs = []
+    for (const test_run of summary.test_runs) {
 	// Drop anything that doesn't have a result.
 	if (test_run.totals) {
 	    full_test_runs.push(test_run)
@@ -55,7 +55,7 @@ function lsw_summary_graph(graph_id, table_id, summary) {
 	} else {
 	    empty_test_runs.push(test_run)
 	}
-    })
+    }
     console.log("empty_test_runs:", empty_test_runs.length)
     console.log("full_test_runs:", full_test_runs.length)
 
@@ -65,45 +65,45 @@ function lsw_summary_graph(graph_id, table_id, summary) {
     // the corresponding sum_text[] and sum_klass[] table entries.
     //
 
-    var sum_text = []
-    var sum_klass = []
-    lsw_status_names.forEach(function(status_name) {
-	lsw_count_names.forEach(function(count_name) {
+    let sum_text = []
+    let sum_klass = []
+    for (const status_name of lsw_status_names) {
+	for (const count_name of lsw_count_names) {
 	    // all but first have "+" prepended
 	    sum_text.push((sum_text.length ? "+" : "") + status_name + ":" + count_name)
 	    sum_klass.push(count_name)
-	})
-    })
+	}
+    }
     sum_text.push("+untested")
     sum_klass.push("untested")
 
-    var sums = {}
-    full_test_runs.forEach(function(test_run) {
-	var totals = test_run.totals
+    let sums = {}
+    for (const test_run of full_test_runs) {
+	let totals = test_run.totals
 	// Tally up the totals that we're interested in.
-	var total = 0
-	var sum = []
-	lsw_kind_names.forEach(function(kind_name) {
-	    var kind = (totals.hasOwnProperty(kind_name)
+	let total = 0
+	let sum = []
+	for (const kind_name of lsw_kind_names) {
+	    let kind = (totals.hasOwnProperty(kind_name)
 			? totals[kind_name]
 			: {})
-	    lsw_status_names.forEach(function(status_name) {
-		var status = (kind.hasOwnProperty(status_name)
+	    for (const status_name of lsw_status_names) {
+		let status = (kind.hasOwnProperty(status_name)
 			      ? kind[status_name]
 			      : {})
-		lsw_count_names.forEach(function(count_name) {
-		    var count = (status.hasOwnProperty(count_name)
+		for (const count_name of lsw_count_names) {
+		    let count = (status.hasOwnProperty(count_name)
 				 ? status[count_name]
 				 : 0)
 		    total += count
 		    sum.push(total)
-		})
-	    })
-	})
+		}
+	    }
+	}
 	// finally grand total as "untested"
 	sum.push(test_run.total)
 	sums[test_run.commit.hash] = sum
-    })
+    }
 
     //
     // Set up the graph dimensions and scale
@@ -111,20 +111,20 @@ function lsw_summary_graph(graph_id, table_id, summary) {
     // Use first test run's committer.date (test runs are ordered by
     // that dated).
 
-    var start = summary.test_runs[0].commit.committer.date
+    let start = summary.test_runs[0].commit.committer.date
     console.log("graph start:", start)
 
-    var xt = d3.scaleUtc()
+    let xt = d3.scaleUtc()
 	.domain([start, now])
 	.range([1, width])
-    var xp = d3.scalePow()
-	.exponent(2)
+    let xp = d3.scalePow()
+	.exponent(1.9)
 	.domain([1, width])
 	.range([0, width])
 
     // Fool d3js into thinking that it is looking at a scale object.
     function x_copy() {
-	var x = function(t) { return xp(xt(t)) }
+	let x = function(t) { return xp(xt(t)) }
 	x.domain = xt.domain
 	x.range = xp.range
 	x.copy = x_copy
@@ -135,7 +135,8 @@ function lsw_summary_graph(graph_id, table_id, summary) {
     x = x_copy()
 
     // set the graph size based on results with "full" data
-    var y = d3.scaleLinear()
+    let y = d3.scalePow()
+	.exponent(2.1)
 	.domain([
 	    d3.min(full_test_runs, function(d) {
 		// very first accumulative value
@@ -147,10 +148,10 @@ function lsw_summary_graph(graph_id, table_id, summary) {
 	])
 	.range([height, 0])
 
-    var xAxis = d3.axisBottom(x)
-    var yAxis = d3.axisLeft(y)
+    let xAxis = d3.axisBottom(x)
+    let yAxis = d3.axisLeft(y)
 
-    var svg = d3.select("#" + graph_id)
+    let svg = d3.select("#" + graph_id)
 	.insert("svg")
 	.attr("width", width + margin.left + margin.right)
 	.attr("height", height + margin.top + margin.bottom)
@@ -181,10 +182,10 @@ function lsw_summary_graph(graph_id, table_id, summary) {
     // bad).
     //
 
-    var newest_test_run = summary.test_runs[summary.test_runs.length - 1]
+    let newest_test_run = summary.test_runs[summary.test_runs.length - 1]
     console.log("newest_test_run", newest_test_run)
-    var keys_x = x(newest_test_run.commit.committer.date) + radius
-    var keys = []
+    let keys_x = x(newest_test_run.commit.committer.date) + radius
+    let keys = []
 
     //
     // The graph has two right-hand-side ends, the last "full" result
@@ -203,8 +204,8 @@ function lsw_summary_graph(graph_id, table_id, summary) {
     // Since this follows parent (older) links and appends entries,
     // the result is in reverse cronological order.
 
-    var good_first_parent_test_runs = []
-    for (var commit = newest_test_run && newest_test_run.commit;
+    let good_first_parent_test_runs = []
+    for (let commit = newest_test_run && newest_test_run.commit;
 	 commit; commit = commit.parents[0]) {
 	if (commit.test_run && commit.test_run.totals && commit.test_run != summary.current) {
 	    good_first_parent_test_runs.push(commit.test_run)
@@ -219,7 +220,7 @@ function lsw_summary_graph(graph_id, table_id, summary) {
     // good_first_parent_test_runs[] is in reverse cronological order
     // so "last" is at the front.
 
-    var newest_first_parent_test_run = good_first_parent_test_runs[0]
+    let newest_first_parent_test_run = good_first_parent_test_runs[0]
     console.log("newest_first_parent_test_run:", newest_first_parent_test_run)
 
     //
@@ -228,8 +229,8 @@ function lsw_summary_graph(graph_id, table_id, summary) {
     // First draw the line through the first parent then overlay a
     // scatter plot of everything.
 
-    for (var sum_index = sum_text.length - 1; sum_index >= 0; sum_index--) {
-	var line = d3.line()
+    for (let sum_index = sum_text.length - 1; sum_index >= 0; sum_index--) {
+	let line = d3.line()
 	    .x(function(test_run) {
 		return x(test_run.commit.committer.date)
 	    })
@@ -261,6 +262,7 @@ function lsw_summary_graph(graph_id, table_id, summary) {
 		return y(sums[test_run.commit.hash][sum_index])
 	    })
 	    .on("click", function(test_run) {
+		console.log("click graph", test_run)
 		lsw_summary_graph_click_test_run(table_id, test_run)
 		d3.event.stopPropagation()
 	    })
@@ -329,7 +331,7 @@ function lsw_summary_graph(graph_id, table_id, summary) {
     //
     // Titles for the mess
     //
-    var enter_keys = svg
+    let enter_keys = svg
 	.selectAll(".key")
 	.data(keys)
 	.enter()

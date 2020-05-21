@@ -159,6 +159,8 @@ LOGDIR?=$(DESTDIR)$(FINALLOGDIR)
 # Note: this variable gets passed in, as in "make INITSYSTEM=systemd"
 INITSYSTEM ?= $(shell $(top_srcdir)/packaging/utils/lswan_detect.sh init)
 
+DOCKER_PLUTONOFORK?=--nofork
+
 # An attempt is made to automatically figure out where boot/shutdown scripts
 # will finally go:  the first directory in INC_RCDIRS that exists gets them.
 # If none of those exists (or INC_RCDIRS is empty), INC_RCDEFAULT gets them.
@@ -177,7 +179,11 @@ FINALRCDIR?=$(shell for d in $(INC_RCDIRS) ; \
 		fi ; done ; echo $(INC_RCDEFAULT) )
 RCDIR?=$(DESTDIR)$(FINALRCDIR)
 
+# PYTHON_BINARY is used for python scripts shebang
+PYTHON_BINARY ?= /usr/bin/python3
 
+# SHELL_BINARY is used for sh scripts shebang
+SHELL_BINARY ?= /bin/sh
 
 ### kernel pathnames
 
@@ -231,10 +237,10 @@ BISONOSFLAGS?=
 # XXX: Don't add NSSFLAGS to USERLAND_CFLAGS for now.  It needs to go
 # after -I$(top_srcdir)/include and fixing that is an entirely
 # separate cleanup.
-NSSFLAGS?=$(shell pkg-config --cflags nss)
+NSSFLAGS ?= $(NSS_CFLAGS)
 # We don't want to link against every library pkg-config --libs nss
 # returns
-NSS_LDFLAGS ?= -lnss3 -lnssutil3
+NSS_LDFLAGS ?= -lnss3
 NSS_SMIME_LDFLAGS ?= -lsmime3
 NSS_UTIL_LDFLAGS ?= -lnssutil3
 NSPR_LDFLAGS ?= -lnspr4
@@ -244,7 +250,7 @@ NSPR_LDFLAGS ?= -lnspr4
 # This work-around is needed with nss versions before 3.30.
 USE_NSS_AVA_COPY?=false
 ifeq ($(USE_NSS_AVA_COPY),true)
-NSSFLAGS+=-DNSS_REQ_AVA_COPY
+NSSFLAGS += -DNSS_REQ_AVA_COPY
 endif
 
 # Use nss IPsec profile for X509 validation. This is less restrictive
@@ -252,7 +258,7 @@ endif
 # See https://bugzilla.mozilla.org/show_bug.cgi?id=1252891
 USE_NSS_IPSEC_PROFILE?=true
 ifeq ($(USE_NSS_IPSEC_PROFILE),true)
-NSSFLAGS+=-DNSS_IPSEC_PROFILE
+NSSFLAGS += -DNSS_IPSEC_PROFILE
 endif
 
 # Use a local copy of xfrm.h. This can be needed on older systems
@@ -262,13 +268,12 @@ endif
 USE_XFRM_HEADER_COPY?=true
 XFRM_LIFETIME_DEFAULT?=30
 
+USE_XFRM_INTERFACE_IFLA_HEADER?=false
+
 # Some systems have a bogus combination of glibc and kernel-headers which
 # causes a conflict in the IPv6 defines. Try enabling this option as a workaround
 # when you see errors related to 'struct in6_addr'
 USE_GLIBC_KERN_FLIP_HEADERS?=false
-
-# Enable NIC IPsec hardware offloading API. Introduced in Linux Kernel 4.12
-USE_NIC_OFFLOAD?=true
 
 # When compiling on a system where unbound is missing the required unbound-event.h
 # include file, enable this workaround option that will enable an included copy of
@@ -300,9 +305,6 @@ ASAN?=
 KLIPSCOMPILE?=-O2 -DCONFIG_KLIPS_ALG -DDISABLE_UDP_CHECKSUM
 # You can also run this before starting libreswan on glibc systems:
 #export MALLOC_PERTURB_=$(($RANDOM % 255 + 1))
-
-# extra link flags
-USERLINK?=-Wl,-z,relro,-z,now -g -pie $(EFENCE_LDFLAGS) ${ASAN}
 
 PORTINCLUDE?=
 
@@ -404,7 +406,10 @@ NONINTCONFIG=oldconfig
 # make sure we only run this once per build,  its too expensive to run
 # every time Makefile.inc is included
 ifndef IPSECVERSION
-IPSECVERSION:=$(shell ${LIBRESWANSRCDIR}/packaging/utils/setlibreswanversion ${IPSECBASEVERSION} ${LIBRESWANSRCDIR})
+ ifeq ($(VERSION_ADD_GIT_DIRTY),true)
+  ADD_GIT_DIRTY = --add-git-diry
+ endif
+IPSECVERSION:=$(shell ${LIBRESWANSRCDIR}/packaging/utils/setlibreswanversion ${ADD_GIT_DIRTY} ${IPSECBASEVERSION} ${LIBRESWANSRCDIR})
 export IPSECVERSION
 endif
 ifndef IPSECVIDVERSION
@@ -478,11 +483,15 @@ TRANSFORM_VARIABLES = sed -e "s:@IPSECVERSION@:$(IPSECVERSION):g" \
 			-e "s:@IPSEC_SECRETS_FILE@:$(IPSEC_SECRETS_FILE):g" \
 			-e "s:@MODPROBEBIN@:$(MODPROBEBIN):g" \
 			-e "s:@MODPROBEARGS@:$(MODPROBEARGS):g" \
+			-e "s:@PYTHON_BINARY@:$(PYTHON_BINARY):g" \
+			-e "s:@SHELL_BINARY@:$(SHELL_BINARY):g" \
 			-e "s:@USE_DEFAULT_CONNS@:$(USE_DEFAULT_CONNS):g" \
 			-e "s:@SD_TYPE@:$(SD_TYPE):g" \
 			-e "s:@SD_RESTART_TYPE@:$(SD_RESTART_TYPE):g" \
 			-e "s:@SD_PLUTO_OPTIONS@:$(SD_PLUTO_OPTIONS):g" \
 			-e "s:@SD_WATCHDOGSEC@:$(SD_WATCHDOGSEC):g" \
+			-e "s:@INITSYSTEM@:$(INITSYSTEM):g" \
+			-e "s:@DOCKER_PLUTONOFORK@:$(DOCKER_PLUTONOFORK):g" \
 
 # For KVM testing setup
 #POOL?=${LIBRESWANSRCDIR}/pool
@@ -496,7 +505,8 @@ OSMEDIA?=http://download.fedoraproject.org/pub/fedora/linux/releases/28/Server/x
 # OSMEDIA?=http://ftp.ubuntu.com/ubuntu/dists/precise/main/installer-amd64/
 
 # Now that all the configuration variables are defined, use them to
-# define USERLAND_CFLAGS
-include ${LIBRESWANSRCDIR}/mk/userland-cflags.mk
+# define USERLAND_CFLAGS and USERLAND_LDFLAGS
+
+include ${LIBRESWANSRCDIR}/mk/userland.mk
 
 endif

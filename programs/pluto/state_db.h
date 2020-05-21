@@ -17,8 +17,10 @@
 #define STATE_DB_H
 
 #include "ike_spi.h"
+#include "reqid.h"
 
 struct state;
+struct connection;
 struct list_entry;
 
 void init_state_db(void);
@@ -28,6 +30,8 @@ void rehash_state_cookies_in_db(struct state *st);
 void del_state_from_db(struct state *st);
 
 struct state *state_by_serialno(so_serial_t serialno);
+struct ike_sa *ike_sa_by_serialno(so_serial_t serialno);
+struct child_sa *child_sa_by_serialno(so_serial_t serialno);
 
 /*
  * List of all valid states; can be iterated in old-to-new and
@@ -47,19 +51,33 @@ extern struct list_head serialno_list_head;
  */
 
 struct state *state_by_ike_initiator_spi(enum ike_version ike_version,
-					 so_serial_t clonedfrom,
-					 const msgid_t *msgid, /* optional */
+					 const so_serial_t *clonedfrom,
+					 const msgid_t *v1_msgid, /* optional */
+					 const enum sa_role *role, /*optional*/
 					 const ike_spi_t *ike_initiator_spi,
 					 const char *reason);
 
 typedef bool (state_by_predicate)(struct state *st, void *context);
 
 struct state *state_by_ike_spis(enum ike_version ike_version,
-				so_serial_t clonedfrom,
-				const msgid_t *msgid, /* optional */
+				const so_serial_t *clonedfrom,
+				const msgid_t *v1_msgid, /*optional*/
+				const enum sa_role *role, /*optional*/
 				const ike_spis_t *ike_spis,
 				state_by_predicate *predicate /*optional*/,
 				void *predicate_context,
 				const char *reason);
+
+struct state *state_by_connection(struct connection *c,
+				  state_by_predicate *predicate /*optional*/,
+				  void *predicate_context,
+				  const char *reason);
+void rehash_state_connection(struct state *st);
+
+struct state *state_by_reqid(reqid_t reqid,
+			     state_by_predicate *predicate /*optional*/,
+			     void *predicate_context,
+			     const char *reason);
+void rehash_state_reqid(struct state *st);
 
 #endif

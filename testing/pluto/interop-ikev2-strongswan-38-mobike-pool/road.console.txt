@@ -7,7 +7,7 @@ road #
  # add .209 incase re-run
 road #
  ip addr show dev eth0 | grep 192.1.3.209 || ip addr add 192.1.3.209/24 dev eth0
-    inet 192.1.3.209/24 brd 192.1.3.255 scope global eth0
+    inet 192.1.3.209/24 scope global eth0
 road #
  ip addr add 192.1.33.222/24 dev eth0
 road #
@@ -52,6 +52,9 @@ PING 192.0.2.254 (192.0.2.254) from 192.0.3.10 : 56(84) bytes of data.
 rtt min/avg/max/mdev = 0.XXX/0.XXX/0.XXX/0.XXX ms
 road #
  strongswan status
+Shunted Connections:
+Bypass LAN 192.1.3.0/24:  192.1.3.0/24 === 192.1.3.0/24 PASS
+Bypass LAN 192.1.33.0/24:  192.1.33.0/24 === 192.1.33.0/24 PASS
 Security Associations (1 up, 0 connecting):
    road-east[1]: ESTABLISHED XXX second ago, 192.1.3.209[192.1.3.209]...192.1.2.23[east]
    road-east{1}:  INSTALLED, TUNNEL, reqid 1, ESP in UDP SPIs: SPISPI_i SPISPI_o
@@ -61,23 +64,32 @@ road #
 road #
  ip xfrm state
 src 192.1.3.209 dst 192.1.2.23
-	proto esp spi 0xSPISPI reqid REQID mode tunnel
-	enc cbc(aes) 0xENCKEY
+	encap type espinudp sport 4500 dport 4500 addr 0.0.0.0
 src 192.1.2.23 dst 192.1.3.209
-	proto esp spi 0xSPISPI reqid REQID mode tunnel
-	enc cbc(aes) 0xENCKEY
+	encap type espinudp sport 4500 dport 4500 addr 0.0.0.0
 road #
  ip xfrm policy
 src 192.0.3.10/32 dst 192.0.2.0/24 
 	dir out priority 371327 ptype main 
 	tmpl src 192.1.3.209 dst 192.1.2.23
-		proto esp spi 0xSPISPI reqid REQID mode tunnel
 src 192.0.2.0/24 dst 192.0.3.10/32 
 	dir fwd priority 371327 ptype main 
 	tmpl src 192.1.2.23 dst 192.1.3.209
 src 192.0.2.0/24 dst 192.0.3.10/32 
 	dir in priority 371327 ptype main 
 	tmpl src 192.1.2.23 dst 192.1.3.209
+src 192.1.33.0/24 dst 192.1.33.0/24 
+	dir fwd priority 175423 ptype main 
+src 192.1.33.0/24 dst 192.1.33.0/24 
+	dir in priority 175423 ptype main 
+src 192.1.33.0/24 dst 192.1.33.0/24 
+	dir out priority 175423 ptype main 
+src 192.1.3.0/24 dst 192.1.3.0/24 
+	dir fwd priority 175423 ptype main 
+src 192.1.3.0/24 dst 192.1.3.0/24 
+	dir in priority 175423 ptype main 
+src 192.1.3.0/24 dst 192.1.3.0/24 
+	dir out priority 175423 ptype main 
 road #
  sleep 5
 road #
@@ -99,6 +111,8 @@ road #
  # note this end should be 192.1.33.222
 road #
  strongswan status
+Shunted Connections:
+Bypass LAN 192.1.33.0/24:  192.1.33.0/24 === 192.1.33.0/24 PASS
 Security Associations (1 up, 0 connecting):
    road-east[1]: ESTABLISHED XXX second ago, 192.1.33.222[192.1.3.209]...192.1.2.23[east]
    road-east{1}:  INSTALLED, TUNNEL, reqid 1, ESP in UDP SPIs: SPISPI_i SPISPI_o
@@ -106,23 +120,26 @@ Security Associations (1 up, 0 connecting):
 road #
  ip xfrm state
 src 192.1.33.222 dst 192.1.2.23
-	proto esp spi 0xSPISPI reqid REQID mode tunnel
-	enc cbc(aes) 0xENCKEY
+	encap type espinudp sport 4500 dport 4500 addr 0.0.0.0
 src 192.1.2.23 dst 192.1.33.222
-	proto esp spi 0xSPISPI reqid REQID mode tunnel
-	enc cbc(aes) 0xENCKEY
+	encap type espinudp sport 4500 dport 4500 addr 0.0.0.0
 road #
  ip xfrm policy
 src 192.0.3.10/32 dst 192.0.2.0/24 
 	dir out priority 371327 ptype main 
 	tmpl src 192.1.33.222 dst 192.1.2.23
-		proto esp spi 0xSPISPI reqid REQID mode tunnel
 src 192.0.2.0/24 dst 192.0.3.10/32 
 	dir fwd priority 371327 ptype main 
 	tmpl src 192.1.2.23 dst 192.1.33.222
 src 192.0.2.0/24 dst 192.0.3.10/32 
 	dir in priority 371327 ptype main 
 	tmpl src 192.1.2.23 dst 192.1.33.222
+src 192.1.33.0/24 dst 192.1.33.0/24 
+	dir fwd priority 175423 ptype main 
+src 192.1.33.0/24 dst 192.1.33.0/24 
+	dir in priority 175423 ptype main 
+src 192.1.33.0/24 dst 192.1.33.0/24 
+	dir out priority 175423 ptype main 
 road #
  ping -W 1 -q -n -c 2 -I 192.0.3.10 192.0.2.254
 PING 192.0.2.254 (192.0.2.254) from 192.0.3.10 : 56(84) bytes of data.
@@ -136,44 +153,17 @@ road #
  echo done
 done
 road #
- ../../pluto/bin/ipsec-look.sh
-road NOW
-XFRM state:
-src 192.1.33.222 dst 192.1.2.23
-	proto esp spi 0xSPISPI reqid REQID mode tunnel
-	enc cbc(aes) 0xENCKEY
-src 192.1.2.23 dst 192.1.33.222
-	proto esp spi 0xSPISPI reqid REQID mode tunnel
-	enc cbc(aes) 0xENCKEY
-XFRM policy:
-src 192.0.2.0/24 dst 192.0.3.10/32
-	dir fwd priority 371327 ptype main
-	tmpl src 192.1.2.23 dst 192.1.33.222
-src 192.0.2.0/24 dst 192.0.3.10/32
-	dir in priority 371327 ptype main
-	tmpl src 192.1.2.23 dst 192.1.33.222
-src 192.0.3.10/32 dst 192.0.2.0/24
-	dir out priority 371327 ptype main
-	tmpl src 192.1.33.222 dst 192.1.2.23
-		proto esp spi 0xSPISPI reqid REQID mode tunnel
-XFRM done
-IPSEC mangle TABLES
-NEW_IPSEC_CONN mangle TABLES
-ROUTING TABLES
-default via 192.1.33.254 dev eth0
-192.1.33.0/24 dev eth0 proto kernel scope link src 192.1.33.222
-NSS_CERTIFICATES
-Certificate Nickname                                         Trust Attributes
-                                                             SSL,S/MIME,JAR/XPI
+ if [ -f /var/run/pluto/pluto.pid ]; then ../../pluto/bin/ipsec-look.sh ; fi
 road #
  if [ -f /var/run/pluto/pluto.pid ]; then ipsec whack --trafficstatus ; fi
 road #
- if [ -f /var/run/charon.pid ]; then strongswan status ; fi
+ if [ -f /var/run/charon.pid -o -f /var/run/strongswan/charon.pid ]; then strongswan status ; fi
+Shunted Connections:
+Bypass LAN 192.1.33.0/24:  192.1.33.0/24 === 192.1.33.0/24 PASS
 Security Associations (1 up, 0 connecting):
    road-east[1]: ESTABLISHED XXX second ago, 192.1.33.222[192.1.3.209]...192.1.2.23[east]
    road-east{1}:  INSTALLED, TUNNEL, reqid 1, ESP in UDP SPIs: SPISPI_i SPISPI_o
    road-east{1}:   192.0.3.10/32 === 192.0.2.0/24
-road #
 road #
  ../bin/check-for-core.sh
 road #

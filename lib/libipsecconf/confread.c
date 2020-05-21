@@ -31,9 +31,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+#include <ctype.h>
 
 #include "lswalloc.h"
 #include "ip_address.h"
+#include "ip_info.h"
 
 #include "ipsecconf/confread.h"
 #include "ipsecconf/starterlog.h"
@@ -69,9 +71,10 @@ static void ipsecconf_default_values(struct starter_config *cfg)
 
 	SOPT(KBF_FRAGICMP, FALSE); /* see sysctl_ipsec_icmp in ipsec_proc.c */
 	SOPT(KBF_HIDETOS, TRUE);
-	SOPT(KBF_PLUTOSTDERRLOGTIME, TRUE);
-	SOPT(KBF_PLUTOSTDERRLOGAPPEND, TRUE);
-	SOPT(KBF_PLUTOSTDERRLOGIP, TRUE);
+	SOPT(KBF_LOGTIME, TRUE);
+	SOPT(KBF_LOGAPPEND, TRUE);
+	SOPT(KBF_LOGIP, TRUE);
+	SOPT(KBF_AUDIT_LOG, TRUE);
 	SOPT(KBF_UNIQUEIDS, TRUE);
 	SOPT(KBF_DO_DNSSEC, TRUE);
 	SOPT(KBF_PERPEERLOG, FALSE);
@@ -139,10 +142,6 @@ static void ipsecconf_default_values(struct starter_config *cfg)
 	DOPT(KNCF_NMCONFIGURED, FALSE);
 #endif
 
-#ifdef HAVE_LABELED_IPSEC
-	DOPT(KNCF_LABELED_IPSEC, FALSE);
-#endif
-
 	DOPT(KNCF_XAUTHBY, XAUTHBY_FILE);
 	DOPT(KNCF_XAUTHFAIL, XAUTHFAIL_HARD);
 
@@ -164,26 +163,31 @@ static void ipsecconf_default_values(struct starter_config *cfg)
 	DOPT(KNCF_CLIENTADDRFAMILY, AF_UNSPEC);
 
 	DOPT(KNCF_AUTO, STARTUP_IGNORE);
+	DOPT(KNCF_XFRM_IF_ID, yn_no);
 
 # undef DOPT
 
 	d->policy =
 		POLICY_TUNNEL |
+		POLICY_ECDSA | POLICY_RSASIG | POLICY_RSASIG_v1_5 | /* authby= */
 		POLICY_ENCRYPT | POLICY_PFS |
 		POLICY_IKEV2_ALLOW |
 		POLICY_SAREF_TRACK |         /* sareftrack=yes */
 		POLICY_IKE_FRAG_ALLOW |      /* ike_frag=yes */
 		POLICY_ESN_NO;      	     /* esn=no */
 
+	d->sighash_policy =
+		POL_SIGHASH_SHA2_256 | POL_SIGHASH_SHA2_384 | POL_SIGHASH_SHA2_512;
+
 	d->left.addr_family = AF_INET;
-	anyaddr(AF_INET, &d->left.addr);
+	d->left.addr = address_any(&ipv4_info);
 	d->left.nexttype = KH_NOTSET;
-	anyaddr(AF_INET, &d->left.nexthop);
+	d->left.nexthop = address_any(&ipv4_info);
 
 	d->right.addr_family = AF_INET;
-	anyaddr(AF_INET, &d->right.addr);
+	d->right.addr = address_any(&ipv4_info);
 	d->right.nexttype = KH_NOTSET;
-	anyaddr(AF_INET, &d->right.nexthop);
+	d->right.nexthop = address_any(&ipv4_info);
 
 	/* default is NOT to look in DNS */
 	d->left.key_from_DNS_on_demand = FALSE;
@@ -196,7 +200,6 @@ static void ipsecconf_default_values(struct starter_config *cfg)
 
 	d->left.updown = clone_str(DEFAULT_UPDOWN, "conn default left updown");
 	d->right.updown = clone_str(DEFAULT_UPDOWN, "conn default right updown");
-
 	/* ==== end of conn %default ==== */
 }
 
@@ -377,6 +380,42 @@ static bool load_setup(struct starter_config *cfg,
 	return err;
 }
 
+static bool validate_ip_cider(const char *value, ip_subnet *ip, const char *leftright, char *err_p,
+		starter_errors_t *perrl)
+{
+	bool err = FALSE;
+#  define ERR_FOUND(...) { starter_error_append(perrl, __VA_ARGS__); err = TRUE; }
+
+	if (strchr(value, '/') == NULL) {
+		ERR_FOUND("%s%s=%s needs address/prefix length", leftright, err_p, value);
+	} else {
+		/*
+		 * ttosubnet() helpfully sets the IP address to the lowest IP
+		 * in the subnet. Which is great for subnets but we want to
+		 * retain the specific IP in this case.
+		 * So we subsequently overwrite the IP address of the subnet.
+		 */
+		err_t er = ttosubnet(value, 0, AF_UNSPEC,
+				'0' /* allow host bits */, ip);
+		if (er != NULL) {
+			ERR_FOUND("bad addr %s%s=%s [%s]",
+					leftright, err_p, value, er);
+		} else {
+			if (ip->addr.hport != 0)
+				ERR_FOUND("bad ip address port is not allowed %sinterface-ip=%s", leftright, value)
+
+			er = tnatoaddr(value, strchr(value, '/') - value, AF_UNSPEC, &ip->addr);
+			if (er != NULL) {
+				ERR_FOUND("bad ip address in %s%s=%s [%s]",
+						leftright, err_p, value, er);
+			}
+		}
+	}
+
+	return err;
+#  undef ERR_FOUND
+}
+
 /**
  * Validate that yes in fact we are one side of the tunnel
  *
@@ -431,7 +470,7 @@ static bool validate_end(struct starter_conn *conn_st,
 	/* validate the KSCF_IP/KNCF_IP */
 	switch (end->addrtype) {
 	case KH_ANY:
-		anyaddr(hostfam, &end->addr);
+		end->addr = address_any(aftoinfo(hostfam));
 		break;
 
 	case KH_IFACE:
@@ -444,7 +483,7 @@ static bool validate_end(struct starter_conn *conn_st,
 
 		if (end->strings[KSCF_IP][0] == '%') {
 			pfree(end->iface);
-			end->iface = clone_str(end->strings[KSCF_IP], "KH_IPADDR end->iface");
+			end->iface = clone_str(end->strings[KSCF_IP] + 1, "KH_IPADDR end->iface");
 			if (!starter_iface_find(end->iface, hostfam,
 					       &end->addr,
 					       &end->nexthop))
@@ -500,29 +539,8 @@ static bool validate_end(struct starter_conn *conn_st,
 	}
 
 	if (end->strings_set[KSCF_VTI_IP]) {
-		char *value = end->strings[KSCF_VTI_IP];
-
-		if (strchr(value, '/') == NULL) {
-			ERR_FOUND("%svti= needs address/mask", leftright);
-		} else {
-			/*
-			 * ttosubnet() helpfully sets the IP address to the lowest IP
-			 * in the subnet. Which is great for subnets but we want to
-			 * retain the specific IP in this case.
-			 * So we subsequently overwrite the IP address of the subnet.
-			 */
-			er = ttosubnet(value, 0, AF_UNSPEC, &end->vti_ip);
-			if (er != NULL) {
-				ERR_FOUND("bad addr %svti=%s [%s]",
-					  leftright, value, er);
-			} else {
-				er = tnatoaddr(value, strchr(value, '/') - value, AF_UNSPEC, &end->vti_ip.addr);
-				if (er != NULL) {
-					ERR_FOUND("bad addr in subnet for %svti=%s [%s]",
-						leftright, value, er);
-				}
-			}
-		}
+		err = validate_ip_cider(end->strings[KSCF_VTI_IP],
+				&end->vti_ip, leftright, "vti", perrl);
 	}
 
 	/* validate the KSCF_SUBNET */
@@ -539,7 +557,7 @@ static bool validate_end(struct starter_conn *conn_st,
 			end->virt = clone_str(value, "validate_end item");
 		} else {
 			end->has_client = TRUE;
-			er = ttosubnet(value, 0, AF_UNSPEC, &end->subnet);
+			er = ttosubnet(value, 0, AF_UNSPEC, '0', &end->subnet);
 		}
 		if (er != NULL)
 			ERR_FOUND("bad subnet %ssubnet=%s [%s]", leftright,
@@ -547,8 +565,7 @@ static bool validate_end(struct starter_conn *conn_st,
 	}
 
 	/* set nexthop address to something consistent, by default */
-	anyaddr(hostfam, &end->nexthop);
-	anyaddr(addrtypeof(&end->addr), &end->nexthop);
+	end->nexthop = address_any(address_type(&end->addr));
 
 	/* validate the KSCF_NEXTHOP */
 	if (end->strings_set[KSCF_NEXTHOP]) {
@@ -583,7 +600,7 @@ static bool validate_end(struct starter_conn *conn_st,
 			end->nexttype = KH_IPADDR;
 		}
 	} else {
-		anyaddr(hostfam, &end->nexthop);
+		end->nexthop = address_any(aftoinfo(hostfam));
 
 		if (end->addrtype == KH_DEFAULTROUTE) {
 			end->nexttype = KH_DEFAULTROUTE;
@@ -596,6 +613,15 @@ static bool validate_end(struct starter_conn *conn_st,
 
 		pfreeany(end->id);
 		end->id = clone_str(value, "end->id");
+		/* fixup old ",," in a ID_DER_ASN1_DN to proper backslash comma */
+		if ((end->id[0] != '@') && (strstr(end->id, ",,") != NULL)
+			&& strstr(end->id, "=") != NULL)
+		{
+			char *cc;
+			while ((cc = strstr(end->id, ",,")) != NULL) {
+				cc[0] = '\\';
+			}
+		}
 	}
 
 	if (end->options_set[KSCF_RSAKEY1]) {
@@ -666,6 +692,13 @@ static bool validate_end(struct starter_conn *conn_st,
 			end->has_client = TRUE;
 			end->has_client_wildcard = FALSE;
 		}
+		if (end->strings_set[KSCF_INTERFACE_IP]) {
+			ERR_FOUND("can  not specify  %sinterface-ip=%s and  %sssourceip=%s",
+					leftright,
+					end->strings[KSCF_INTERFACE_IP],
+					leftright,
+					end->strings[KSCF_SOURCEIP]);
+		}
 	}
 
 	/* copy certificate path name */
@@ -716,11 +749,32 @@ static bool validate_end(struct starter_conn *conn_st,
 			    "connection's %saddresspool set to: %s",
 			    leftright, end->strings[KSCF_ADDRESSPOOL] );
 
-		er = ttorange(addresspool, 0, AF_INET, &end->pool_range, TRUE);
+		er = ttorange(addresspool, NULL, &end->pool_range);
 		if (er != NULL)
 			ERR_FOUND("bad %saddresspool=%s [%s]", leftright,
 					addresspool, er);
+
+		if (address_type(&end->pool_range.start) == &ipv6_info &&
+				!end->pool_range.is_subnet) {
+			ERR_FOUND("bad IPv6 %saddresspool=%s not subnet", leftright,
+					addresspool);
+		}
 	}
+
+	if (end->strings_set[KSCF_INTERFACE_IP]) {
+		err = validate_ip_cider(end->strings[KSCF_INTERFACE_IP],
+				&end->ifaceip, leftright, "interface-ip", perrl);
+		if (end->strings_set[KSCF_SOURCEIP]) {
+			ERR_FOUND("can  not specify  %sinterface-ip=%s and  %sssourceip=%s",
+					leftright,
+					end->strings[KSCF_INTERFACE_IP],
+					leftright,
+					end->strings[KSCF_SOURCEIP]);
+		}
+
+	}
+
+
 
 	if (end->options_set[KNCF_XAUTHSERVER] ||
 	    end->options_set[KNCF_XAUTHCLIENT])
@@ -1097,7 +1151,7 @@ static bool load_conn(
 					 * Requires a re-allocation.
 					 * Copying is shallow: the lists
 					 * are copied and freed but
-					 * the underlaying strings are unchanged.
+					 * the underlying strings are unchanged.
 					 */
 					char **ra = alloc_bytes((alsosize +
 						newalsosize + 1) *
@@ -1194,10 +1248,10 @@ static bool load_conn(
 	KW_POLICY_FLAG(KNCF_PFS, POLICY_PFS);
 
 	/* reset authby= flags */
-	if (conn->options_set[KSCF_AUTHBY]) {
+	if (conn->strings_set[KSCF_AUTHBY]) {
 
 		conn->policy &= ~POLICY_ID_AUTH_MASK;
-		conn->sighash_policy = POL_SIGHASH_NONE;
+		conn->sighash_policy = LEMPTY;
 	}
 
 	KW_POLICY_NEGATIVE_FLAG(KNCF_IKEPAD, POLICY_NO_IKEPAD);
@@ -1224,6 +1278,11 @@ static bool load_conn(
 	KW_POLICY_FLAG(KNCF_MSDH_DOWNGRADE, POLICY_MSDH_DOWNGRADE);
 	KW_POLICY_FLAG(KNCF_DNS_MATCH_ID, POLICY_DNS_MATCH_ID);
 	KW_POLICY_FLAG(KNCF_SHA2_TRUNCBUG, POLICY_SHA2_TRUNCBUG);
+
+	if (conn->options_set[KNCF_SAN_ON_CERT]) {
+		if (!conn->options[KNCF_SAN_ON_CERT])
+			conn->policy |= POLICY_ALLOW_NO_SAN;
+	}
 
 	/* ??? sometimes (when? why?) the member is already set */
 
@@ -1416,9 +1475,18 @@ static bool load_conn(
 	 * there is also leftauthby/rightauthby version stored in 'end'
 	 *
 	 * authby=secret|rsasig|null|never|rsa-HASH
+	 *
+	 * using authby=rsasig results in legacy POLICY_RSASIG_v1_5 and RSA_PSS
+	 *
+	 * HASH needs to use full syntax - eg sha2_256 and not sha256, to avoid
+	 * confusion with sha3_256
 	 */
 	if (conn->strings_set[KSCF_AUTHBY]) {
 		char *val = strtok(conn->strings[KSCF_AUTHBY], ", ");
+
+		conn->sighash_policy = LEMPTY;
+		conn->policy &= ~POLICY_ID_AUTH_MASK;
+		conn->policy &= ~POLICY_RSASIG_v1_5;
 
 		while (val != NULL) {
 			/* Supported for IKEv1 and IKEv2 */
@@ -1426,17 +1494,27 @@ static bool load_conn(
 				conn->policy |= POLICY_PSK;
 			} else if (streq(val, "rsasig") || streq(val, "rsa")) {
 				conn->policy |= POLICY_RSASIG;
-				conn->sighash_policy |= POL_SIGHASH_NONE;
+				conn->policy |= POLICY_RSASIG_v1_5;
+				conn->sighash_policy |= POL_SIGHASH_SHA2_256;
+				conn->sighash_policy |= POL_SIGHASH_SHA2_384;
+				conn->sighash_policy |= POL_SIGHASH_SHA2_512;
 			} else if (streq(val, "never")) {
 				conn->policy |= POLICY_AUTH_NEVER;
 			/* everything else is only supported for IKEv2 */
 			} else if (conn->policy & POLICY_IKEV1_ALLOW) {
-				starter_error_append(perrl, "connection allowing ikev1 must use authby= of rsasig, secret or never");
+				starter_error_append(perrl, "ikev1 connection must use authby= of rsasig, secret or never");
 				return TRUE;
 			} else if (streq(val, "null")) {
 				conn->policy |= POLICY_AUTH_NULL;
-			} else if (streq(val, "rsa-sha2") || streq(val, "rsa-sha2_256")) {
+			} else if (streq(val, "rsa-sha1")) {
 				conn->policy |= POLICY_RSASIG;
+				conn->policy |= POLICY_RSASIG_v1_5;
+			} else if (streq(val, "rsa-sha2")) {
+				conn->policy |= POLICY_RSASIG;
+				conn->sighash_policy |= POL_SIGHASH_SHA2_256;
+				conn->sighash_policy |= POL_SIGHASH_SHA2_384;
+				conn->sighash_policy |= POL_SIGHASH_SHA2_512;
+			} else if (streq(val, "rsa-sha2_256")) {
 				conn->sighash_policy |= POL_SIGHASH_SHA2_256;
 			} else if (streq(val, "rsa-sha2_384")) {
 				conn->policy |= POLICY_RSASIG;
@@ -1444,7 +1522,12 @@ static bool load_conn(
 			} else if (streq(val, "rsa-sha2_512")) {
 				conn->policy |= POLICY_RSASIG;
 				conn->sighash_policy |= POL_SIGHASH_SHA2_512;
-			} else if (streq(val, "ecdsa") || streq(val, "ecdsa-sha2_256")) {
+			} else if (streq(val, "ecdsa") || streq(val, "ecdsa-sha2")) {
+				conn->policy |= POLICY_ECDSA;
+				conn->sighash_policy |= POL_SIGHASH_SHA2_256;
+				conn->sighash_policy |= POL_SIGHASH_SHA2_384;
+				conn->sighash_policy |= POL_SIGHASH_SHA2_512;
+			} else if (streq(val, "ecdsa-sha2_256")) {
 				conn->policy |= POLICY_ECDSA;
 				conn->sighash_policy |= POL_SIGHASH_SHA2_256;
 			} else if (streq(val, "ecdsa-sha2_384")) {
@@ -1453,6 +1536,9 @@ static bool load_conn(
 			} else if (streq(val, "ecdsa-sha2_512")) {
 				conn->policy |= POLICY_ECDSA;
 				conn->sighash_policy |= POL_SIGHASH_SHA2_512;
+			} else if (streq(val, "ecdsa-sha1")) {
+				starter_error_append(perrl, "authby=ecdsa cannot use sha1, only sha2");
+				return TRUE;
 			} else {
 				starter_error_append(perrl, "connection authby= value is unknown");
 				return TRUE;

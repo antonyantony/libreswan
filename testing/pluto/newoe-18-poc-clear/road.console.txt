@@ -5,13 +5,9 @@ road #
  echo "192.1.2.0/24"  >> /etc/ipsec.d/policies/private-or-clear
 road #
  ipsec start
-Redirecting to: systemctl start ipsec.service
+Redirecting to: [initsystem]
 road #
  /testing/pluto/bin/wait-until-pluto-started
-road #
- # ensure for tests acquires expire before our failureshunt=2m
-road #
- echo 30 > /proc/sys/net/core/xfrm_acq_expires
 road #
  # give OE policies time to load
 road #
@@ -28,7 +24,7 @@ PING 192.1.2.23 (192.1.2.23) from 192.1.3.209 : 56(84) bytes of data.
 --- 192.1.2.23 ping statistics ---
 1 packets transmitted, 0 received, 100% packet loss, time XXXX
 road #
- # wait on OE retransmits and rekeying
+ # wait on OE retransmits and rekeying, let larval state timeout
 road #
  sleep 5
 road #
@@ -44,41 +40,37 @@ road #
  ../../pluto/bin/ipsec-look.sh
 road NOW
 XFRM state:
-src 192.1.3.209 dst 192.1.2.23
-	proto esp spi 0xSPISPI reqid REQID mode transport
-	replay-window 0 
-	sel src 192.1.3.209/32 dst 192.1.2.23/32 proto icmp type 8 code 0 dev eth0 
 XFRM policy:
 src 192.1.2.253/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.2.253/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.2.254/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.2.254/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.2.253/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.2.254/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.3.253/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.3.254/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.253/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.3.253/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.3.254/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.3.254/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
+src 192.1.3.209/32 dst 192.1.2.23/32
+	dir out priority 4177854 ptype main
 src 192.1.3.209/32 dst 192.1.2.0/24
-	dir out priority 2088935 ptype main
+	dir out priority 4177870 ptype main
 	tmpl src 0.0.0.0 dst 0.0.0.0
 		proto esp reqid REQID mode transport
-src 192.1.3.209/32 dst 192.1.2.23/32
-	dir out priority 2088935 ptype main
 XFRM done
 IPSEC mangle TABLES
 NEW_IPSEC_CONN mangle TABLES
@@ -90,9 +82,10 @@ Certificate Nickname                                         Trust Attributes
                                                              SSL,S/MIME,JAR/XPI
 road #
  killall ip > /dev/null 2> /dev/null
-[1]+  Terminated              ip -s xfrm monitor > /tmp/xfrm-monitor.out
 road #
  cp /tmp/xfrm-monitor.out OUTPUT/road.xfrm-monitor.txt
+road #
+ ip xfrm state # should be empty
 road #
  # ping should succeed in the clear
 road #
@@ -117,41 +110,37 @@ road #
  ../../pluto/bin/ipsec-look.sh
 road NOW
 XFRM state:
-src 192.1.3.209 dst 192.1.2.23
-	proto esp spi 0xSPISPI reqid REQID mode transport
-	replay-window 0 
-	sel src 192.1.3.209/32 dst 192.1.2.23/32 proto icmp type 8 code 0 dev eth0 
 XFRM policy:
 src 192.1.2.253/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.2.253/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.2.254/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.2.254/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.2.253/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.2.254/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.3.253/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.209/32 dst 192.1.3.254/32
-	dir out priority 1564639 ptype main
+	dir out priority 3129279 ptype main
 src 192.1.3.253/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.3.253/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
 src 192.1.3.254/32 dst 192.1.3.209/32
-	dir fwd priority 1564639 ptype main
+	dir fwd priority 3129279 ptype main
 src 192.1.3.254/32 dst 192.1.3.209/32
-	dir in priority 1564639 ptype main
+	dir in priority 3129279 ptype main
+src 192.1.3.209/32 dst 192.1.2.23/32
+	dir out priority 4177854 ptype main
 src 192.1.3.209/32 dst 192.1.2.0/24
-	dir out priority 2088935 ptype main
+	dir out priority 4177870 ptype main
 	tmpl src 0.0.0.0 dst 0.0.0.0
 		proto esp reqid REQID mode transport
-src 192.1.3.209/32 dst 192.1.2.23/32
-	dir out priority 2088935 ptype main
 XFRM done
 IPSEC mangle TABLES
 NEW_IPSEC_CONN mangle TABLES
@@ -165,7 +154,6 @@ road #
  # should not show any hits
 road #
  grep "negotiated connection" /tmp/pluto.log
-road #
 road #
  ../bin/check-for-core.sh
 road #

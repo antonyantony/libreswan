@@ -1,4 +1,4 @@
-#!/bin/sh
+#!@SHELL_BINARY@
 #
 # prefix command to run stuff from our programs directory
 #
@@ -32,7 +32,6 @@ DBPW=""
 CACERTDIR="${IPSEC_CONFDDIR}/cacerts"
 CRLDIR="${IPSEC_CONFDDIR}/crls"
 CTLSOCKET="${IPSEC_RUNDIR}/pluto.ctl"
-ADDSOCKET=""
 
 export IPSEC_EXECDIR IPSEC_CONF IPSEC_RUNDIR CTLSOCKET
 
@@ -112,7 +111,7 @@ ipsec_help() {
     echo ""
     GOTTWO=""
     for f in start stop restart status trafficstatus traffic globalstatus shuntstatus briefstatus fips import initnss checknss checknflog \
-	$(ls "${IPSEC_EXECDIR}" | egrep -v -i "${DONTMENTION}"); do
+	$(ls "${IPSEC_EXECDIR}" | grep -E -v -i "${DONTMENTION}"); do
 	if [ -z "${GOTTWO}" ]; then
 	    # first of two entries
 	    GOTTWO="${f}"
@@ -213,7 +212,7 @@ ipsec_import() {
 		# A lot of nss commands use -d to specify NSS db location.
 		# We use --nssdir.
 		;;
-	    *|"")
+	    *)
 		if [ -f "${1}" ]; then
 		    pkcs12bundle="${1}"
 		else
@@ -379,8 +378,9 @@ ipsec_checknss() {
 	    echo "Failed to initialize nss database ${IPSEC_NSSDIR_SQL}" >&2
 	    exit 4
 	fi
-	if [ -x "$(which restorecon)" ]; then
-	    restorecon -Rv "${IPSEC_NSSDIR}"
+	restorecon="$(which restorecon 2>/dev/null)"
+	if [ -n "${restorecon}" -a -x "${restorecon}" ]; then
+	    "${restorecon}" -Rv "${IPSEC_NSSDIR}"
 	fi
 	exit 0
     else
@@ -460,6 +460,10 @@ while [ ${#} -gt 0 ]; do
 	    setupoption="--stop"
 	    shift
 	    ;;
+	letsencrypt)
+	    shift
+	    exec "${IPSEC_EXECDIR}/letsencrypt" "${@}"
+	    ;;
 	restart|--restart)
 	    cmd="setup"
 	    setupoption="--restart"
@@ -469,8 +473,6 @@ while [ ${#} -gt 0 ]; do
 	    # if cmd is unset, this is help for ipsec command
 	    if [ -z "${cmd}" ]; then
 		ipsec_help
-	    else
-		helpoption="--help"
 	    fi
 	    ;;
     	version|--version|--versioncode)

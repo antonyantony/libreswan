@@ -18,6 +18,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>	/* size_t */
+#include <stdint.h>	/* uint8_t */
 
 /*
  * Think of shunk_t and shunk_t as opposite solutions to the same
@@ -25,14 +26,10 @@
  *
  * shunk_t's buffer is constant making it good for manipulating static
  * constant data (such as "a string"), chunk_t's is not.
- *
- * shunk_t's buffer is of type 'char' (which may or may not be signed)
- * making it easier to manipulate strings, chunk_t's is uint8_t making
- * it easier to manipulate raw bytes.
  */
 
 struct shunk {
-	const char *ptr;
+	const void *ptr;
 	size_t len;
 };
 
@@ -50,47 +47,94 @@ typedef struct shunk shunk_t;
 
 #define NULL_SHUNK { .ptr = NULL, .len = 0, }
 extern const shunk_t null_shunk;
+extern const shunk_t empty_shunk;
 
 shunk_t shunk1(const char *ptr); /* strlen() implied */
-shunk_t shunk2(const char *ptr, int len);
+shunk_t shunk2(const void *ptr, int len);
+
+#define THING_AS_SHUNK(THING) shunk2(&(THING), sizeof(THING))
+
+/* shunk[START..END) */
+shunk_t shunk_slice(shunk_t s, size_t start, size_t stop);
 
 /*
- * A shunk version of strsep() (which is like strtok()) - split INPUT
- * in two using a character from the DELIM set.
+ * A shunk version of strsep() / strtok(): split off from INPUT a
+ * possibly empty TOKEN containing characters not found in DELIMS and
+ * the delimiting character (or NUL).
  *
- * If INPUT contains a character from the DELIM set, return the
- * characters before the DELIM character as the next TOKEN, and set
- * INPUT to the sub-string following the DELIM character.
+ * Return the TOKEN (or the NULL_TOKEN if INPUT is exhausted); if
+ * DELIM is non-NULL, set *DELIM to the delimiting character or NUL;
+ * and update *INPUT.
  *
- * If INPUT contains no character from the DELIM set, return INPUT as
- * the next TOKEN (possibly empty), and set INPUT to the null_shunk.
+ * For the final token, *DELIM is set to NUL, and INPUT is marked as
+ * being exhausted by setting it to the NULL_SHUNK.
  *
- * If INPUT is the null_shunk, return the null_shunk as the next
- * TOKEN, string remains unchanged (still the null_shunk).
+ * When called with exhausted INPUT (aka the NULL_SHUNK), the
+ * NULL_SHUNK is returned as the token and *DELIM is set to NUL.
  *
  * One way to implement a simple parser is to use TOKEN.ptr==NULL as
  * an end-of-input indicator:
  *
- *     shunk_t token = shunk_strsep(&input, ",");
+ *     char sep;
+ *     shunk_t token = shunk_token(&input, &sep, ",");
  *     while (token.ptr != NULL) {
  *       ... process token ...
- *       token = shunk_strsep(&input, ",");
+ *       token = shunk_token(&input, &sep, ",");
  *     }
  *
- * XXX: Provided INPUT.ptr is non-NULL, INPUT.ptr[-1] is the DELIM
- * character; should this be made an explict parameter.
  */
-shunk_t shunk_strsep(shunk_t *input, const char *delim);
+shunk_t shunk_token(shunk_t *input, char *delim, const char *delims);
 
 /*
- * shunk version of string compare functions (or at least libreswan's
- * versions).
+ * Return the sequence of charcters in ACCEPT, update INPUT.
+ *
+ * When input is exhausted the NULL_SHUNK is returned (rather than the
+ * EMPTY_SHUNK).
+ *
+ * edge cases (these might change a little):
+ *
+ * span("", "accept"): returns the token EMPTY_SHUNK and sets input to
+ * NULL_SHUNK so the next call returns the NULL_SHUNK.
+ *
+ * span("a", "accept"): returns the token "a" and sets input to
+ * NULL_SHUNK so the next call returns the NULL_SHUNK.
  */
+shunk_t shunk_span(shunk_t *input, const char *accept);
+
+/*
+ * shunk version of compare functions (or at least libreswan's
+ * versions).
+ *
+ * (Confusingly and just like POSIX, *case* ignores case).
+ *
+ * Just like a NULL and EMPTY ("") string, a NULL (uninitialized) and
+ * EMPTY (pointing somewhere but no bytes) are considered different.
+ */
+
+/* XXX: move to constants.h? */
+bool bytes_eq(const void *l_ptr, size_t l_len,
+	      const void *r_ptr, size_t r_len);
+
+#define hunk_eq(L,R)							\
+	({								\
+		typeof(L) l_ = L; /* evaluate once */			\
+		typeof(R) r_ = R; /* evaluate once */			\
+		bytes_eq(l_.ptr, l_.len, r_.ptr, r_.len);		\
+	})
+
+#define hunk_streq(HUNK, STRING) hunk_eq(HUNK, shunk1(STRING))
+#define hunk_memeq(HUNK, MEM, SIZE) hunk_eq(HUNK, shunk2(MEM, SIZE))
+
+#define hunk_thingeq(SHUNK, THING) hunk_memeq(SHUNK, &(THING), sizeof(THING))
+
 bool shunk_caseeq(shunk_t lhs, shunk_t rhs);
 bool shunk_strcaseeq(shunk_t shunk, const char *string);
 
 bool shunk_caseeat(shunk_t *lhs, shunk_t rhs);
 bool shunk_strcaseeat(shunk_t *lhs, const char *string);
+
+bool shunk_isdigit(shunk_t s, size_t offset);
+bool shunk_ischar(shunk_t s, size_t offset, const char *chars);
 
 /*
  * Number conversion.  like strtoul() et.al.
@@ -108,6 +152,6 @@ bool shunk_tou(shunk_t lhs, unsigned *value, int base);
  */
 
 #define PRI_SHUNK "%.*s"
-#define PRI_shunk(SHUNK) ((int) (SHUNK).len), ((SHUNK).ptr)
+#define pri_shunk(SHUNK) ((int) (SHUNK).len), (const char *) ((SHUNK).ptr)
 
 #endif

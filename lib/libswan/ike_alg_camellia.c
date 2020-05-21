@@ -17,7 +17,7 @@
 
 #include "ike_alg.h"
 #include "ike_alg_encrypt.h"
-#include "ike_alg_encrypt_nss_cbc_ops.h"
+#include "ike_alg_encrypt_ops.h"
 #include "sadb.h"
 
 /* Camellia is a drop-in replacement for AES */
@@ -46,7 +46,7 @@ const struct encrypt_desc ike_alg_encrypt_camellia_cbc =
 	.common = {
 		.name = "camellia",
 		.fqn = "CAMELLIA_CBC",
-		.names = { "camellia", "camellia_cbc", },
+		.names = "camellia,camellia_cbc",
 		.algo_type =   IKE_ALG_ENCRYPT,
 		.id = {
 			[IKEv1_OAKLEY_ID] = OAKLEY_CAMELLIA_CBC,
@@ -77,7 +77,7 @@ const struct encrypt_desc ike_alg_encrypt_camellia_ctr =
 	.common = {
 		.name = "camellia_ctr",
 		.fqn = "CAMELLIA_CTR",
-		.names = { "camellia_ctr", },
+		.names = "camellia_ctr",
 		.algo_type =   IKE_ALG_ENCRYPT,
 		.id = {
 			[IKEv1_OAKLEY_ID] = OAKLEY_CAMELLIA_CTR,

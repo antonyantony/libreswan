@@ -25,6 +25,8 @@
 #include <stddef.h>	/* size_t */
 #include <stdint.h>	/* uint8_t */
 
+#include "lswalloc.h"	/* for freeanychunk() refering to pfree() which can go away */
+
 /*
  * chunk is a simple pointer-and-size abstraction
  *
@@ -43,15 +45,25 @@ typedef struct /*chunk*/ {
 chunk_t chunk(void *ptr, size_t len);
 
 /*
- * CHUNKO: create a chunk that encompasses an object
- * Warning: the cast can mask some type errors (eg. loosing const attribute).
+ * Convert writeable THING to a writeable CHUNK.  When compiled with
+ * GCC (at least) and THING is read-only, a warning will be generated.
+ *
+ * This works because GCC doesn't like implictly converting a 'const'
+ * &THING actual parameter to the non-const 'void*' formal parameter.
+ * Using an explicit cast (such as in a static initializer) suppresses
+ * this warning.
+ *
+ * For a read-only CHUNK like object, see THING_AS_SHUNK().
  */
-#define CHUNKO(OBJECT) ((const chunk_t) { .ptr = (void *)&(OBJECT), .len = sizeof(OBJECT) })
+#define THING_AS_CHUNK(THING) chunk(&(THING), sizeof(THING))
 
 chunk_t alloc_chunk(size_t count, const char *name);
-void free_chunk_contents(chunk_t *chunk); /* blats *CHUNK */
 
-chunk_t clone_chunk(chunk_t old, const char *name);
+/* result is always a WRITEABLE chunk; NULL->NULL */
+#define clone_hunk(HUNK, NAME) ({					\
+			typeof(HUNK) hunk_ = HUNK; /* evaluate once */	\
+			clone_bytes_as_chunk(hunk_.ptr, hunk_.len, NAME); \
+		})
 
 /* clone(first+second) */
 chunk_t clone_chunk_chunk(chunk_t first, chunk_t second, const char *name);
@@ -59,9 +71,27 @@ chunk_t clone_chunk_chunk(chunk_t first, chunk_t second, const char *name);
 /* always NUL terminated; NULL is NULL */
 char *clone_chunk_as_string(chunk_t chunk, const char *name);
 
-chunk_t clone_bytes_as_chunk(void *bytes, size_t sizeof_bytes, const char *name);
+/* BYTES==NULL => NULL_CHUNK */
+chunk_t clone_bytes_as_chunk(const void *bytes, size_t sizeof_bytes, const char *name);
+
+/*
+ * Free contents of chunk (if any) and blat chunk.
+ */
+
+void free_chunk_content(chunk_t *chunk); /* blats *CHUNK */
+
+/*
+ * misc ops.
+ */
 
 bool chunk_eq(chunk_t a, chunk_t b);
+
+#define memcpy_hunk(DST, HUNK, SIZE)					\
+	({								\
+		typeof(HUNK) hunk_ = HUNK; /* evaluate once */		\
+		passert(hunk_.len == SIZE);				\
+		memcpy(DST, hunk_.ptr, SIZE);				\
+	})
 
 extern const chunk_t empty_chunk;
 #define EMPTY_CHUNK ((const chunk_t) { .ptr = NULL, .len = 0 })
@@ -69,6 +99,7 @@ extern const chunk_t empty_chunk;
 #define PRI_CHUNK "%p@%zu"
 #define pri_chunk(CHUNK) (CHUNK).ptr, (CHUNK).len
 
+chunk_t chunk_from_hex(const char *hex, const char *name);
 
 /*
  * Old stuff that can go away.
@@ -83,12 +114,5 @@ extern const chunk_t empty_chunk;
 
 /* replaced by chunk() */
 #define setchunk(ch, addr, size) { (ch).ptr = (addr); (ch).len = (size); }
-
-/* replaced by clone_chunk() */
-#define clonetochunk(ch, addr, size, name) \
-	{ (ch).ptr = clone_bytes((addr), (ch).len = (size), name); }
-
-/* unconditional */
-void DBG_dump_chunk(const char *prefix, chunk_t chunk);
 
 #endif
