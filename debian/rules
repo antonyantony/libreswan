@@ -53,5 +53,5 @@ override_dh_auto_install-arch:
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	echo "Skip dh_auto_test"
+	debian/tests/cryptocheck
 endif

@@ -1,0 +1,21 @@
+#!/bin/bash
+
+set -e
+
+if [ -x OBJ.*/programs/algparse/algparse ] ; then
+    algparse=OBJ.*/programs/algparse/algparse
+    pluto=OBJ.*/programs/pluto/pluto
+    printf "Testing built binary: %s\n" $algparse $pluto
+else
+    algparse=/usr/libexec/ipsec/algparse
+    pluto=/usr/libexec/ipsec/pluto
+    printf "Testing installed binary: %s\n" $algparse $pluto
+fi
+
+
+$algparse -tp || { echo prooposal test failed; exit 1; }
+$algparse -ta || { echo algorithm test failed; exit 1; }
+tmpdir=$(mktemp -d)
+certutil -N -d "sql:$tmpdir" --empty-password
+$pluto --selftest --nssdir "$tmpdir" --rundir "$tmpdir"
+rm -rf "$tmpdir"
