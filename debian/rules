@@ -26,7 +26,7 @@ override_dh_auto_build:
 		ARCH=$(DEB_HOST_ARCH) \
 		IPSECVERSION=$(DEB_VERSION_UPSTREAM) \
 		INC_USRLOCAL=/usr \
-		FINALLIBEXECDIR=/usr/lib/ipsec \
+		FINALLIBEXECDIR=/usr/libexec/ipsec \
 		INC_MANDIR=share/man \
 		FINALNSSDIR=/var/lib/ipsec/nss \
 		USE_LDAP=true \
@@ -45,7 +45,7 @@ override_dh_auto_install-arch:
 	$(MAKE) install \
 		ARCH=$(DEB_HOST_ARCH) \
 		INC_USRLOCAL=/usr \
-		FINALLIBEXECDIR=/usr/lib/ipsec \
+		FINALLIBEXECDIR=/usr/libexec/ipsec \
 		INC_MANDIR=share/man \
 		FINALNSSDIR=/var/lib/ipsec/nss \
 		USE_KLIPS=false \
