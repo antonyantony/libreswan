@@ -18,18 +18,13 @@ License: LGPL-2.1+
 
 Files:
  lib/libcrypto/libserpent/*
- lib/libswan/initsaid.c
  lib/libswan/initsubnet.c
- lib/libswan/internal.h
  lib/libswan/ip_range.c
  lib/libswan/keyblobtoid.c
  lib/libswan/pfkey_error.c
  lib/libswan/pfkey_sock.c
  lib/libswan/rangetosubnet.c
  lib/libswan/sameaddr.c
- lib/libswan/sanitizestring.c
- lib/libswan/satoa.c
- lib/libswan/subnettot.c
  lib/libswan/subnettypeof.c
  lib/libswan/ttoaddr.c
  lib/libswan/ttodata.c
