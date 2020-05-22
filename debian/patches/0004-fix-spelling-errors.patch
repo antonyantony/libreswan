@@ -1,0 +1,45 @@
+From: Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+Date: Fri, 22 May 2020 10:33:06 -0400
+Subject: fix spelling errors
+
+Signed-off-by: Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+---
+ programs/pluto/ikev2.c                 | 2 +-
+ programs/pluto/kernel_xfrm_interface.c | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/programs/pluto/ikev2.c b/programs/pluto/ikev2.c
+index 0b1f3fd..8ceb8bb 100644
+--- a/programs/pluto/ikev2.c
++++ b/programs/pluto/ikev2.c
+@@ -1138,7 +1138,7 @@ static bool is_duplicate_request(struct ike_sa *ike,
+ 		 */
+ 		if (ike->sa.st_tpacket.len == 0 && ike->sa.st_v2_tfrags == NULL) {
+ 			FAIL_V2_MSGID(ike, &ike->sa,
+-				      "retransmission for messsage %jd exchange %s failed responder.sent %jd - there is no stored message or fragments to retransmit",
++				      "retransmission for message %jd exchange %s failed responder.sent %jd - there is no stored message or fragments to retransmit",
+ 				      msgid, enum_name(&ikev2_exchange_names, md->hdr.isa_xchg),
+ 				      ike->sa.st_v2_msgid_windows.responder.sent);
+ 			return true;
+diff --git a/programs/pluto/kernel_xfrm_interface.c b/programs/pluto/kernel_xfrm_interface.c
+index c0e470f..f406e9e 100644
+--- a/programs/pluto/kernel_xfrm_interface.c
++++ b/programs/pluto/kernel_xfrm_interface.c
+@@ -476,7 +476,7 @@ static bool find_xfrmi_interface(char *if_name, uint32_t xfrm_if_id)
+ 	int nl_fd = nl_send_query(&req.n, NETLINK_ROUTE);
+ 
+ 	if (nl_fd < 0) {
+-		loglog(RC_LOG_SERIOUS, "ERROR write to netlink socket faild");
++		loglog(RC_LOG_SERIOUS, "ERROR write to netlink socket failed");
+ 		return true;
+ 	}
+ 
+@@ -588,7 +588,7 @@ err_t xfrm_iface_supported(void)
+ 		if (if_id == 0 && (e == ENXIO || e == ENODEV)) {
+ 			err = ipsec1_support_test(if_name, lo);
+ 		} else if (if_id == 0) {
+-			LOG_ERRNO(e, "FATAL unexpeted error in xfrm_iface_supported() while checking device %s",
++			LOG_ERRNO(e, "FATAL unexpected error in xfrm_iface_supported() while checking device %s",
+ 					if_name);
+ 			xfrm_interface_support = -1;
+ 			err = "can not decide xfrmi support. assumed no.";
