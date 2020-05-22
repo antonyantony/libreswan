@@ -2,7 +2,3 @@
 libreswan: spelling-error-in-copyright aheared adhered
 libreswan: spelling-error-in-copyright rouines routines
 libreswan: spelling-error-in-copyright "GNU Public Licence" "GNU General Public License"
-# upstream's _unbound-hook won't be used for now, and i'm trying to get them to
-# fix it (e.g. https://github.com/libreswan/libreswan/issues/138). for now, we can just avoid
-# supporting it fully:
-libreswan: python-script-but-no-python-dep usr/lib/ipsec/_unbound-hook #!/usr/bin/python
