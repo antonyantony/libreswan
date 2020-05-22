@@ -22,7 +22,7 @@ endif
 CV25519_AVAILABILITY=$(shell if grep -q SEC_OID_CURVE25519 /usr/include/nss/secoidt.h; then echo true; else echo false; fi)
 
 override_dh_auto_build:
-	$(MAKE) programs \
+	dh_auto_build -- programs \
 		ARCH=$(DEB_HOST_ARCH) \
 		IPSECVERSION=$(DEB_VERSION_UPSTREAM) \
 		INC_USRLOCAL=/usr \
