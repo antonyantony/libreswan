@@ -8,6 +8,7 @@ Depends:
  @,
 
 Tests: cryptocheck
+Restrictions: allow-stderr
 Depends:
  libnss3-tools,
  @,
@@ -16,6 +17,7 @@ Tests: cavp
 Restrictions: needs-internet
 Depends:
  bzip2,
+ ca-certificates,
  diffutils,
  wget,
  @,

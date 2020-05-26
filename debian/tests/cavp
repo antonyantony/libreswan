@@ -15,7 +15,7 @@ fi
 workdir=$(mktemp -d)
 cd "$workdir"
 
-wget https://download.libreswan.org/cavs/{ikev1_dsa,ikev1_psk,ikev2}.fax.bz2
+wget --quiet https://download.libreswan.org/cavs/{ikev1_dsa,ikev1_psk,ikev2}.fax.bz2
 bunzip2 *.fax.bz2
 
 "$cavp" -v2 ikev2.fax | diff -u ikev2.fax - > /dev/null
