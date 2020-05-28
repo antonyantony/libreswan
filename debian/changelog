@@ -1,3 +1,9 @@
+libreswan (3.32-3) unstable; urgency=medium
+
+  * allow stderr on CAVP tests
+
+ -- Daniel Kahn Gillmor <dkg@fifthhorseman.net>  Thu, 28 May 2020 08:13:57 -0400
+
 libreswan (3.32-2) unstable; urgency=medium
 
   * streamline autopkgtests
