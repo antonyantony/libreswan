@@ -14,7 +14,7 @@ Depends:
  @,
 
 Tests: cavp
-Restrictions: needs-internet
+Restrictions: needs-internet, allow-stderr
 Depends:
  bzip2,
  ca-certificates,
