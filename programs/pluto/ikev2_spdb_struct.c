@@ -2116,7 +2116,8 @@ struct ipsec_proto_info *ikev2_child_sa_proto_info(struct child_sa *child, lset_
 	}
 }
 
-ipsec_spi_t ikev2_child_sa_spi(const struct spd_route *spd_route, lset_t policy)
+ipsec_spi_t ikev2_child_sa_spi(const struct spd_route *spd_route, lset_t policy,
+		const uint32_t sa_clone_id)
 {
 	const struct ip_protocol *ipprotoid;
 	switch (policy & (POLICY_ENCRYPT | POLICY_AUTHENTICATE)) {
@@ -2131,6 +2132,7 @@ ipsec_spi_t ikev2_child_sa_spi(const struct spd_route *spd_route, lset_t policy)
 	}
 	return get_ipsec_spi(0 /* avoid this # */,
 			     ipprotoid, spd_route,
+			     sa_clone_id,
 			     TRUE /* tunnel */);
 }
 

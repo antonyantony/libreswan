@@ -277,6 +277,7 @@ static reqid_t get_proto_reqid(reqid_t base, const struct ip_protocol *proto)
 ipsec_spi_t get_ipsec_spi(ipsec_spi_t avoid,
 			const struct ip_protocol *proto,
 			const struct spd_route *sr,
+			const uint32_t sa_clone_id,
 			bool tunnel)
 {
 	passert(proto == &ip_protocol_ah || proto == &ip_protocol_esp);
@@ -288,7 +289,7 @@ ipsec_spi_t get_ipsec_spi(ipsec_spi_t avoid,
 					&sr->this.host_addr, proto, tunnel,
 					get_proto_reqid(sr->reqid, proto),
 					IPSEC_DOI_SPI_OUR_MIN, 0xffffffff,
-					text_said);
+					sa_clone_id, text_said);
 	} else {
 		static ipsec_spi_t spi = 0; /* host order, so not returned directly! */
 
@@ -316,7 +317,8 @@ ipsec_spi_t get_ipsec_spi(ipsec_spi_t avoid,
  * If we can't find one easily, return 0 (a bad SPI,
  * no matter what order) indicating failure.
  */
-ipsec_spi_t get_my_cpi(const struct spd_route *sr, bool tunnel)
+ipsec_spi_t get_my_cpi(const struct spd_route *sr, const uint32_t sa_clone_id,
+		       bool tunnel)
 {
 	if (kernel_ops->get_spi != NULL) {
 		char text_said[SATOT_BUF];
@@ -327,7 +329,7 @@ ipsec_spi_t get_my_cpi(const struct spd_route *sr, bool tunnel)
 					get_proto_reqid(sr->reqid, &ip_protocol_comp),
 					IPCOMP_FIRST_NEGOTIATED,
 					IPCOMP_LAST_NEGOTIATED,
-					text_said);
+					sa_clone_id, text_said);
 	} else {
 		static cpi_t first_busy_cpi = 0;
 		static cpi_t latest_cpi = 0;

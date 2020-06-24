@@ -611,6 +611,7 @@ bool ikev1_out_sa(pb_stream *outs,
 						st->st_ipcomp.our_spi =
 							get_my_cpi(
 								&st->st_connection->spd,
+								0 /* sa_clone_id */,
 								tunnel_mode);
 						if (st->st_ipcomp.our_spi == 0)
 							goto fail; /* problem generating CPI */
@@ -638,6 +639,7 @@ bool ikev1_out_sa(pb_stream *outs,
 						*spi_ptr = get_ipsec_spi(0,
 									 proto,
 									 &st->st_connection->spd,
+									 0 /* sa_clone_id */,
 									 tunnel_mode);
 						*spi_generated = TRUE;
 					}
@@ -2228,7 +2230,7 @@ static void echo_proposal(struct isakmp_proposal r_proposal,    /* proposal to e
 		 * Note: we may fail to generate a satisfactory CPI,
 		 * but we'll ignore that.
 		 */
-		pi->our_spi = get_my_cpi(sr, tunnel_mode);
+		pi->our_spi = get_my_cpi(sr, 0 /* sa_clone_id */, tunnel_mode);
 		passert(out_raw((u_char *) &pi->our_spi +
 				IPSEC_DOI_SPI_SIZE - IPCOMP_CPI_SIZE,
 				IPCOMP_CPI_SIZE,
@@ -2238,6 +2240,7 @@ static void echo_proposal(struct isakmp_proposal r_proposal,    /* proposal to e
 					    r_proposal.isap_protoid == PROTO_IPSEC_AH ?
 						&ip_protocol_ah : &ip_protocol_esp,
 					    sr,
+					    0 /* sa_clone_id */,
 					    tunnel_mode);
 		/* XXX should check for errors */
 		passert(out_raw((u_char *) &pi->our_spi, IPSEC_DOI_SPI_SIZE,

@@ -250,6 +250,7 @@ struct kernel_ops {
 			       reqid_t reqid,
 			       ipsec_spi_t min,
 			       ipsec_spi_t max,
+			       uint32_t sa_clone_id,
 			       const char *text_said);
 	bool (*docommand)(const struct connection *c,
 			  const struct spd_route *sr,
@@ -417,8 +418,10 @@ struct state;   /* forward declaration of tag */
 extern ipsec_spi_t get_ipsec_spi(ipsec_spi_t avoid,
 				 const struct ip_protocol *proto,
 				 const struct spd_route *sr,
+				 const uint32_t sa_clone_id,
 				 bool tunnel_mode);
-extern ipsec_spi_t get_my_cpi(const struct spd_route *sr, bool tunnel_mode);
+extern ipsec_spi_t get_my_cpi(const struct spd_route *sr, const uint32_t sa_clone_id,
+			      bool tunnel_mode);
 
 extern bool install_inbound_ipsec_sa(struct state *st);
 extern bool install_ipsec_sa(struct state *st, bool inbound_also);
