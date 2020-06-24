@@ -1749,7 +1749,7 @@ static void netlink_acquire(struct nlmsghdr *n)
 	err_t ugh = NULL;
 	struct xfrm_user_sec_ctx_ike *uctx = NULL;
 	struct xfrm_user_sec_ctx_ike uctx_space;
-	uint32_t cpu_id = -1;
+	uint32_t cpu_id = UINT32_MAX;
 	DBG(DBG_KERNEL, {
 		DBG_log("xfrm netlink msg len %zu",
 				(size_t) n->nlmsg_len));
