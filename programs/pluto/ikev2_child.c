@@ -222,6 +222,16 @@ stf_status ikev2_child_sa_respond(struct ike_sa *ike,
 			DBG(DBG_CONTROL, DBG_log("received NO_PPK_AUTH already processed"));
 			break;
 
+		case v2N_PCPU_R:
+			if (!extract_u32_notify(&ntfy->pbs, "v2N_PCPU_R", &cst->st_pcpu.sa_clones_r))
+				return STF_FATAL;
+			break;
+
+		case v2N_PCPU_I:
+			if (!extract_u32_notify(&ntfy->pbs, "v2N_PCPU_I", &cst->st_pcpu.sa_clones_i))
+				return STF_FATAL;
+			break;
+
 		case v2N_PCPU_ID:
 			if (!extract_u32_notify(&ntfy->pbs, "v2N_PCPU_ID", &cst->st_pcpu.sa_clone_id))
 				return STF_FATAL;
