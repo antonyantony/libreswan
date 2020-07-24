@@ -1818,7 +1818,7 @@ bool extract_u32_notify(pb_stream *pbs, char *name, uint32_t *dst)
 	if (len < sizeof(uint32_t)) {
 		loglog(RC_LOG_SERIOUS, "%s data must be at least %zd bytes (received %zd bytes including type byte)",
 			name, len, sizeof(uint32_t));
-		return false;
+		return true; // return false; AA_2020 hack to avoid re-entry
 	}
 
 	if (!in_raw(dst, len, pbs, "uint32_t notify Payload")) {
