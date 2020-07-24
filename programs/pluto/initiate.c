@@ -631,7 +631,8 @@ static void initiate_ondemand_body(struct find_oppo_bundle *b,
 	struct connection *c = find_connection_for_clients(&sr,
 							   &b->our_client,
 							   &b->peer_client,
-							   b->transport_proto);
+							   b->transport_proto,
+							   b->clone_cpu_id);
 	if (c == NULL) {
 		/* No connection explicitly handles the clients and there
 		 * are no Opportunistic connections -- whine and give up.

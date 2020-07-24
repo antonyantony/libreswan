@@ -2260,6 +2260,38 @@ char *fmt_conn_instance(const struct connection *c, char buf[CONN_INST_BUF])
 	return buf;
 }
 
+struct connection *clone_slot(struct connection *r, uint32_t sa_clone_id)
+{
+	struct connection *cn = NULL;
+	struct connection *c;
+	char tmpconnname[256];
+
+	/* first pick head connection if that is not free pick slot */
+	snprintf(tmpconnname, sizeof(tmpconnname), "%s-0", r->connalias);
+	c = conn_by_name(tmpconnname, TRUE);
+
+	if (c->newest_ipsec_sa == SOS_NOBODY)
+		cn = c;
+
+	if (cn == NULL) {
+		snprintf(tmpconnname, sizeof(tmpconnname), "%s-%u", r->connalias, sa_clone_id);
+		dbg("AA_2020 %s %d conn_by_name('%s')  %u/%u\n", __func__, __LINE__, tmpconnname, sa_clone_id, r->sa_clones);
+		cn = conn_by_name(tmpconnname, TRUE);
+	}
+	if (cn == NULL) {
+		libreswan_log("no clone connection for cpu id %u", sa_clone_id);
+		return NULL;
+	}
+	if (cn->newest_ipsec_sa == SOS_NOBODY) {
+		dbg("AA_2020 %s %d use %s as clone conn %u/%u", __func__, __LINE__, r->name, sa_clone_id, r->sa_clones);
+		return c;
+	}
+	dbg("AA_2020 %s %d %s no clone for %u/%u", __func__, __LINE__, r->name, sa_clone_id, r->sa_clones);
+
+	return NULL;
+}
+
+
 /*
  * Find an existing connection for a trapped outbound packet.
  * This is attempted before we bother with gateway discovery.
@@ -2279,7 +2311,8 @@ char *fmt_conn_instance(const struct connection *c, char buf[CONN_INST_BUF])
 struct connection *find_connection_for_clients(struct spd_route **srp,
 					const ip_address *our_client,
 					const ip_address *peer_client,
-					int transport_proto)
+					int transport_proto,
+					uint32_t clone_cpu_id)
 {
 	int our_port = ntohs(portof(our_client));
 	int peer_port = ntohs(portof(peer_client));
@@ -2380,6 +2413,15 @@ struct connection *find_connection_for_clients(struct spd_route **srp,
 
 	if (srp != NULL && best != NULL)
 		*srp = best_sr;
+
+
+	// if (clone_cpu_id == UINT32_MAX  && c->sa_clones != 0) {
+	if (c->sa_clones != 0) {
+		best = clone_slot(c, clone_cpu_id);
+		if (best == NULL)  {
+			libreswan_log("AA_2020 %s %d no free clone connection for clonse = %u", __func__, __LINE__, c->sa_clones);
+		}
+	}
 
 	DBG(DBG_CONTROL, {
 		if (best != NULL) {

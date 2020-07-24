@@ -499,7 +499,8 @@ extern struct connection
 	*find_connection_for_clients(struct spd_route **srp,
 				      const ip_address *our_client,
 				      const ip_address *peer_client,
-				      int transport_proto);
+				      int transport_proto,
+				      uint32_t clone_cpu_id);
 
 /* instantiating routines */
 
@@ -601,4 +602,5 @@ extern uint32_t calculate_sa_prio(const struct connection *c, bool oe_shunt);
 
 so_serial_t get_newer_sa_from_connection(struct state *st);
 
+struct connection *clone_slot(struct connection *r, uint32_t sa_clone_id);
 #endif
