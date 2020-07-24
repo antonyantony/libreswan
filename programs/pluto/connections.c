@@ -3020,6 +3020,11 @@ struct connection *refine_host_connection(const struct state *st,
 
 			DBGF(DBG_CONTROL, "Warning: not switching back to template of current instance");
 
+
+			if (c->sa_clones != 0 && streq(d->connalias, c->connalias)) {
+				dbg("AA_2020 %s %d ignore clone instance %s vs %s", __func__, __LINE__, c->name, d->name);
+				continue;
+			}
 			/* 'You Tarzan, me Jane' check based on received IDr */
 			if (!initiator && tarzan_id != NULL) {
 				DBG(DBG_CONTROL, {
