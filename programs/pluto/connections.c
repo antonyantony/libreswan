@@ -2416,11 +2416,8 @@ struct connection *find_connection_for_clients(struct spd_route **srp,
 
 
 	// if (clone_cpu_id == UINT32_MAX  && c->sa_clones != 0) {
-	if (c->sa_clones != 0) {
-		best = clone_slot(c, clone_cpu_id);
-		if (best == NULL)  {
-			libreswan_log("AA_2020 %s %d no free clone connection for clonse = %u", __func__, __LINE__, c->sa_clones);
-		}
+	if (best != NULL && best->sa_clones != 0) {
+		best = clone_slot(best, clone_cpu_id);
 	}
 
 	DBG(DBG_CONTROL, {
