@@ -1545,7 +1545,7 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace)
 		attr = (struct rtattr *)((char *)attr + attr->rta_len);
 	}
 
-	if (sa->xfrm_if_id > 0) {
+	if (sa->xfrm_if_id != yn_no) {
 #ifdef USE_XFRM_INTERFACE
 		dbg("%s netlink: XFRMA_IF_ID %" PRIu32 " req.n.nlmsg_type=%" PRIu32,
 		    __func__, sa->xfrm_if_id, req.n.nlmsg_type);
