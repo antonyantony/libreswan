@@ -5,7 +5,7 @@ The support is available in kernel 4.19+ with CONFIG_XFRM_INTERFACE=y | m
 
 Because this test is subnet-to-subnet and the other end is not inside the
 'subnet' we do not need any specific 'ip rule' lookups here.
-Just add route to the subnet via dev ipsec0
+Just add route to the subnet via dev ipsec1
 
 Also note output marks are not necessary, there will not be any routing loop,
 becuase that end IP address is outside the extruded subnet.
