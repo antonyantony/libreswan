@@ -246,19 +246,14 @@ int resolve_defaultroute_one(struct starter_end *host,
 			err_t er = ttoaddr_num(peer->strings[KSCF_IP], 0,
 				AF_UNSPEC, &peer->addr);
 			if (er != NULL) {
+				int af = (peer->host_family == &ipv4_info)
+						? AF_INET : AF_INET6;
 				/* not numeric, so resolve it */
 				if (!unbound_resolve(peer->strings[KSCF_IP],
-						     0, AF_INET,
-						     &peer->addr,
+						     0, af, &peer->addr,
 						     logger)) {
-					if (!unbound_resolve(
-							peer->strings[KSCF_IP],
-							0, AF_INET6,
-							&peer->addr,
-							logger)) {
 						pfree(msgbuf);
 						return -1;
-					}
 				}
 			}
 #else
