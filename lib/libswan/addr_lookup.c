@@ -249,6 +249,12 @@ int resolve_defaultroute_one(struct starter_end *host,
 				int af = (peer->host_family == &ipv4_info)
 						? AF_INET : AF_INET6;
 				/* not numeric, so resolve it */
+
+				if (verbose)
+					printf("Calling unbound_resolve() for %s af %s\n",
+							peer->strings[KSCF_IP],
+							af == AF_INET ? "AF_INET" :
+							"AF_INET6");
 				if (!unbound_resolve(peer->strings[KSCF_IP],
 						     0, af, &peer->addr,
 						     logger)) {
