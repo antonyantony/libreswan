@@ -67,6 +67,7 @@ typedef struct {
 	unsigned ipproto;
 	bool is_address;
 	bool is_endpoint;
+	uint32_t mark_out;
 #endif
 } ip_address;
 

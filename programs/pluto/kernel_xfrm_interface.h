@@ -47,3 +47,4 @@ extern err_t xfrm_iface_supported(struct logger *logger);
 extern void free_xfrmi_ipsec1(struct logger *logger);
 extern void unreference_xfrmi(struct connection *c, struct logger *logger);
 extern void reference_xfrmi(struct connection *c);
+extern void xfrmi_set_out_mark(const struct connection *c, const struct spd_route *sr, ip_address *remote);

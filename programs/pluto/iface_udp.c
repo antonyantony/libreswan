@@ -362,6 +362,24 @@ static enum iface_status udp_read_packet(const struct iface_port *ifp,
 	return IFACE_OK;
 }
 
+static uint32_t set_mark_out(uint32_t mark, int fd)
+{
+	uint32_t old_mark;
+
+	socklen_t len = sizeof(old_mark);
+
+	if (getsockopt(fd, SOL_SOCKET, SO_MARK, &old_mark, &len) < 0) {
+		LOG_ERRNO(errno, "setsockopt(SO_MSRK) in set_mark_out()");
+		return 0;
+	}
+
+	if (setsockopt(fd, SOL_SOCKET, SO_MARK,
+				(const void *)&mark, sizeof(mark)) < 0) {
+		LOG_ERRNO(errno, "setsockopt(SO_MSRK) in set_mark_out()");
+	}
+	return old_mark;
+}
+
 static ssize_t udp_write_packet(const struct iface_port *ifp,
 				const void *ptr, size_t len,
 				const ip_endpoint *remote_endpoint)
@@ -371,9 +389,28 @@ static ssize_t udp_write_packet(const struct iface_port *ifp,
 		check_msg_errqueue(ifp, POLLOUT, __func__);
 	}
 #endif
+	endpoint_buf b;
+	uint32_t old_mark;
+	ssize_t ret;
 
 	ip_sockaddr remote_sa = sockaddr_from_endpoint(remote_endpoint);
-	return sendto(ifp->fd, ptr, len, 0, &remote_sa.sa.sa, remote_sa.len);
+	if (remote_endpoint->mark_out > 0) {
+		old_mark = set_mark_out(remote_endpoint->mark_out, ifp->fd);
+		dbg("AA_2020 %s:%d set mark on the socket %s to %u old mark %u",
+				__func__, __LINE__,
+				str_endpoint(remote_endpoint, &b),
+				remote_endpoint->mark_out, old_mark);
+	} else {
+		dbg("AA_2020 %s:%d NO mark on the socket %s",
+				__func__, __LINE__,
+				str_endpoint(remote_endpoint, &b));
+	}
+	ret = sendto(ifp->fd, ptr, len, 0, &remote_sa.sa.sa, remote_sa.len);
+
+	if (remote_endpoint->mark_out > 0)
+		set_mark_out(old_mark, ifp->fd);
+
+	return ret;
 };
 
 static void handle_udp_packet_cb(evutil_socket_t unused_fd UNUSED,

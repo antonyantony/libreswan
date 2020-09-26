@@ -673,6 +673,13 @@ bool do_command(const struct connection *c,
 	if (kernel_ops->docommand == NULL) {
 		dbg("no do_command for method %s", kernel_ops->kern_name);
 	} else {
+		if (c->xfrmi != NULL && (streq(verb, "up") ||
+					 streq(verb, "route"))) {
+			struct ike_sa *ike = ike_sa(st, HERE);
+			xfrmi_set_out_mark(c, sr, &ike->sa.st_remote_endpoint);
+			if (st->st_ike_version == IKEv1)
+				xfrmi_set_out_mark(c, sr, &st->st_remote_endpoint);
+		}
 		return (*kernel_ops->docommand)(c, sr, verb, verb_suffix, st);
 	}
 	return TRUE;

@@ -2739,6 +2739,30 @@ static bool netlink_poke_ipsec_policy_hole(const struct iface_dev *ifd, int fd)
 	return true;
 }
 
+void xfrmi_set_out_mark(const struct connection *c,
+			const struct spd_route *sr, ip_address *remote)
+{
+	if (!addrinsubnet(&sr->that.host_addr,
+				&sr->that.client)) {
+		return;
+	}
+
+	uint32_t mark_out;
+	if (c->sa_marks.out.val != 0)
+		mark_out = c->sa_marks.out.val;
+	else
+		mark_out =  c->xfrmi->if_id;
+
+	if (remote->mark_out != 0) {
+		passert(remote->mark_out == mark_out);
+		return;
+	}
+	remote->mark_out = mark_out;
+	endpoint_buf b;
+	dbg("AA_2020 %s:%d set mark %u for outgoing end %s", __func__, __LINE__,
+			remote->mark_out, str_endpoint(remote, &b));
+}
+
 const struct kernel_ops xfrm_kernel_ops = {
 	.kern_name = "xfrm",
 	.type = USE_XFRM,

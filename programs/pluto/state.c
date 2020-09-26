@@ -2616,7 +2616,9 @@ void update_ike_endpoints(struct ike_sa *ike,
 			  const struct msg_digest *md)
 {
 	/* caller must ensure we are not behind NAT */
+	uint32_t mark_out = ike->sa.st_remote_endpoint.mark_out;
 	ike->sa.st_remote_endpoint = md->sender;
+	ike->sa.st_remote_endpoint.mark_out = mark_out;
 	endpoint_buf eb1, eb2;
 	dbg("#%lu updating local interface from %s to %s using md->iface "PRI_WHERE,
 	    ike->sa.st_serialno,
