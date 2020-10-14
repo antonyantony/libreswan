@@ -1,6 +1,2 @@
 0001-do-not-use-git-version.patch
 0002-debian-pam.d-pluto.patch
-0003-update-README.nss-to-match-debian-defaults-for-IPSEC.patch
-0004-fix-spelling-errors.patch
-0005-Ensure-using-compat-interface-due-to-subtle-NSS-API-.patch
-0006-Use-pkg-config-recommended-by-the-environment.patch
