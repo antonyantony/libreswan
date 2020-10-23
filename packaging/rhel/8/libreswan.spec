@@ -37,7 +37,7 @@
 Name: libreswan
 Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
 # version is generated in the release script
-Version: 4.0
+Version: 4.1
 Release: %{?prever:0.}1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Url: https://libreswan.org/
@@ -108,7 +108,7 @@ echo "KLIPS is not supported with RHEL8" > README.KLIPS
 sed -i "s/-lfreebl //" mk/config.mk
 
 # enable crypto-policies support
-sed -i "s:#[ ]*include \(.*\)\(/crypto-policies/back-ends/libreswan.config\)$:include \1\2:" programs/configs/ipsec.conf.in
+sed -i "s:#[ ]*include \(.*\)\(/crypto-policies/back-ends/libreswan.config\)$:include \1\2:" configs/ipsec.conf.in
 
 
 %build
@@ -204,5 +204,5 @@ certutil -N -d sql:$tmpdir --empty-password
 %attr(0644,root,root) %doc %{_mandir}/*/*
 
 %changelog
-* Wed Oct 14 2020 Team Libreswan <team@libreswan.org> - 4.0-1
+* Sun Oct 18 2020 Team Libreswan <team@libreswan.org> - 4.1-1
 - Automated build from release tar ball

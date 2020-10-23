@@ -30,7 +30,7 @@
 Name: libreswan
 Summary: Internet Key Exchange (IKEv1 and IKEv2) implementation for IPsec
 # version is generated in the release script
-Version: 4.0
+Version: 4.1
 Release: %{?prever:0.}1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Url: https://libreswan.org/
@@ -98,7 +98,7 @@ Libreswan is based on Openswan-2.6.38 which in turn is based on FreeS/WAN-2.04
 %prep
 %setup -q -n libreswan-%{version}%{?prever}
 # enable crypto-policies support
-sed -i "s:#[ ]*include \(.*\)\(/crypto-policies/back-ends/libreswan.config\)$:include \1\2:" programs/configs/ipsec.conf.in
+sed -i "s:#[ ]*include \(.*\)\(/crypto-policies/back-ends/libreswan.config\)$:include \1\2:" configs/ipsec.conf.in
 # linking to freebl is no longer needed
 sed -i "s/-lfreebl //" mk/config.mk
 
@@ -109,13 +109,15 @@ make %{?_smp_mflags} \
 %else
     OPTIMIZE_CFLAGS="%{optflags}" \
 %endif
+    WERROR_CFLAGS="-Werror -Wno-missing-field-initializers -Wno-lto-type-mismatch -Wno-maybe-uninitialized" \
 %if 0%{with_efence}
     USE_EFENCE=true \
 %endif
-    USERLINK="%{?__global_ldflags}" \
+    USERLINK="%{?__global_ldflags} -Wl,-z,relro -Wl,--as-needed  -Wl,-z,now -flto --no-lto" \
     %{libreswan_config} \
     programs
 FS=$(pwd)
+
 
 %install
 make \
@@ -200,5 +202,5 @@ certutil -N -d sql:$tmpdir --empty-password
 %doc %{_mandir}/*/*
 
 %changelog
-* Wed Oct 14 2020 Team Libreswan <team@libreswan.org> - 4.0-1
+* Sun Oct 18 2020 Team Libreswan <team@libreswan.org> - 4.1-1
 - Automated build from release tar ball
