@@ -34,7 +34,7 @@
 
 #include "sysdep.h"
 #include "constants.h"
-#include "libreswan/passert.h"
+#include "passert.h"
 #include "lswalloc.h"
 #include "lswlog.h"
 #include "sysdep.h"
@@ -45,121 +45,165 @@
 #include "ip_info.h"
 
 /*
- * Convert textual form of id into a (temporary) struct id.
- *
- * Note that if the id is to be kept, unshare_id_content will be necessary.
- * This function should be split into parts so the boolean arguments can be
- * removed -- Paul
- *
- * XXX: since caller is almost immediately calling
- * unshare_id_content() why not merge it.
+ * Convert textual form of id into a struct id.
  */
-err_t atoid(char *src, struct id *id, bool oe_only)
+err_t atoid(const char *src, struct id *id)
 {
-	err_t ugh = NULL;
-
 	*id = empty_id;
 
-	if (!oe_only && streq("%fromcert", src)) {
-		id->kind = ID_FROMCERT;
-	} else if (!oe_only && streq("%none", src)) {
-		id->kind = ID_NONE;
-	} else if (!oe_only && streq("%null", src)) {
-		id->kind = ID_NULL;
-	} else if (!oe_only && strchr(src, '=') != NULL) {
-		/* we interpret this as an ASCII X.501 ID_DER_ASN1_DN */
-		id->kind = ID_DER_ASN1_DN;
+	if (streq("%fromcert", src)) {
+		*id = (struct id) {
+			.kind = ID_FROMCERT,
+		};
+		return NULL;
+	}
+
+	if (streq("%none", src)) {
+		*id = (struct id) {
+			.kind = ID_NONE,
+		};
+		return NULL;
+	}
+
+	if (streq("%null", src)) {
+		*id = (struct id) {
+			.kind = ID_NULL,
+		};
+		return NULL;
+	}
+
+	if (strchr(src, '=') != NULL) {
 		/*
+		 * We interpret this as an ASCII X.501 ID_DER_ASN1_DN.
+		 *
 		 * convert from LDAP style or openssl x509 -subject style
 		 * to ASN.1 DN
 		 * discard optional @ character in front of DN
 		 */
-		ugh = atodn((*src == '@') ? src + 1 : src, &id->name);
-	} else if (strchr(src, '@') == NULL) {
-		if (streq(src, "%any") || streq(src, "0.0.0.0")) {
-			/* any ID will be accepted */
-			id->kind = ID_NONE;
-		} else {
-			/*
-			 * !!! this test is not sufficient for distinguishing
-			 * address families.
-			 * We need a notation to specify that a FQDN is to be
-			 * resolved to IPv6.
-			 */
-			const struct ip_info *afi = strchr(src, ':') == NULL ?
-				&ipv4_info :
-				&ipv6_info;
-
-			id->kind = afi->id_addr;
-			ugh = ttoaddr(src, 0, afi->af, &id->ip_addr);
+		chunk_t name; /* shunk_t */
+		err_t ugh = atodn((*src == '@') ? src + 1 : src, &name);
+		if (ugh != NULL) {
+			return ugh;
 		}
-	} else {
-		if (*src == '@') {
-			if (!oe_only && *(src + 1) == '#') {
-				/*
-				 * if there is a second specifier (#) on the
-				 * line we interpret this as ID_KEY_ID
-				 */
-				id->kind = ID_KEY_ID;
-				id->name.ptr = (unsigned char *)src;
-				/* discard @~, convert from hex to bin */
-				ugh = ttodata(src + 2, 0, 16,
-					(char *)id->name.ptr,
-					strlen(src), &id->name.len);
-			} else if (!oe_only && *(src + 1) == '~') {
-				/*
-				 * if there is a second specifier (~) on the
-				 * line we interpret this as a binary
-				 * ID_DER_ASN1_DN
-				 */
-				id->kind = ID_DER_ASN1_DN;
-				id->name.ptr = (unsigned char *)src;
-				/* discard @~, convert from hex to bin */
-				ugh = ttodata(src + 2, 0, 16,
-					(char *)id->name.ptr,
-					strlen(src), &id->name.len);
-			} else if (!oe_only && *(src + 1) == '[') {
-				/*
-				 * if there is a second specifier ([) on the
-				 * line we interpret this as a text ID_KEY_ID,
-				 * and we remove a trailing ", if there is one.
-				 */
-				int len = strlen(src + 2);
-
-				id->kind = ID_KEY_ID;
-				id->name.ptr = (unsigned char *)src + 2;
-
-				/*
-				 * Start of name.ptr is srv+2 so len is 2
-				 * smaller than the length of src and the
-				 * terminator character is at src[len+2].
-				 * Therefore, the last character is src[len+1]
-				 */
-				if (src[len + 1] == ']') {
-					src[len + 1] = '\0';
-					len--;
-				}
-				id->name.len = len;
-			} else {
-				id->kind = ID_FQDN;
-				/* discard @ */
-				id->name.ptr = (unsigned char *)src + 1;
-				id->name.len = strlen(src) - 1;
-			}
-		} else {
-			/*
-			 * We leave in @, as per DOI 4.6.2.4
-			 * (but DNS wants . instead).
-			 */
-			id->kind = ID_USER_FQDN;
-			id->name.ptr = (unsigned char *)src;
-			id->name.len = strlen(src);
-		}
+		*id = (struct id) {
+			.kind = ID_DER_ASN1_DN,
+			.name = clone_hunk(name, "asn1"),
+		};
+		return NULL;
 	}
-	return ugh;
+
+	if (streq(src, "%any") || streq(src, "0.0.0.0")) {
+		/* any ID will be accepted */
+		*id = (struct id) {
+			.kind = ID_NONE,
+		};
+		return NULL;
+	}
+
+	if (strchr(src, '@') == NULL) {
+		/*
+		 * !!! this test is not sufficient for distinguishing
+		 * address families.
+		 *
+		 * We need a notation to specify that a FQDN is to be
+		 * resolved to IPv6.
+		 */
+		const struct ip_info *afi = strchr(src, ':') == NULL ?
+			&ipv4_info :
+			&ipv6_info;
+		ip_address addr;
+		err_t ugh = domain_to_address(shunk1(src), afi, &addr);
+		if (ugh != NULL) {
+			return ugh;
+		}
+		*id = (struct id) {
+			.kind = afi->id_addr,
+			.ip_addr = addr,
+		};
+		return NULL;
+	}
+
+	if (strneq(src, "@#", 2)) {
+		/*
+		 * if there is a second specifier (#) on the line we
+		 * interpret this as ID_KEY_ID.
+		 *
+		 * Discard @#, convert from hex to bin.
+		 */
+		src += 2; /* drop "@#" */
+		chunk_t name = alloc_chunk(strlen(src) / 2, "key id");
+		err_t ugh = ttodata(src, 0, 16, (void*)name.ptr, name.len, &name.len);
+		if (ugh != NULL) {
+			free_chunk_content(&name);
+			return ugh;
+		}
+		*id = (struct id) {
+			.kind = ID_KEY_ID,
+			.name = name,
+		};
+		return NULL;
+	}
+
+	if (strneq(src, "@~", 2)) {
+		/*
+		 * if there is a second specifier (~) on the line we
+		 * interpret this as a binary ID_DER_ASN1_DN.
+		 *
+		 * discard @~, convert from hex to bin.
+		 */
+		src += 2; /* drop "@~" */
+		chunk_t name = alloc_chunk(strlen(src) / 2, "dn id");
+		err_t ugh = ttodata(src + 2, 0, 16, (void*)name.ptr, name.len, &name.len);
+		if (ugh != NULL) {
+			free_chunk_content(&name);
+			return ugh;
+		}
+		*id = (struct id) {
+			.kind = ID_DER_ASN1_DN,
+			.name = name,
+		};
+		return NULL;
+	}
+
+	if (strneq(src, "@[", 2)) {
+		/*
+		 * if there is a second specifier ([) on the line we
+		 * interpret this as a text ID_KEY_ID, and we remove a
+		 * trailing "]", if there is one.
+		 */
+		src += 2; /* drop "@[" */
+		int len = strlen(src);
+		if (src[len-1] == ']') {
+			len -= 1; /* drop trailing "]" */
+		}
+		*id = (struct id) {
+			.kind = ID_KEY_ID,
+			.name = clone_bytes_as_chunk(src, len, "key id"),
+		};
+		return NULL;
+	}
+
+	if (*src == '@') {
+		*id = (struct id) {
+			.kind = ID_FQDN,
+			/* discard @ */
+			.name = clone_bytes_as_chunk(src + 1, strlen(src)-1, "fqdn id"),
+		};
+		return NULL;
+	}
+
+	/*
+	 * We leave in @, as per DOI 4.6.2.4 (but DNS wants
+	 * . instead).
+	 */
+	*id = (struct id) {
+		.kind = ID_USER_FQDN,
+		.name = clone_bytes_as_chunk(src, strlen(src), "DOI 4.6.2.4"),
+	};
+	return NULL;
 }
 
-void jam_id(jambuf_t *buf, const struct id *id, jam_bytes_fn *jam_bytes)
+void jam_id(struct jambuf *buf, const struct id *id, jam_bytes_fn *jam_bytes)
 {
 	switch (id->kind) {
 	case ID_FROMCERT:
@@ -201,36 +245,10 @@ void jam_id(jambuf_t *buf, const struct id *id, jam_bytes_fn *jam_bytes)
 
 const char *str_id(const struct id *id, id_buf *dst)
 {
-	jambuf_t buf = ARRAY_AS_JAMBUF(dst->buf);
+	struct jambuf buf = ARRAY_AS_JAMBUF(dst->buf);
 	/* JAM_ID() only emits printable ASCII */
 	jam_id(&buf, id, jam_raw_bytes);
 	return dst->buf;
-}
-
-/*
- * Make private copy of string in struct id.
- * This is needed if the result of atoid is to be kept.
- */
-void unshare_id_content(struct id *id)
-{
-	switch (id->kind) {
-	case ID_FQDN:
-	case ID_USER_FQDN:
-	case ID_DER_ASN1_DN:
-	case ID_KEY_ID:
-		id->name.ptr = clone_bytes(id->name.ptr, id->name.len,
-					"keep id name");
-		/* Somehow assert we have a valid id here? */
-		break;
-	case ID_FROMCERT:
-	case ID_NONE:
-	case ID_NULL:
-	case ID_IPV4_ADDR:
-	case ID_IPV6_ADDR:
-		break;
-	default:
-		bad_case(id->kind);
-	}
 }
 
 struct id clone_id(const struct id *src, const char *name)
@@ -291,7 +309,7 @@ bool any_id(const struct id *a)
 bool same_id(const struct id *a, const struct id *b)
 {
 	if (b->kind == ID_NONE || a->kind == ID_NONE) {
-		DBG(DBG_PARSING, DBG_log("id type with ID_NONE means wildcard match"));
+		dbg("id type with ID_NONE means wildcard match");
 		return TRUE; /* it's the wildcard */
 	}
 
@@ -305,7 +323,7 @@ bool same_id(const struct id *a, const struct id *b)
 
 	case ID_NULL:
 		if (a->kind == b->kind) {
-			DBG(DBG_PARSING, DBG_log("ID_NULL: id kind matches"));
+			dbg("ID_NULL: id kind matches");
 			return TRUE;
 		}
 		return FALSE;
@@ -336,14 +354,13 @@ bool same_id(const struct id *a, const struct id *b)
 				(char *)b->name.ptr, al);
 	}
 	case ID_FROMCERT:
-		DBG(DBG_CONTROL,
-			DBG_log("same_id() received ID_FROMCERT - unexpected"));
+		dbg("same_id() received ID_FROMCERT - unexpected");
 		/* FALLTHROUGH */
 	case ID_DER_ASN1_DN:
 		return same_dn(a->name, b->name);
 
 	case ID_KEY_ID:
-		return chunk_eq(a->name, b->name);
+		return hunk_eq(a->name, b->name);
 
 	default:
 		bad_case(a->kind);
@@ -369,12 +386,12 @@ bool match_id(const struct id *a, const struct id *b, int *wildcards)
 		match = same_id(a, b);
 	}
 
-	DBG(DBG_CONTROLMORE, {
+	if (DBGP(DBG_BASE)) {
 		id_buf buf;
 		DBG_log("   match_id a=%s", str_id(a, &buf));
 		DBG_log("            b=%s", str_id(b, &buf));
 		DBG_log("   results  %s", match ? "matched" : "fail");
-	});
+	}
 
 	return match;
 }
@@ -395,12 +412,8 @@ int id_count_wildcards(const struct id *id)
 		break;
 	}
 
-	DBG(DBG_CONTROL, {
-		id_buf b;
-		DBG_log("counting wild cards for %s is %d",
-			str_id(id, &b),
-			count);
-	});
+	id_buf b;
+	dbg("counting wild cards for %s is %d", str_id(id, &b), count);
 
 	return count;
 }
@@ -523,31 +536,13 @@ static bool match_dn_unordered(const chunk_t a, const chunk_t b, int *const wild
 	return matched > 0 && rdn_num > 0 && matched == rdn_num;
 }
 
-bool same_dn_any_order(chunk_t a, chunk_t b)
-{
-	bool ret = same_dn(a, b);
-
-	if (!ret) {
-		DBG(DBG_CONTROL, {
-			DBG_log("%s: not an exact match, now checking any RDN order",
-				 __func__);
-			// DBG_dump_hunk("a", a);
-			// DBG_dump_hunk("b", b);
-		});
-		ret = match_dn_unordered(a, b, NULL);
-	}
-
-	return ret;
-}
-
 bool match_dn_any_order_wild(chunk_t a, chunk_t b, int *wildcards)
 {
 	bool ret = match_dn(a, b, wildcards);
 
 	if (!ret) {
-		DBG(DBG_CONTROL,
-		    DBG_log("%s: not an exact match, now checking any RDN order with %d wildcards",
-				 __func__, *wildcards));
+		dbg("%s: not an exact match, now checking any RDN order with %d wildcards",
+		    __func__, *wildcards);
 		/* recount wildcards */
 		*wildcards = 0;
 		ret = match_dn_unordered(a, b, wildcards);

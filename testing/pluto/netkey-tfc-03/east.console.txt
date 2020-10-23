@@ -6,18 +6,18 @@ east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
  ipsec auto --add tfc
-002 added connection description "tfc"
+002 added IKEv2 connection "tfc"
 east #
  echo "initdone"
 initdone
 east #
  ipsec whack --trafficstatus
-006 #2: "tfc", type=ESP, add_time=1234567890, inBytes=336, outBytes=336, id='@west'
+006 #2: "tfc", type=ESP, add_time=1234567890, inBytes=84, outBytes=84, id='@west'
 east #
  # ESP should show TFC for west and east
 east #
  grep " IPsec SA established tunnel mode" /tmp/pluto.log
-"tfc" #2: STATE_V2_IPSEC_R: IPsec SA established tunnel mode {ESP/TFC=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256-NONE NATOA=none NATD=none DPD=passive}
+"tfc" #2: IPsec SA established tunnel mode {ESP/TFC=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256-NONE NATOA=none NATD=none DPD=passive}
 east #
  ../bin/check-for-core.sh
 east #

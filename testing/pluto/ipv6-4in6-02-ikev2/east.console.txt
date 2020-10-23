@@ -6,13 +6,13 @@ east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
  ipsec auto --add westnet-eastnet-4in6
-002 added connection description "westnet-eastnet-4in6"
+002 added IKEv2 connection "westnet-eastnet-4in6"
 east #
  echo "initdone"
 initdone
 east #
  ipsec whack --trafficstatus
-006 #2: "westnet-eastnet-4in6", type=ESP, add_time=1234567890, inBytes=336, outBytes=336, id='@west'
+006 #2: "westnet-eastnet-4in6", type=ESP, add_time=1234567890, inBytes=84, outBytes=84, id='@west'
 east #
  ip xfrm state
 src 2001:db8:1:2::45 dst 2001:db8:1:2::23

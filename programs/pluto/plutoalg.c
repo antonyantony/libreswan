@@ -21,9 +21,8 @@
 
 #include <sys/types.h>
 #include <stdlib.h>
-#include <libreswan/pfkeyv2.h>
-#include <libreswan/passert.h>
 
+#include "passert.h"
 #include "sysdep.h"
 #include "constants.h"
 #include "defs.h"
@@ -48,7 +47,7 @@ static bool kernel_alg_db_add(struct db_context *db_ctx,
 			      const struct proposal *proposal,
 			      lset_t policy, bool logit)
 {
-	int ealg_i = SADB_EALG_NONE;
+	enum ipsec_cipher_algo ealg_i = ESP_reserved;
 
 	struct v1_proposal algs = v1_proposal(proposal);
 	if (policy & POLICY_ENCRYPT) {
@@ -135,7 +134,8 @@ static bool kernel_alg_db_add(struct db_context *db_ctx,
  *	malloced pointer (this quirk allows easier spdb.c change)
  */
 static struct db_context *kernel_alg_db_new(struct child_proposals proposals,
-					    lset_t policy, bool logit)
+					    lset_t policy, bool logit,
+					    struct logger *logger)
 {
 	unsigned int trans_cnt = 0;
 	int protoid = PROTO_RESERVED;
@@ -148,8 +148,7 @@ static struct db_context *kernel_alg_db_new(struct child_proposals proposals,
 		protoid = PROTO_IPSEC_AH;
 	}
 
-	DBG(DBG_EMITTING, DBG_log("kernel_alg_db_new() initial trans_cnt=%d",
-				  trans_cnt));
+	dbg("%s() initial trans_cnt=%d", __func__, trans_cnt);
 
 	/*	pass aprox. number of transforms and attributes */
 	struct db_context *ctx_new = db_prop_new(protoid, trans_cnt, trans_cnt * 2);
@@ -165,15 +164,15 @@ static struct db_context *kernel_alg_db_new(struct child_proposals proposals,
 	bool success = TRUE;
 	if (proposals.p != NULL) {
 		FOR_EACH_PROPOSAL(proposals.p, proposal) {
-			LSWDBGP(DBG_CONTROL | DBG_EMITTING, buf) {
-				lswlogs(buf, "adding proposal: ");
-				fmt_proposal(buf, proposal);
+			LSWDBGP(DBG_BASE, buf) {
+				jam_string(buf, "adding proposal: ");
+				jam_proposal(buf, proposal);
 			}
 			if (!kernel_alg_db_add(ctx_new, proposal, policy, logit))
 				success = FALSE;	/* ??? should we break? */
 		}
 	} else {
-		PEXPECT_LOG("%s", "proposals should be non-NULL");
+		pexpect_fail(logger, HERE, "%s", "proposals should be non-NULL");
 	}
 
 	if (!success) {
@@ -184,57 +183,54 @@ static struct db_context *kernel_alg_db_new(struct child_proposals proposals,
 
 	struct db_prop  *prop = db_prop_get(ctx_new);
 
-	DBG(DBG_CONTROL | DBG_EMITTING,
-		DBG_log("kernel_alg_db_new() will return p_new->protoid=%d, p_new->trans_cnt=%d",
-			prop->protoid,
-			prop->trans_cnt));
+	dbg("%s() will return p_new->protoid=%d, p_new->trans_cnt=%d",
+	    __func__, prop->protoid, prop->trans_cnt);
 
 	unsigned int tn = 0;
 	struct db_trans *t;
 	for (t = prop->trans, tn = 0;
 	     t != NULL && t[tn].transid != 0 && tn < prop->trans_cnt;
 	     tn++) {
-		DBG(DBG_CONTROL | DBG_EMITTING,
-		    DBG_log("kernel_alg_db_new()     trans[%d]: transid=%d, attr_cnt=%d, attrs[0].type=%d, attrs[0].val=%d",
-			    tn,
-			    t[tn].transid, t[tn].attr_cnt,
-			    t[tn].attrs ? t[tn].attrs[0].type.ipsec : 255,
-			    t[tn].attrs ? t[tn].attrs[0].val : 255
-			    ));
+		dbg("%s()     trans[%d]: transid=%d, attr_cnt=%d, attrs[0].type=%d, attrs[0].val=%d",
+		    __func__, tn,
+		    t[tn].transid, t[tn].attr_cnt,
+		    t[tn].attrs ? t[tn].attrs[0].type.ipsec : 255,
+		    t[tn].attrs ? t[tn].attrs[0].val : 255);
 	}
 	prop->trans_cnt = tn;
 
 	return ctx_new;
 }
 
-void kernel_alg_show_status(struct fd *whackfd)
+void show_kernel_alg_status(struct show *s)
 {
-	whack_comment(whackfd, "Kernel algorithms supported:");
-	whack_comment(whackfd, " "); /* spacer */
+	show_separator(s);
+	show_comment(s, "Kernel algorithms supported:");
+	show_separator(s);
 
 	for (const struct encrypt_desc **alg_p = next_kernel_encrypt_desc(NULL);
 	     alg_p != NULL; alg_p = next_kernel_encrypt_desc(alg_p)) {
 		const struct encrypt_desc *alg = *alg_p;
-		whack_comment(whackfd,
-			  "algorithm ESP encrypt: name=%s, keysizemin=%d, keysizemax=%d",
-			  alg->common.fqn,
-			  encrypt_min_key_bit_length(alg),
-			  encrypt_max_key_bit_length(alg));
+		if (alg != NULL) /* nostack gives us no algos */
+			show_comment(s,
+				"algorithm ESP encrypt: name=%s, keysizemin=%d, keysizemax=%d",
+				alg->common.fqn,
+				encrypt_min_key_bit_length(alg),
+				encrypt_max_key_bit_length(alg));
 	}
 
 	for (const struct integ_desc **alg_p = next_kernel_integ_desc(NULL);
 	     alg_p != NULL; alg_p = next_kernel_integ_desc(alg_p)) {
 		const struct integ_desc *alg = *alg_p;
-		whack_comment(whackfd,
-			  "algorithm AH/ESP auth: name=%s, key-length=%zu",
-			  alg->common.fqn,
-			  alg->integ_keymat_size * BITS_PER_BYTE);
+		if (alg != NULL) /* nostack doesn't give us algos */
+			show_comment(s,
+				"algorithm AH/ESP auth: name=%s, key-length=%zu",
+				alg->common.fqn,
+				alg->integ_keymat_size * BITS_PER_BYTE);
 	}
-
-	whack_comment(whackfd, " "); /* spacer */
 }
 
-void kernel_alg_show_connection(struct fd *whackfd,
+void show_kernel_alg_connection(struct show *s,
 				const struct connection *c,
 				const char *instance)
 {
@@ -263,7 +259,7 @@ void kernel_alg_show_connection(struct fd *whackfd,
 
 	if (c->policy & POLICY_PFS) {
 		/*
-		 * Get the DH algorthm specified for the child (ESP or AH).
+		 * Get the DH algorithm specified for the child (ESP or AH).
 		 *
 		 * If this is NULL and PFS is required then callers fall back to using
 		 * the parent's DH algorithm.
@@ -285,7 +281,7 @@ void kernel_alg_show_connection(struct fd *whackfd,
 	 */
 	if (c->child_proposals.p != NULL &&
 	    !default_proposals(c->child_proposals.p)) {
-		LSWLOG_WHACK(RC_COMMENT, buf) {
+		SHOW_JAMBUF(RC_COMMENT, s, buf) {
 			/*
 			 * If DH (PFS) was specified in the esp= or
 			 * ah= line then the below will display it
@@ -303,16 +299,16 @@ void kernel_alg_show_connection(struct fd *whackfd,
 			 * The real PFS is displayed in the 'algorithm
 			 * newest' line further down.
 			 */
-			lswlogf(buf, "\"%s\"%s:   %s algorithms: ",
-				c->name, instance, satype);
-			fmt_proposals(buf, c->child_proposals.p);
+			jam(buf, "\"%s\"%s:   %s algorithms: ",
+			    c->name, instance, satype);
+			jam_proposals(buf, c->child_proposals.p);
 		}
 	}
 
 	const struct state *st = state_with_serialno(c->newest_ipsec_sa);
 
 	if (st != NULL && st->st_esp.present) {
-		whack_comment(whackfd,
+		show_comment(s,
 			  "\"%s\"%s:   %s algorithm newest: %s_%03d-%s; pfsgroup=%s",
 			  c->name,
 			  instance, satype,
@@ -323,7 +319,7 @@ void kernel_alg_show_connection(struct fd *whackfd,
 	}
 
 	if (st != NULL && st->st_ah.present) {
-		whack_comment(whackfd,
+		show_comment(s,
 			  "\"%s\"%s:   %s algorithm newest: %s; pfsgroup=%s",
 			  c->name,
 			  instance, satype,
@@ -334,7 +330,7 @@ void kernel_alg_show_connection(struct fd *whackfd,
 
 struct db_sa *kernel_alg_makedb(lset_t policy,
 				struct child_proposals proposals,
-				bool logit)
+				bool logit, struct logger *logger)
 {
 	if (proposals.p == NULL) {
 		struct db_sa *sadb;
@@ -351,17 +347,17 @@ struct db_sa *kernel_alg_makedb(lset_t policy,
 		return sadb;
 	}
 
-	struct db_context *dbnew = kernel_alg_db_new(proposals, policy, logit);
+	struct db_context *dbnew = kernel_alg_db_new(proposals, policy, logit, logger);
 
 	if (dbnew == NULL) {
-		libreswan_log("failed to translate esp_info to proposal, returning empty");
+		log_message(RC_LOG, logger, "failed to translate esp_info to proposal, returning empty");
 		return NULL;
 	}
 
 	struct db_prop *p = db_prop_get(dbnew);
 
 	if (p == NULL) {
-		libreswan_log("failed to get proposal from context, returning empty");
+		log_message(RC_LOG, logger, "failed to get proposal from context, returning empty");
 		db_destroy(dbnew);
 		return NULL;
 	}
@@ -376,7 +372,6 @@ struct db_sa *kernel_alg_makedb(lset_t policy,
 
 	db_destroy(dbnew);
 
-	DBG(DBG_CONTROL,
-	    DBG_log("returning new proposal from esp_info"));
+	dbg("returning new proposal from esp_info");
 	return n;
 }

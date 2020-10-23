@@ -12,7 +12,7 @@ destination -I 192.0.1.254 192.0.2.254 is alive
 west #
  # ensure that clear text does not get through
 west #
- iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j LOGDROP
+ iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j DROP
 west #
  iptables -I INPUT -m policy --dir in --pol ipsec -j ACCEPT
 west #
@@ -27,7 +27,7 @@ west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
  ipsec auto --add ikev2-westnet-eastnet-x509-cr
-002 added connection description "ikev2-westnet-eastnet-x509-cr"
+002 added IKEv2 connection "ikev2-westnet-eastnet-x509-cr"
 west #
  ipsec whack --impair suppress-retransmits
 west #
@@ -35,13 +35,12 @@ west #
 initdone
 west #
  ipsec auto --up ikev2-westnet-eastnet-x509-cr
-1v2 "ikev2-westnet-eastnet-x509-cr" #1: initiating IKEv2 IKE SA
-1v2 "ikev2-westnet-eastnet-x509-cr" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
-1v2 "ikev2-westnet-eastnet-x509-cr" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
-003 "ikev2-westnet-eastnet-x509-cr" #2: Certificate E=testing@libreswan.org,CN=Libreswan test CA for mainca,OU=Test Department,O=Libreswan,L=Toronto,ST=Ontario,C=CA failed IPsec verification
-003 "ikev2-westnet-eastnet-x509-cr" #2: ERROR: Peer's certificate has an invalid signature.
-002 "ikev2-westnet-eastnet-x509-cr" #2: X509: Certificate rejected for this connection
-002 "ikev2-westnet-eastnet-x509-cr" #2: X509: CERT payload bogus or revoked
+1v2 "ikev2-westnet-eastnet-x509-cr" #1: initiating IKEv2 connection
+1v2 "ikev2-westnet-eastnet-x509-cr" #1: sent IKE_SA_INIT request
+1v2 "ikev2-westnet-eastnet-x509-cr" #1: sent IKE_AUTH request {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
+003 "ikev2-westnet-eastnet-x509-cr" #1: certificate E=testing@libreswan.org,CN=Libreswan test CA for mainca,OU=Test Department,O=Libreswan,L=Toronto,ST=Ontario,C=CA failed IPsec verification
+003 "ikev2-westnet-eastnet-x509-cr" #1: NSS ERROR: Peer's certificate has an invalid signature.
+002 "ikev2-westnet-eastnet-x509-cr" #1: X509: certificate payload rejected for this connection
 036 "ikev2-westnet-eastnet-x509-cr" #2: encountered fatal error in state STATE_PARENT_I2
 west #
  echo "done"

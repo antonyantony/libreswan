@@ -29,11 +29,10 @@
 #include "ike_alg_prf_mac_ops.h"
 #include "ike_alg_prf_ikev1_ops.h"
 #include "ike_alg_prf_ikev2_ops.h"
-#include "sadb.h"
+#include "lsw-pfkeyv2.h"	/* for SADB_*ALG_* */
 
 const struct hash_desc ike_alg_hash_md5 = {
 	.common = {
-		.name = "md5",
 		.fqn = "MD5",
 		.names = "md5",
 		.algo_type = IKE_ALG_HASH,
@@ -55,7 +54,6 @@ const struct hash_desc ike_alg_hash_md5 = {
 
 const struct prf_desc ike_alg_prf_hmac_md5 = {
 	.common = {
-		.name = "md5",
 		.fqn = "HMAC_MD5",
 		.names = "md5,hmac_md5",
 		.algo_type = IKE_ALG_PRF,
@@ -76,7 +74,6 @@ const struct prf_desc ike_alg_prf_hmac_md5 = {
 
 const struct integ_desc ike_alg_integ_hmac_md5_96 = {
 	.common = {
-		.name = "md5",
 		.fqn = "HMAC_MD5_96",
 		.names = "md5,hmac_md5,hmac_md5_96",
 		.algo_type = IKE_ALG_INTEG,

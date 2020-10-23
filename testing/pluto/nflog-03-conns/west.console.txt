@@ -7,7 +7,7 @@ destination -I 192.0.1.254 192.0.2.254 is alive
 west #
  # ensure that clear text does not get through
 west #
- iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j LOGDROP
+ iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j DROP
 west #
  iptables -I INPUT -m policy --dir in --pol ipsec -j ACCEPT
 west #
@@ -22,10 +22,10 @@ west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
  ipsec auto --add westnet-eastnet-nflog
-002 added connection description "westnet-eastnet-nflog"
+002 added IKEv1 connection "westnet-eastnet-nflog"
 west #
  ipsec auto --add west-east-nflog
-002 added connection description "west-east-nflog"
+002 added IKEv1 connection "west-east-nflog"
 west #
  echo "initdone"
 initdone
@@ -34,48 +34,40 @@ west #
 Chain INPUT (policy ACCEPT)
 target     prot opt source               destination         
 ACCEPT     all  --  0.0.0.0/0            0.0.0.0/0            policy match dir in pol ipsec
-LOGDROP    all  --  192.0.2.0/24         0.0.0.0/0           
+DROP       all  --  192.0.2.0/24         0.0.0.0/0           
 Chain FORWARD (policy ACCEPT)
 target     prot opt source               destination         
 Chain OUTPUT (policy ACCEPT)
 target     prot opt source               destination         
-Chain LOGDROP (1 references)
-target     prot opt source               destination         
-LOG        all  --  0.0.0.0/0            0.0.0.0/0            LOG flags 0 level 4
-DROP       all  --  0.0.0.0/0            0.0.0.0/0           
 west #
  ipsec auto --up westnet-eastnet-nflog
-002 "westnet-eastnet-nflog" #1: initiating Main Mode
-1v1 "westnet-eastnet-nflog" #1: STATE_MAIN_I1: sent MI1, expecting MR1
-1v1 "westnet-eastnet-nflog" #1: STATE_MAIN_I2: sent MI2, expecting MR2
-1v1 "westnet-eastnet-nflog" #1: STATE_MAIN_I3: sent MI3, expecting MR3
+002 "westnet-eastnet-nflog" #1: initiating IKEv1 Main Mode connection
+1v1 "westnet-eastnet-nflog" #1: sent Main Mode request
+1v1 "westnet-eastnet-nflog" #1: sent Main Mode I2
+1v1 "westnet-eastnet-nflog" #1: sent Main Mode I3
 002 "westnet-eastnet-nflog" #1: Peer ID is ID_FQDN: '@east'
-003 "westnet-eastnet-nflog" #1: Authenticated using RSA with SHA-1
-004 "westnet-eastnet-nflog" #1: STATE_MAIN_I4: ISAKMP SA established {auth=RSA_SIG cipher=AES_CBC_256 integ=HMAC_SHA2_256 group=MODP2048}
-002 "westnet-eastnet-nflog" #2: initiating Quick Mode RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKEV1_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO
-1v1 "westnet-eastnet-nflog" #2: STATE_QUICK_I1: sent QI1, expecting QR1
-004 "westnet-eastnet-nflog" #2: STATE_QUICK_I2: sent QI2, IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive}
+003 "westnet-eastnet-nflog" #1: authenticated using RSA with SHA-1
+004 "westnet-eastnet-nflog" #1: IKE SA established {auth=RSA_SIG cipher=AES_CBC_256 integ=HMAC_SHA2_256 group=MODP2048}
+002 "westnet-eastnet-nflog" #2: initiating Quick Mode RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKEV1_ALLOW+IKE_FRAG_ALLOW+ESN_NO
+1v1 "westnet-eastnet-nflog" #2: sent Quick Mode request
+004 "westnet-eastnet-nflog" #2: IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive}
 west #
  iptables -L -n
 Chain INPUT (policy ACCEPT)
 target     prot opt source               destination         
 NFLOG      all  --  192.0.2.0/24         192.0.1.0/24         policy match dir in pol ipsec nflog-prefix  westnet-eastnet-nflog nflog-group 13
 ACCEPT     all  --  0.0.0.0/0            0.0.0.0/0            policy match dir in pol ipsec
-LOGDROP    all  --  192.0.2.0/24         0.0.0.0/0           
+DROP       all  --  192.0.2.0/24         0.0.0.0/0           
 Chain FORWARD (policy ACCEPT)
 target     prot opt source               destination         
 Chain OUTPUT (policy ACCEPT)
 target     prot opt source               destination         
 NFLOG      all  --  192.0.1.0/24         192.0.2.0/24         policy match dir out pol ipsec nflog-prefix  westnet-eastnet-nflog nflog-group 13
-Chain LOGDROP (1 references)
-target     prot opt source               destination         
-LOG        all  --  0.0.0.0/0            0.0.0.0/0            LOG flags 0 level 4
-DROP       all  --  0.0.0.0/0            0.0.0.0/0           
 west #
  ipsec auto --up west-east-nflog
-002 "west-east-nflog" #3: initiating Quick Mode RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKEV1_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO
-1v1 "west-east-nflog" #3: STATE_QUICK_I1: sent QI1, expecting QR1
-004 "west-east-nflog" #3: STATE_QUICK_I2: sent QI2, IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive}
+002 "west-east-nflog" #3: initiating Quick Mode RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKEV1_ALLOW+IKE_FRAG_ALLOW+ESN_NO
+1v1 "west-east-nflog" #3: sent Quick Mode request
+004 "west-east-nflog" #3: IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive}
 west #
  iptables -L -n
 Chain INPUT (policy ACCEPT)
@@ -83,17 +75,13 @@ target     prot opt source               destination
 NFLOG      all  --  192.1.2.23           192.1.2.45           policy match dir in pol ipsec nflog-prefix  west-east-nflog nflog-group 50
 NFLOG      all  --  192.0.2.0/24         192.0.1.0/24         policy match dir in pol ipsec nflog-prefix  westnet-eastnet-nflog nflog-group 13
 ACCEPT     all  --  0.0.0.0/0            0.0.0.0/0            policy match dir in pol ipsec
-LOGDROP    all  --  192.0.2.0/24         0.0.0.0/0           
+DROP       all  --  192.0.2.0/24         0.0.0.0/0           
 Chain FORWARD (policy ACCEPT)
 target     prot opt source               destination         
 Chain OUTPUT (policy ACCEPT)
 target     prot opt source               destination         
 NFLOG      all  --  192.1.2.45           192.1.2.23           policy match dir out pol ipsec nflog-prefix  west-east-nflog nflog-group 50
 NFLOG      all  --  192.0.1.0/24         192.0.2.0/24         policy match dir out pol ipsec nflog-prefix  westnet-eastnet-nflog nflog-group 13
-Chain LOGDROP (1 references)
-target     prot opt source               destination         
-LOG        all  --  0.0.0.0/0            0.0.0.0/0            LOG flags 0 level 4
-DROP       all  --  0.0.0.0/0            0.0.0.0/0           
 west #
  rm -fr /tmp/nflog-50.pcap
 west #
@@ -142,16 +130,12 @@ Chain INPUT (policy ACCEPT)
 target     prot opt source               destination         
 NFLOG      all  --  192.1.2.23           192.1.2.45           policy match dir in pol ipsec nflog-prefix  west-east-nflog nflog-group 50
 ACCEPT     all  --  0.0.0.0/0            0.0.0.0/0            policy match dir in pol ipsec
-LOGDROP    all  --  192.0.2.0/24         0.0.0.0/0           
+DROP       all  --  192.0.2.0/24         0.0.0.0/0           
 Chain FORWARD (policy ACCEPT)
 target     prot opt source               destination         
 Chain OUTPUT (policy ACCEPT)
 target     prot opt source               destination         
 NFLOG      all  --  192.1.2.45           192.1.2.23           policy match dir out pol ipsec nflog-prefix  west-east-nflog nflog-group 50
-Chain LOGDROP (1 references)
-target     prot opt source               destination         
-LOG        all  --  0.0.0.0/0            0.0.0.0/0            LOG flags 0 level 4
-DROP       all  --  0.0.0.0/0            0.0.0.0/0           
 west #
  ipsec auto --down west-east-nflog
 002 "west-east-nflog": terminating SAs using this connection
@@ -162,15 +146,11 @@ west #
 Chain INPUT (policy ACCEPT)
 target     prot opt source               destination         
 ACCEPT     all  --  0.0.0.0/0            0.0.0.0/0            policy match dir in pol ipsec
-LOGDROP    all  --  192.0.2.0/24         0.0.0.0/0           
+DROP       all  --  192.0.2.0/24         0.0.0.0/0           
 Chain FORWARD (policy ACCEPT)
 target     prot opt source               destination         
 Chain OUTPUT (policy ACCEPT)
 target     prot opt source               destination         
-Chain LOGDROP (1 references)
-target     prot opt source               destination         
-LOG        all  --  0.0.0.0/0            0.0.0.0/0            LOG flags 0 level 4
-DROP       all  --  0.0.0.0/0            0.0.0.0/0           
 west #
  cp  /tmp/nflog-50.pcap OUTPUT/nflog-50.pcap
 west #
@@ -221,15 +201,11 @@ west #
 Chain INPUT (policy ACCEPT)
 target     prot opt source               destination         
 ACCEPT     all  --  0.0.0.0/0            0.0.0.0/0            policy match dir in pol ipsec
-LOGDROP    all  --  192.0.2.0/24         0.0.0.0/0           
+DROP       all  --  192.0.2.0/24         0.0.0.0/0           
 Chain FORWARD (policy ACCEPT)
 target     prot opt source               destination         
 Chain OUTPUT (policy ACCEPT)
 target     prot opt source               destination         
-Chain LOGDROP (1 references)
-target     prot opt source               destination         
-LOG        all  --  0.0.0.0/0            0.0.0.0/0            LOG flags 0 level 4
-DROP       all  --  0.0.0.0/0            0.0.0.0/0           
 west #
  ../bin/check-for-core.sh
 west #

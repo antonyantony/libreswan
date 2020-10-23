@@ -50,8 +50,8 @@
 #include "crypto.h"
 #include "rnd.h"
 #include "state.h"
+#include "connections.h"
 #include "pluto_crypt.h"
-#include "lswlog.h"
 #include "log.h"
 #include "timer.h"
 #include "ike_alg.h"
@@ -60,7 +60,6 @@
 #include "crypt_dh.h"
 #include "ike_alg_dh_ops.h"
 #include "crypt_symkey.h"
-#include <nss.h>
 #include <pk11pub.h>
 #include <keyhi.h>
 #include "lswnss.h"
@@ -71,20 +70,21 @@ struct dh_secret {
 	SECKEYPublicKey *pubk;
 };
 
-static void lswlog_dh_secret(struct lswlog *buf, struct dh_secret *secret)
+static void jam_dh_secret(struct jambuf *buf, struct dh_secret *secret)
 {
-	lswlogf(buf, "DH secret %s@%p: ",
-		secret->group->common.name, secret);
+	jam(buf, "DH secret %s@%p: ",
+		secret->group->common.fqn, secret);
 }
 
-struct dh_secret *calc_dh_secret(const struct dh_desc *group,
-				 chunk_t *local_ke)
+struct dh_secret *calc_dh_secret(const struct dh_desc *group, chunk_t *local_ke,
+				 struct logger *logger)
 {
 	chunk_t ke = alloc_chunk(group->bytes, "local ke");
 	SECKEYPrivateKey *privk;
 	SECKEYPublicKey *pubk;
 	group->dh_ops->calc_secret(group, &privk, &pubk,
-				      ke.ptr, ke.len);
+				   ke.ptr, ke.len,
+				   logger);
 	passert(privk != NULL);
 	passert(pubk != NULL);
 	*local_ke = ke;
@@ -93,8 +93,8 @@ struct dh_secret *calc_dh_secret(const struct dh_desc *group,
 	secret->privk = privk;
 	secret->pubk = pubk;
 	LSWDBGP(DBG_CRYPT, buf) {
-		lswlog_dh_secret(buf, secret);
-		lswlogs(buf, "created");
+		jam_dh_secret(buf, secret);
+		jam_string(buf, "created");
 	}
 	return secret;
 }
@@ -105,23 +105,27 @@ struct dh_secret *calc_dh_secret(const struct dh_desc *group,
  * If there is something that upsets NSS (what?) we will return NULL.
  */
 /* MUST BE THREAD-SAFE */
-PK11SymKey *calc_dh_shared(struct dh_secret *secret,
-			   chunk_t remote_ke)
+PK11SymKey *calc_dh_shared(struct dh_secret *secret, chunk_t remote_ke,
+			   struct logger *logger)
 {
 	PK11SymKey *dhshared =
 		secret->group->dh_ops->calc_shared(secret->group,
 						   secret->privk,
 						   secret->pubk,
-						   remote_ke.ptr, remote_ke.len);
+						   remote_ke.ptr,
+						   remote_ke.len,
+						   logger);
 	/*
 	 * The IKEv2 documentation, even for ECP, refers to "g^ir".
 	 */
-	LSWDBGP(DBG_CRYPT, buf) {
-		lswlog_dh_secret(buf, secret);
-		lswlogf(buf, "computed shared DH secret key@%p",
-			dhshared);
+	if (DBGP(DBG_CRYPT)) {
+		LOG_JAMBUF(DEBUG_STREAM, logger, buf) {
+			jam_dh_secret(buf, secret);
+			jam(buf, "computed shared DH secret key@%p",
+			    dhshared);
+		}
+		DBG_symkey(logger, "dh-shared ", "g^ir", dhshared);
 	}
-	DBG(DBG_CRYPT, DBG_symkey("dh-shared ", "g^ir", dhshared));
 	return dhshared;
 }
 
@@ -133,9 +137,9 @@ PK11SymKey *calc_dh_shared(struct dh_secret *secret,
 void transfer_dh_secret_to_state(const char *helper, struct dh_secret **secret,
 				 struct state *st)
 {
-	LSWDBGP(DBG_CRYPT, buf) {
-		lswlog_dh_secret(buf, *secret);
-		lswlogf(buf, "transferring ownership from helper %s to state #%lu",
+	LSWDBGP(DBG_BASE, buf) {
+		jam_dh_secret(buf, *secret);
+		jam(buf, "transferring ownership from helper %s to state #%lu",
 			helper, st->st_serialno);
 	}
 	pexpect(st->st_dh_secret == NULL);
@@ -146,9 +150,9 @@ void transfer_dh_secret_to_state(const char *helper, struct dh_secret **secret,
 void transfer_dh_secret_to_helper(struct state *st,
 				  const char *helper, struct dh_secret **secret)
 {
-	LSWDBGP(DBG_CRYPT, buf) {
-		lswlog_dh_secret(buf, st->st_dh_secret);
-		lswlogf(buf, "transferring ownership from state #%lu to helper %s",
+	LSWDBGP(DBG_BASE, buf) {
+		jam_dh_secret(buf, st->st_dh_secret);
+		jam(buf, "transferring ownership from state #%lu to helper %s",
 			st->st_serialno, helper);
 	}
 	pexpect(*secret == NULL);
@@ -161,8 +165,8 @@ void free_dh_secret(struct dh_secret **secret)
 	pexpect(*secret != NULL);
 	if (*secret != NULL) {
 		LSWDBGP(DBG_CRYPT, buf) {
-			lswlog_dh_secret(buf, *secret);
-			lswlogs(buf, "destroyed");
+			jam_dh_secret(buf, *secret);
+			jam_string(buf, "destroyed");
 		}
 		SECKEY_DestroyPublicKey((*secret)->pubk);
 		SECKEY_DestroyPrivateKey((*secret)->privk);
@@ -178,30 +182,33 @@ struct crypto_task {
 	dh_cb *cb;
 };
 
-static void compute_dh(struct crypto_task *task, int thread UNUSED)
+static void compute_dh(struct logger *logger,
+		       struct crypto_task *task,
+		       int thread_unused UNUSED)
 {
 	task->shared_secret = calc_dh_shared(task->local_secret,
-					     task->remote_ke);
+					     task->remote_ke,
+					     logger);
 }
 
 static void cancel_dh(struct crypto_task **task)
 {
 	free_dh_secret(&(*task)->local_secret); /* must own */
-	freeanychunk((*task)->remote_ke);
+	free_chunk_content(&(*task)->remote_ke);
 	release_symkey("DH", "secret", &(*task)->shared_secret);
 	pfreeany(*task);
 }
 
 static stf_status complete_dh(struct state *st,
-			      struct msg_digest **mdp,
+			      struct msg_digest *md,
 			      struct crypto_task **task)
 {
 	transfer_dh_secret_to_state("IKEv2 DH", &(*task)->local_secret, st);
-	freeanychunk((*task)->remote_ke);
+	free_chunk_content(&(*task)->remote_ke);
 	pexpect(st->st_shared_nss == NULL);
 	release_symkey(__func__, "st_shared_nss", &st->st_shared_nss);
 	st->st_shared_nss = (*task)->shared_secret;
-	stf_status status = (*task)->cb(st, mdp);
+	stf_status status = (*task)->cb(st, md);
 	pfreeany(*task);
 	return status;
 }
@@ -220,5 +227,5 @@ void submit_dh(struct state *st, chunk_t remote_ke,
 	task->remote_ke = clone_hunk(remote_ke, "DH crypto");
 	transfer_dh_secret_to_helper(st, "DH", &task->local_secret);
 	task->cb = cb;
-	submit_crypto(st, task, &dh_handler, name);
+	submit_crypto(st->st_logger, st, task, &dh_handler, name);
 }

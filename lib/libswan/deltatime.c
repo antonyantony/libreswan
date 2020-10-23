@@ -69,7 +69,7 @@ deltatime_t deltatime_timevals_diff(struct timeval a, struct timeval b)
 	return res;
 }
 
-int deltatime_cmp(deltatime_t a, deltatime_t b)
+int deltatime_cmp_sign(deltatime_t a, deltatime_t b)
 {
 	/* sign(l - r) */
 	if (timercmp(&a.dt, &b.dt, <)) {
@@ -94,6 +94,13 @@ deltatime_t deltatime_add(deltatime_t a, deltatime_t b)
 {
 	deltatime_t res;
 	timeradd(&a.dt, &b.dt, &res.dt);
+	return res;
+}
+
+deltatime_t deltatime_sub(deltatime_t a, deltatime_t b)
+{
+	deltatime_t res;
+	timersub(&a.dt, &b.dt, &res.dt);
 	return res;
 }
 
@@ -124,43 +131,39 @@ deltatime_t deltatimescale(int num, int denom, deltatime_t d)
 	return deltatime(deltasecs(d) * num / denom);
 }
 
-bool deltaless(deltatime_t a, deltatime_t b)
-{
-	return timercmp(&a.dt, &b.dt, <);
-}
-
-bool deltaless_tv_dt(const struct timeval a, const deltatime_t b)
-{
-	return timercmp(&a, &b.dt, <);
-}
-
-struct timeval deltatimeval(deltatime_t d)
+struct timeval timeval_from_deltatime(deltatime_t d)
 {
 	return d.dt;
+}
+
+deltatime_t deltatime_from_timeval(struct timeval t)
+{
+	deltatime_t d = { t, };
+	return d;
 }
 
 /*
  * Try to be smart by only printing the precision necessary.  For
  * instance 1, 0.5, ...
  */
-static size_t frac(struct lswlog *buf, intmax_t usec)
+static size_t frac(struct jambuf *buf, intmax_t usec)
 {
 	int precision = 6;
 	while (usec % 10 == 0 && precision > 1) {
 		precision--;
 		usec = usec / 10;
 	}
-	return lswlogf(buf, ".%0*jd", precision, usec);
+	return jam(buf, ".%0*jd", precision, usec);
 }
 
-size_t jam_deltatime(jambuf_t *buf, deltatime_t d)
+size_t jam_deltatime(struct jambuf *buf, deltatime_t d)
 {
 	size_t s = 0;
 	if (d.dt.tv_sec < 0) {
-		s += lswlogf(buf, "-");
+		s += jam(buf, "-");
 		d = negate_deltatime(d);
 	}
-	s += lswlogf(buf, "%jd", (intmax_t)d.dt.tv_sec);
+	s += jam(buf, "%jd", (intmax_t)d.dt.tv_sec);
 	if (d.dt.tv_usec != 0) {
 		frac(buf, d.dt.tv_usec);
 	}
@@ -169,7 +172,7 @@ size_t jam_deltatime(jambuf_t *buf, deltatime_t d)
 
 const char *str_deltatime(deltatime_t d, deltatime_buf *out)
 {
-	jambuf_t buf = ARRAY_AS_JAMBUF(out->buf);
-	lswlog_deltatime(&buf, d);
+	struct jambuf buf = ARRAY_AS_JAMBUF(out->buf);
+	jam_deltatime(&buf, d);
 	return out->buf;
 }

@@ -96,7 +96,7 @@ void kernel_encrypt_add(const struct encrypt_desc *alg)
 bool kernel_alg_dh_ok(const struct dh_desc *dh)
 {
 	if (dh == NULL) {
-		PEXPECT_LOG("%s", "DH needs to be valid (non-NULL)");
+		log_pexpect(HERE, "%s", "DH needs to be valid (non-NULL)");
 		return false;
 	}
 	/* require an in-process/ike implementation of DH */
@@ -128,7 +128,7 @@ bool kernel_alg_integ_ok(const struct integ_desc *alg)
 bool kernel_alg_is_ok(const struct ike_alg *alg)
 {
 	if (alg == NULL) {
-		PEXPECT_LOG("%s", "algorithm needs to be valid (non-NULL)");
+		log_pexpect(HERE, "%s", "algorithm needs to be valid (non-NULL)");
 		return false;
 	} else if (alg->algo_type == &ike_alg_dh) {
 		return kernel_alg_dh_ok(dh_desc(alg));
@@ -159,9 +159,8 @@ bool kernel_alg_encrypt_key_size(const struct encrypt_desc *encrypt,
 	if (keylen == 0) {
 		if (encrypt != &ike_alg_encrypt_null) {
 			keylen = encrypt_min_key_bit_length(encrypt);
-			DBG(DBG_KERNEL,
-			    DBG_log("XXX: %s has key length of 0, adjusting to %d",
-				    encrypt->common.fqn, keylen));
+			dbg("XXX: %s has key length of 0, adjusting to %d",
+			    encrypt->common.fqn, keylen);
 		}
 	}
 
@@ -170,9 +169,8 @@ bool kernel_alg_encrypt_key_size(const struct encrypt_desc *encrypt,
 	 * much.
 	 */
 	*key_size = keylen / BITS_PER_BYTE;
-	DBG(DBG_PARSING,
-	    DBG_log("encrypt %s keylen=%d transid=%d, key_size=%zu, encryptalg=%d",
-		    encrypt->common.fqn, keylen, transid, *key_size, sadb_ealg));
+	dbg("encrypt %s keylen=%d transid=%d, key_size=%zu, encryptalg=%d",
+	    encrypt->common.fqn, keylen, transid, *key_size, sadb_ealg);
 	return true;
 }
 

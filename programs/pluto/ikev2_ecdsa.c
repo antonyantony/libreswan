@@ -30,7 +30,6 @@
 
 #include "sysdep.h"
 #include "constants.h"
-#include "lswlog.h"
 
 #include "defs.h"
 #include "id.h"
@@ -54,123 +53,18 @@
 #include "ietf_constants.h"
 #include "asn1.h"
 #include "lswnss.h"
-#include "ikev2_sighash.h"
-
-bool ikev2_calculate_ecdsa_hash(struct state *st,
-				enum original_role role,
-				const struct crypt_mac *idhash,
-				pb_stream *a_pbs,
-				chunk_t *no_ppk_auth /* optional output */,
-				enum notify_payload_hash_algorithms hash_algo)
-{
-	const struct pubkey_type *type = &pubkey_type_ecdsa;
-	const struct connection *c = st->st_connection;
-
-	const struct private_key_stuff *pks = get_connection_private_key(c, type);
-	if (pks == NULL) {
-		libreswan_log("no %s private key for connection", type->name);
-		return false; /* failure: no key to use */
-	}
-
-	/* XXX: merge ikev2_calculate_{rsa,ecdsa}_hash() */
-	const struct ECDSA_private_key *k = &pks->u.ECDSA_private_key;
-
-	DBGF(DBG_CRYPT, "ikev2_calculate_ecdsa_hash get_ECDSA_private_key");
-	/* XXX: use struct hash_desc and a lookup? */
-	const struct hash_desc *hasher;
-	switch (hash_algo) {
-#ifdef USE_SHA2
-	case IKEv2_AUTH_HASH_SHA2_256:
-		hasher = &ike_alg_hash_sha2_256;
-		break;
-	case IKEv2_AUTH_HASH_SHA2_384:
-		hasher = &ike_alg_hash_sha2_384;
-		break;
-	case IKEv2_AUTH_HASH_SHA2_512:
-		hasher = &ike_alg_hash_sha2_512;
-		break;
-#endif
-	default:
-		libreswan_log("Unknown or unsupported hash algorithm %d for ECDSA operation", hash_algo);
-		return false;
-	}
-
-	/* hash the packet et.al. */
-	struct crypt_mac hash = v2_calculate_sighash(st, role, idhash,
-						     st->st_firstpacket_me,
-						     hasher);
-	if (DBGP(DBG_CRYPT)) {
-		DBG_dump_hunk("ECDSA hash", hash);
-	}
-
-	/*
-	 * Sign the hash.
-	 *
-	 * XXX: See https://tools.ietf.org/html/rfc4754#section-7 for
-	 * where 1056 is coming from.
-	 * It is the largest of the signature lengths amongst
-	 * ECDSA 256, 384, and 521.
-	 */
-	uint8_t sig_val[BYTES_FOR_BITS(1056)];
-	statetime_t sign_time = statetime_start(st);
-	size_t shr = sign_hash_ECDSA(k, hash.ptr, hash.len,
-				     sig_val, sizeof(sig_val));
-	statetime_stop(&sign_time, "%s() calling sign_hash_ECDSA()", __func__);
-
-	if (shr == 0) {
-		DBGF(DBG_CRYPT, "sign_hash_ECDSA failed");
-		return false;
-	}
-
-	if (no_ppk_auth != NULL) {
-		*no_ppk_auth = clone_bytes_as_chunk(sig_val, shr, "NO_PPK_AUTH chunk");
-		DBG(DBG_PRIVATE, DBG_dump_hunk("NO_PPK_AUTH payload", *no_ppk_auth));
-		return true;
-	}
-
-	SECItem der_signature;
-	SECItem raw_signature = {
-		.type = siBuffer,
-		.data = sig_val,
-		.len = shr,
-	};
-	if (DSAU_EncodeDerSigWithLen(&der_signature, &raw_signature,
-				     raw_signature.len) != SECSuccess) {
-		LSWLOG(buf) {
-			lswlogs(buf, "NSS: constructing DER encoded ECDSA signature using DSAU_EncodeDerSigWithLen() failed:");
-			lswlog_nss_error(buf);
-		}
-		return false;
-	}
-
-	LSWDBGP(DBG_CONTROL, buf) {
-		lswlogf(buf, "%d-byte DER encoded ECDSA signature: ", der_signature.len);
-		lswlog_nss_secitem(buf, &der_signature);
-	}
-
-	if (!out_raw(der_signature.data, der_signature.len, a_pbs, "ecdsa signature")) {
-
-		SECITEM_FreeItem(&der_signature, PR_FALSE);
-		return false;
-	}
-
-	SECITEM_FreeItem(&der_signature, PR_FALSE);
-
-	return true;
-}
+#include "ikev2_auth.h"
 
 static try_signature_fn try_ECDSA_signature_v2; /* type assert */
 static err_t try_ECDSA_signature_v2(const struct crypt_mac *hash,
 				    const pb_stream *sig_pbs, struct pubkey *kr,
 				    struct state *st,
-				    enum notify_payload_hash_algorithms hash_algo UNUSED)
+				    const struct hash_desc *hash_algo_unused UNUSED)
 {
 	PRArenaPool *arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
 	if (arena == NULL) {
-		LSWLOG(buf) {
-			lswlogs(buf, "NSS: allocating ECDSA arena using PORT_NewArena() failed: ");
-			lswlog_nss_error(buf);
-		}
+		log_nss_error(RC_LOG, st->st_logger,
+			      "allocating ECDSA arena using PORT_NewArena() failed");
 		return "10" "NSS error: Not enough memory to create arena";
 	}
 
@@ -184,10 +78,8 @@ static err_t try_ECDSA_signature_v2(const struct crypt_mac *hash,
 		PORT_ArenaZAlloc(arena, sizeof(SECKEYPublicKey));
 	if (publicKey == NULL) {
 		PORT_FreeArena(arena, PR_FALSE);
-		LSWLOG(buf) {
-			lswlogs(buf, "NSS: allocating ECDSA public key using PORT_ArenaZAlloc() failed:");
-			lswlog_nss_error(buf);
-		}
+		log_nss_error(RC_LOG, st->st_logger,
+			      "allocating ECDSA public key using PORT_ArenaZAlloc() failed");
 		return "11" "NSS error: Not enough memory to create publicKey";
 	}
 	publicKey->arena = arena;
@@ -198,10 +90,8 @@ static err_t try_ECDSA_signature_v2(const struct crypt_mac *hash,
 	/* copy k's public key value into the arena / publicKey */
 	SECItem k_pub = same_chunk_as_secitem(k->pub, siBuffer);
 	if (SECITEM_CopyItem(arena, &publicKey->u.ec.publicValue, &k_pub) != SECSuccess) {
-		LSWLOG(buf) {
-			lswlogs(buf, "NSS: constructing ECDSA public value using SECITEM_CopyItem() failed:");
-			lswlog_nss_error(buf);
-		}
+		log_nss_error(RC_LOG, st->st_logger,
+			      "constructing ECDSA public value using SECITEM_CopyItem() failed");
 		PORT_FreeArena(arena, PR_FALSE);
 		return "10" "NSS error: copy failed";
 	}
@@ -211,10 +101,8 @@ static err_t try_ECDSA_signature_v2(const struct crypt_mac *hash,
 	if (SECITEM_CopyItem(arena,
 			     &publicKey->u.ec.DEREncodedParams,
 			     &k_ecParams) != SECSuccess) {
-		LSWLOG(buf) {
-			lswlogs(buf, "NSS: construction of ecParams using SECITEM_CopyItem() failed:");
-			lswlog_nss_error(buf);
-		}
+		log_nss_error(RC_LOG, st->st_logger,
+			      "construction of ecParams using SECITEM_CopyItem() failed");
 		PORT_FreeArena(arena, PR_FALSE);
 		return "1" "NSS error: Not able to copy modulus or exponent or both while forming SECKEYPublicKey structure";
 	}
@@ -228,25 +116,23 @@ static err_t try_ECDSA_signature_v2(const struct crypt_mac *hash,
 		.data = sig_pbs->cur,
 		.len = pbs_left(sig_pbs),
 	};
-	LSWDBGP(DBG_CONTROL, buf) {
-		lswlogf(buf, "%d-byte DER encoded ECDSA signature: ",
-			der_signature.len);
-		lswlog_nss_secitem(buf, &der_signature);
+	LSWDBGP(DBG_BASE, buf) {
+		jam(buf, "%d-byte DER encoded ECDSA signature: ",
+		    der_signature.len);
+		jam_nss_secitem(buf, &der_signature);
 	}
 	SECItem *raw_signature = DSAU_DecodeDerSigToLen(&der_signature,
 							SECKEY_SignatureLen(publicKey));
 	if (raw_signature == NULL) {
-		LSWLOG(buf) {
-			lswlogs(buf, "NSS: unpacking DER encoded ECDSA signature using DSAU_DecodeDerSigToLen() failed:");
-			lswlog_nss_error(buf);
-		}
+		log_nss_error(RC_LOG, st->st_logger,
+			      "unpacking DER encoded ECDSA signature using DSAU_DecodeDerSigToLen() failed:");
 		PORT_FreeArena(arena, PR_FALSE);
 		return "1" "Decode failed";
 	}
-	LSWDBGP(DBG_CONTROL, buf) {
-		lswlogf(buf, "%d-byte raw ESCSA signature: ",
-			raw_signature->len);
-		lswlog_nss_secitem(buf, raw_signature);
+	LSWDBGP(DBG_BASE, buf) {
+		jam(buf, "%d-byte raw ESCSA signature: ",
+		    raw_signature->len);
+		jam_nss_secitem(buf, raw_signature);
 	}
 
 	/*
@@ -262,11 +148,9 @@ static err_t try_ECDSA_signature_v2(const struct crypt_mac *hash,
 	};
 
 	if (PK11_Verify(publicKey, raw_signature, &hash_item,
-			lsw_return_nss_password_file_info()) != SECSuccess) {
-		LSWLOG(buf) {
-			lswlogs(buf, "NSS: verifying AUTH hash using PK11_Verify() failed:");
-			lswlog_nss_error(buf);
-		}
+			lsw_nss_get_password_context(st->st_logger)) != SECSuccess) {
+		log_nss_error(RC_LOG, st->st_logger,
+			      "verifying AUTH hash using PK11_Verify() failed:");
 		PORT_FreeArena(arena, PR_FALSE);
 		SECITEM_FreeItem(raw_signature, PR_TRUE);
 		return "1" "NSS error: Not able to verify";
@@ -281,34 +165,17 @@ static err_t try_ECDSA_signature_v2(const struct crypt_mac *hash,
 	return NULL;
 }
 
-stf_status ikev2_verify_ecdsa_hash(struct state *st,
-				   enum original_role role,
+stf_status ikev2_verify_ecdsa_hash(struct ike_sa *ike,
 				   const struct crypt_mac *idhash,
 				   pb_stream *sig_pbs,
-				   enum notify_payload_hash_algorithms hash_algo)
+				   const struct hash_desc *hash_algo)
 {
-	const struct hash_desc *hasher;
-	switch (hash_algo) {
-	/* We don't support ecdsa-sha1 */
-#ifdef USE_SHA2
-	case IKEv2_AUTH_HASH_SHA2_256:
-		hasher = &ike_alg_hash_sha2_256;
-		break;
-	case IKEv2_AUTH_HASH_SHA2_384:
-		hasher = &ike_alg_hash_sha2_384;
-		break;
-	case IKEv2_AUTH_HASH_SHA2_512:
-		hasher = &ike_alg_hash_sha2_512;
-		break;
-#endif
-	default:
+	if (hash_algo->common.ikev2_alg_id < 0) {
 		return STF_FATAL;
 	}
 
-	enum original_role invertrole = (role == ORIGINAL_INITIATOR ? ORIGINAL_RESPONDER : ORIGINAL_INITIATOR);
-	struct crypt_mac calc_hash = v2_calculate_sighash(st, invertrole, idhash,
-							  st->st_firstpacket_him,
-							  hasher);
-	return check_signature_gen(st, &calc_hash, sig_pbs, hash_algo,
+	struct crypt_mac calc_hash = v2_calculate_sighash(ike, idhash, hash_algo,
+							  REMOTE_PERSPECTIVE);
+	return check_signature_gen(&ike->sa, &calc_hash, sig_pbs, hash_algo,
 				   &pubkey_type_ecdsa, try_ECDSA_signature_v2);
 }

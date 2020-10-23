@@ -23,7 +23,7 @@
 
 #include <seccomp.h>
 
-#include "lswlog.h"		/* for libreswan_exit() et.al. refered to by macro */
+#include "lswlog.h"		/* for libreswan_exit() et.al. referred to by macro */
 
 /*
  * Add system call NAME to seccomp.
@@ -37,19 +37,20 @@
  * hasn't been loaded so can be dropped on the floor.
  */
 
-#define LSW_SECCOMP_ADD(CTX, NAME) {					\
+#define LSW_SECCOMP_ADD(NAME) {						\
 		/* returns 0 or -ve errno */				\
 		int rc = seccomp_rule_add(ctx, SCMP_ACT_ALLOW,		\
 					  SCMP_SYS(NAME), 0);		\
 		if (rc != 0) {						\
 			if (rc < 0) {					\
-				LOG_ERRNO(-rc, "seccomp_rule_add() failed for system call '%s'", \
+				log_errno(logger, -rc,			\
+					  "seccomp_rule_add() failed for system call '%s'", \
 					  #NAME);			\
 			} else {					\
-				libreswan_log("seccomp_rule_add() failed for system call '%s' with unexpected error %d", \
-					      #NAME, rc);		\
+				log_message(RC_LOG, logger, "seccomp_rule_add() failed for system call '%s' with unexpected error %d", \
+					    #NAME, rc);			\
 			}						\
-			seccomp_release(CTX); /* XXX: needed? */	\
+			seccomp_release(ctx); /* XXX: needed? */	\
 			libreswan_exit(LSW_SECCOMP_EXIT_FAIL);		\
 		}							\
 	}

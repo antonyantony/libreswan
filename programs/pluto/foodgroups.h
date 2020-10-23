@@ -12,10 +12,19 @@
  * for more details.
  */
 
+#ifndef FOODGROUPS_H
+#define FOODGROUPS_H
+
 struct connection;      /* forward declaration */
+struct fd;
+
 extern void add_group(struct connection *c);
-extern void route_group(struct connection *c);
+extern void route_group(struct fd *whackfd, struct connection *c);
 extern void unroute_group(struct connection *c);
 extern void delete_group(const struct connection *c);
 
-extern void load_groups(void);
+extern void load_groups(struct fd *whackfd);
+
+void free_foodgroups(void);
+
+#endif

@@ -33,12 +33,15 @@
 
 #include "send.h"
 
-#include "lswlog.h"
+#include "log.h"
 #include "state.h"
 #include "server.h"
 #include "demux.h"
 #include "pluto_stats.h"
 #include "ip_endpoint.h"
+#include "ip_sockaddr.h"
+#include "ip_protocol.h"
+#include "iface.h"
 
 /* send_ike_msg logic is broken into layers.
  * The rest of the system thinks it is simple.
@@ -107,8 +110,14 @@ bool send_chunks(const char *where, bool just_a_keepalive,
 		return FALSE;
 	}
 
+	/*
+	 * If we are doing NATT, so that the other end doesn't mistake
+	 * this message for ESP, each message needs a non-ESP_Marker
+	 * prefix.  natt_bonus is the size of the addition (0 if not
+	 * needed).
+	 */
 	natt_bonus = !just_a_keepalive &&
-				  interface->ike_float ?
+				  interface->esp_encapsulation_enabled ?
 				  NON_ESP_MARKER_SIZE : 0;
 
 	const uint8_t *ptr;
@@ -138,30 +147,29 @@ bool send_chunks(const char *where, bool just_a_keepalive,
 	}
 
 	if (DBGP(DBG_BASE)) {
-		endpoint_buf b;
-		endpoint_buf ib;
-		DBG_log("sending %zu bytes for %s through %s from %s to %s (using #%lu)",
-			len,
-			where,
+		endpoint_buf lb;
+		endpoint_buf rb;
+		DBG_log("sending %zu bytes for %s through %s from %s to %s using %s (for #%lu)",
+			len, where,
 			interface->ip_dev->id_rname,
-			str_endpoint(&interface->local_endpoint, &ib),
-			str_endpoint(&remote_endpoint, &b),
+			str_endpoint(&interface->local_endpoint, &lb),
+			str_endpoint(&remote_endpoint, &rb),
+			interface->protocol->name,
 			serialno);
 		DBG_dump(NULL, ptr, len);
 	}
 
-	check_outgoing_msg_errqueue(interface, "sending a packet");
-
-	ip_sockaddr remote_sa;
-	size_t remote_sa_size = endpoint_to_sockaddr(&remote_endpoint, &remote_sa);
-	wlen = sendto(interface->fd, ptr, len, 0, &remote_sa.sa, remote_sa_size);
+	wlen = interface->io->write_packet(interface, ptr, len, &remote_endpoint);
 
 	if (wlen != (ssize_t)len) {
 		if (!just_a_keepalive) {
-			endpoint_buf b;
-			LOG_ERRNO(errno, "sendto on %s to %s failed in %s",
+			endpoint_buf lb;
+			endpoint_buf rb;
+			LOG_ERRNO(errno, "send on %s from %s to %s using %s failed in %s",
 				  interface->ip_dev->id_rname,
-				  str_sensitive_endpoint(&remote_endpoint, &b),
+				  str_endpoint(&interface->local_endpoint, &lb),
+				  str_sensitive_endpoint(&remote_endpoint, &rb),
+				  interface->protocol->name,
 				  where);
 		}
 		return FALSE;
@@ -170,7 +178,7 @@ bool send_chunks(const char *where, bool just_a_keepalive,
 	pstats_ike_out_bytes += len;
 
 	/* Send a duplicate packet when this impair is enabled - used for testing */
-	if (IMPAIR(JACOB_TWO_TWO)) {
+	if (impair.jacob_two_two) {
 		/* sleep for half a second, and second another packet */
 		usleep(500000);
 		endpoint_buf b;
@@ -182,9 +190,8 @@ bool send_chunks(const char *where, bool just_a_keepalive,
 			str_endpoint(&interface->local_endpoint, &ib),
 			str_endpoint(&remote_endpoint, &b));
 
-		ip_sockaddr remote_sa;
-		size_t remote_sa_size = endpoint_to_sockaddr(&remote_endpoint, &remote_sa);
-		wlen = sendto(interface->fd, ptr, len, 0, &remote_sa.sa, remote_sa_size);
+		ip_sockaddr remote_sa = sockaddr_from_endpoint(&remote_endpoint);
+		wlen = sendto(interface->fd, ptr, len, 0, &remote_sa.sa.sa, remote_sa.len);
 		if (wlen != (ssize_t)len) {
 			if (!just_a_keepalive) {
 				LOG_ERRNO(errno,
@@ -225,15 +232,6 @@ bool send_ike_msg_without_recording(struct state *st, pb_stream *pbs,
 				    const char *where)
 {
 	return send_chunk_using_state(st, where, same_out_pbs_as_chunk(pbs));
-}
-
-void record_outbound_ike_msg(struct state *st, pb_stream *pbs, const char *what)
-{
-	passert(pbs_offset(pbs) != 0);
-	release_fragments(st);
-	freeanychunk(st->st_tpacket);
-	st->st_tpacket = clone_out_pbs_as_chunk(pbs, what);
-	st->st_last_liveness = mononow();
 }
 
 /*

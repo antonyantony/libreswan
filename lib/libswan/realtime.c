@@ -16,6 +16,7 @@
  */
 
 #include <time.h>	/* for clock_*() + clockid_t */
+#include <errno.h>
 
 #include "constants.h"	/* for memeq() which is clearly not a constant */
 #include "lswlog.h"	/* for libreswan_exit_log_errno() */
@@ -31,9 +32,8 @@ realtime_t realtime(time_t time)
 
 realtime_t realtimesum(realtime_t t, deltatime_t d)
 {
-	struct timeval dv = deltatimeval(d);
 	realtime_t s;
-	timeradd(&t.rt, &dv, &s.rt);
+	timeradd(&t.rt, &d.dt, &s.rt);
 	return s;
 }
 
@@ -61,9 +61,16 @@ realtime_t realnow(void)
 {
 	struct timespec ts;
 	int e = clock_gettime(realtime_clockid(), &ts);
-	if (e != 0) {
-		libreswan_exit_log_errno(e, "clock_gettime(%d,...) call in realnow() failed",
-					 realtime_clockid());
+	if (e < 0) {
+		/*
+		 * This code assumes clock_gettime() always succeeds -
+		 * if it were expected to fail then there'd either be
+		 * a logger and/or a way to return the failure to the
+		 * caller.
+		 */
+		int err = errno;
+		PASSERT_FAIL("clock_gettime(%d,...) call in realnow() failed. "PRI_ERRNO,
+			     realtime_clockid(), pri_errno(err));
 	}
 	realtime_t t = {
 		.rt = {
@@ -106,7 +113,7 @@ struct realtm utc_realtime(realtime_t t)
 /*
  *  Display a date either in local or UTC time
  */
-size_t jam_realtime(jambuf_t *buf, const realtime_t rtm, bool utc)
+size_t jam_realtime(struct jambuf *buf, const realtime_t rtm, bool utc)
 {
 	static const char *months[] = {
 		"Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -127,7 +134,7 @@ size_t jam_realtime(jambuf_t *buf, const realtime_t rtm, bool utc)
 
 const char *str_realtime(realtime_t r, bool utc, realtime_buf *buf)
 {
-	jambuf_t jambuf = ARRAY_AS_JAMBUF(buf->buf);
+	struct jambuf jambuf = ARRAY_AS_JAMBUF(buf->buf);
 	jam_realtime(&jambuf, r, utc);
 	return buf->buf;
 }

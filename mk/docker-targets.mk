@@ -21,7 +21,7 @@ W4 = $(or $(word 4, $(subst -, ,$1)), $(value 2))
 
 FIRST_TARGET ?=$@	# keep track of original target
 DISTRO ?= fedora	# default distro
-DISTRO_REL ?= 30 	# default release
+DISTRO_REL ?= 32 	# default release
 
 D_USE_UNBOUND_EVENT_H_COPY ?= true
 D_USE_DNSSEC ?= false
@@ -30,6 +30,8 @@ D_USE_GLIBC_KERN_FLIP_HEADERS ?= true
 D_USE_NSS_AVA_COPY ?= true
 
 DOCKERFILE ?= $(D)/dockerfile
+
+NOGPGPCHECK ?= false
 
 SUDO_CMD ?= sudo
 PKG_CMD = $(shell test -f /usr/bin/dnf && echo /usr/bin/dnf || (test -f /usr/bin/yum && echo /usr/bin/yum || echo "no yum or dnf found" && exit 1))
@@ -82,10 +84,13 @@ ifeq ($(DISTRO), centos)
 		LOCAL_MAKE_FLAGS += USE_DNSSEC=$(D_USE_DNSSEC)
 		LOCAL_MAKE_FLAGS += USE_NSS_IPSEC_PROFILE=$(D_USE_NSS_IPSEC_PROFILE)
 		LOCAL_MAKE_FLAGS += USE_XFRM_INTERFACE_IFLA_HEADER=true
+		LOCAL_MAKE_FLAGS += USE_NSS_KDF=false
+		LOCAL_MAKE_FLAGS += WERROR_CFLAGS='-Werror -Wfatal-errors -Wno-missing-field-initializers'
 	endif
 
 	ifeq ($(DISTRO_REL), 7)
 		LOCAL_MAKE_FLAGS += USE_XFRM_INTERFACE_IFLA_HEADER=true
+		LOCAL_MAKE_FLAGS += USE_NSS_KDF=false
 	endif
 
 	ifeq ($(DISTRO_REL), 8)
@@ -97,18 +102,28 @@ endif
 
 ifeq ($(DISTRO), fedora)
 	ifeq ($(DISTRO_REL), rawhide)
-		TWEAKS += rawhide-remove-dnf-update
+		# TWEAKS += rawhide-remove-dnf-update
+		TWEAKS += dnf-nogpgcheck
+		LOCAL_MAKE_FLAGS += USE_FIPSCHECK=false
 	endif
 
 	MAKE_BASE = base
 	MAKE_INSTLL_BASE = install-base
-	LOCAL_MAKE_FLAGS =
+endif
+
+ifeq ($(NOGPGPCHECK), true)
+	TWEAKS += dnf-nogpgcheck
 endif
 
 .PHONY: rawhide-remove-dnf-update
 rawhide-remove-dnf-update:
 	# on rawhide RUN dnf -y update could be a bad idea
 	$(shell sed -i '/RUN dnf -y update/d' testing/docker/dockerfile)
+
+.PHONY: dnf-nogpgcheck
+dnf-nogpgcheck:
+	$(shell sed -i 's/dnf install -y /dnf install --nogpgcheck -y /' testing/docker/dockerfile)
+	$(shell sed -i 's/dnf update -y/dnf update -y --nogpgcheck /' testing/docker/dockerfile)
 
 .PHONY: dockerfile-remove-libreswan-spec
 dockerfile-remove-libreswan-spec:
@@ -199,8 +214,9 @@ travis-ubuntu-xenial: ubuntu-xenial-packages
 .PHONY: docker-build
 docker-build: dockerfile
 	# --volume is only in podman
-	# $(DOCKER_CMD) build -t $(DI_T) --volume /home/build/libreswan:/home/build/libreswan -f $(DOCKERFILE) .
-	$(DOCKER_CMD) build -t $(DI_T) -f $(DOCKERFILE) .
+	$(DOCKER_CMD) build -t $(DI_T) --volume $(PWD):/home/build/libreswan -f $(DOCKERFILE) .
+	# for docker
+	# $(DOCKER_CMD) build -t $(DI_T) -f $(DOCKERFILE) .
 
 .PHONY: docker-ssh-image
 docker-ssh-image: DOCKERFILE_SSH = $(D)/Dockerfile-swan-ssh
@@ -287,5 +303,11 @@ nsrun: nsrunclean
 .PHONY: nsinstall
 nsinstall:
 	$(MAKE) clean
+	$(MAKE) INITSYSTEM=docker DOCKER_PLUTONOFORK= base
+	sudo $(MAKE) INITSYSTEM=docker DOCKER_PLUTONOFORK= install-base
+
+
+.PHONY: nsreinstall
+nsreinstall:
 	$(MAKE) INITSYSTEM=docker DOCKER_PLUTONOFORK= base
 	sudo $(MAKE) INITSYSTEM=docker DOCKER_PLUTONOFORK= install-base

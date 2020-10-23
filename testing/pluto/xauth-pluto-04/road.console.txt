@@ -6,32 +6,32 @@ road #
  /testing/pluto/bin/wait-until-pluto-started
 road #
  ipsec auto --add xauth-road-eastnet-psk
-002 added connection description "xauth-road-eastnet-psk"
+002 added IKEv1 connection "xauth-road-eastnet-psk"
 road #
  echo "initdone"
 initdone
 road #
  ipsec whack --xauthname 'use2' --xauthpass 'use1pass' --name xauth-road-eastnet-psk --initiate
-003 "xauth-road-eastnet-psk": IKEv1 Aggressive Mode with PSK is vulnerable to dictionary attacks and is cracked on large scale by TLA's
+003 "xauth-road-eastnet-psk" #1: IKEv1 Aggressive Mode with PSK is vulnerable to dictionary attacks and is cracked on large scale by TLA's
 003 "xauth-road-eastnet-psk" #1: multiple DH groups in aggressive mode can cause interop failure
 003 "xauth-road-eastnet-psk" #1: Deleting previous proposal in the hopes of selecting DH 2 or DH 5
-002 "xauth-road-eastnet-psk" #1: initiating Aggressive Mode
+002 "xauth-road-eastnet-psk" #1: initiating IKEv1 Aggressive Mode connection
 003 "xauth-road-eastnet-psk" #1: multiple DH groups in aggressive mode can cause interop failure
 003 "xauth-road-eastnet-psk" #1: Deleting previous proposal in the hopes of selecting DH 2 or DH 5
-1v1 "xauth-road-eastnet-psk" #1: STATE_AGGR_I1: sent AI1, expecting AR1
+1v1 "xauth-road-eastnet-psk" #1: sent Aggressive Mode request
 002 "xauth-road-eastnet-psk" #1: Peer ID is ID_FQDN: '@east'
 002 "xauth-road-eastnet-psk" #1: Peer ID is ID_FQDN: '@east'
-004 "xauth-road-eastnet-psk" #1: STATE_AGGR_I2: sent AI2, ISAKMP SA established {auth=PRESHARED_KEY cipher=3DES_CBC_192 integ=HMAC_SHA1 group=MODP1536}
+004 "xauth-road-eastnet-psk" #1: IKE SA established {auth=PRESHARED_KEY cipher=3DES_CBC_192 integ=HMAC_SHA1 group=MODP1536}
 041 "xauth-road-eastnet-psk" #1: xauth-road-eastnet-psk prompt for Username:
 040 "xauth-road-eastnet-psk" #1: xauth-road-eastnet-psk prompt for Password:
 002 "xauth-road-eastnet-psk" #1: XAUTH: Answering XAUTH challenge with user='use2'
-004 "xauth-road-eastnet-psk" #1: STATE_XAUTH_I1: XAUTH client - possibly awaiting CFG_set {auth=PRESHARED_KEY cipher=3DES_CBC_192 integ=HMAC_SHA1 group=MODP1536}
+004 "xauth-road-eastnet-psk" #1: XAUTH client - possibly awaiting CFG_set {auth=PRESHARED_KEY cipher=3DES_CBC_192 integ=HMAC_SHA1 group=MODP1536}
 002 "xauth-road-eastnet-psk" #1: XAUTH: Successfully Authenticated
 002 "xauth-road-eastnet-psk" #1: XAUTH completed; ModeCFG skipped as per configuration
-004 "xauth-road-eastnet-psk" #1: STATE_AGGR_I2: sent AI2, ISAKMP SA established {auth=PRESHARED_KEY cipher=3DES_CBC_192 integ=HMAC_SHA1 group=MODP1536}
-002 "xauth-road-eastnet-psk" #2: initiating Quick Mode PSK+ENCRYPT+TUNNEL+PFS+UP+XAUTH+AGGRESSIVE+IKEV1_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO
-1v1 "xauth-road-eastnet-psk" #2: STATE_QUICK_I1: sent QI1, expecting QR1
-004 "xauth-road-eastnet-psk" #2: STATE_QUICK_I2: sent QI2, IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive username=use2}
+004 "xauth-road-eastnet-psk" #1: IKE SA established {auth=PRESHARED_KEY cipher=3DES_CBC_192 integ=HMAC_SHA1 group=MODP1536}
+002 "xauth-road-eastnet-psk" #2: initiating Quick Mode PSK+ENCRYPT+TUNNEL+PFS+UP+XAUTH+AGGRESSIVE+IKEV1_ALLOW+IKE_FRAG_ALLOW+ESN_NO
+1v1 "xauth-road-eastnet-psk" #2: sent Quick Mode request
+004 "xauth-road-eastnet-psk" #2: IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_CBC_128-HMAC_SHA1_96 NATOA=none NATD=none DPD=passive username=use2}
 road #
  sleep 5
 road #
@@ -51,8 +51,8 @@ road #
  # note there should NOT be any incomplete IKE SA attempting to do ModeCFG or EVENT_RETRANSMIT
 road #
  ipsec status |grep STATE
-000 #1: "xauth-road-eastnet-psk":500 STATE_AGGR_I2 (sent AI2, ISAKMP SA established); EVENT_SA_REPLACE in XXs; newest ISAKMP; lastdpd=-1s(seq in:0 out:0); idle;
-000 #2: "xauth-road-eastnet-psk":500 STATE_QUICK_I2 (sent QI2, IPsec SA established); EVENT_SA_REPLACE in XXs; newest IPSEC; eroute owner; isakmp#1; idle;
+000 #1: "xauth-road-eastnet-psk":500 STATE_AGGR_I2 (IKE SA established); EVENT_SA_REPLACE in XXs; newest ISAKMP; lastdpd=-1s(seq in:0 out:0); idle;
+000 #2: "xauth-road-eastnet-psk":500 STATE_QUICK_I2 (IPsec SA established); EVENT_SA_REPLACE in XXs; newest IPSEC; eroute owner; isakmp#1; idle;
 road #
  echo done
 done

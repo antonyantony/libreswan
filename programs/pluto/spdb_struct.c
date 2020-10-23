@@ -20,11 +20,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include "libreswan/pfkeyv2.h"
-
 #include "sysdep.h"
 #include "constants.h"
-#include "lswlog.h"
 
 #include "defs.h"
 #include "id.h"
@@ -80,29 +77,31 @@ static struct db_sa oakley_empty = { AD_SAp(oakley_props_empty) };
 
 static struct db_sa *oakley_alg_mergedb(struct ike_proposals ike_proposals,
 					enum ikev1_auth_method auth_method,
-					bool single_dh);
+					bool single_dh, struct logger *logger);
 
-static struct ike_proposals ikev1_default_ike_info(void)
+static struct ike_proposals v1_default_ike_proposals(struct logger *logger)
 {
-	static const struct proposal_policy policy = {
+	const struct proposal_policy policy = {
 		.version = IKEv1,
 		.check_pfs_vs_dh = false,
 		.alg_is_ok = ike_alg_is_ike,
-		.warning = libreswan_log,
+		.logger = logger,
+		.logger_rc_flags = ALL_STREAMS|RC_LOG,
 	};
 	struct proposal_parser *parser = ike_proposal_parser(&policy);
 	struct ike_proposals defaults = { .p = proposals_from_str(parser, NULL), };
 	if (defaults.p == NULL) {
-		PEXPECT_LOG("Invalid IKEv1 default algorithms: %s",
-			    parser->error);
+		pexpect_fail(logger, HERE,
+			     "Invalid IKEv1 default algorithms: %s",
+			     str_diag(parser->diag));
 	}
 	free_proposal_parser(&parser);
 	return defaults;
 }
 
-struct db_sa *oakley_alg_makedb(const struct ike_proposals ike_proposals,
-				enum ikev1_auth_method auth_method,
-				bool single_dh)
+struct db_sa *v1_ike_alg_make_sadb(const struct ike_proposals ike_proposals,
+				   enum ikev1_auth_method auth_method,
+				   bool single_dh, struct logger *logger)
 {
 	/*
 	 * start by copying the proposal that would have been picked by
@@ -110,22 +109,22 @@ struct db_sa *oakley_alg_makedb(const struct ike_proposals ike_proposals,
 	 */
 
 	if (ike_proposals.p == NULL) {
-		DBG(DBG_CONTROL, DBG_log(
-			    "no specific IKE algorithms specified - using defaults"));
-		struct ike_proposals default_info = ikev1_default_ike_info();
+		dbg("no specific IKE algorithms specified - using defaults");
+		struct ike_proposals default_info = v1_default_ike_proposals(logger);
 		struct db_sa *new_db = oakley_alg_mergedb(default_info,
 							  auth_method,
-							  single_dh);
+							  single_dh,
+							  logger);
 		proposals_delref(&default_info.p);
 		return new_db;
 	} else {
-		return oakley_alg_mergedb(ike_proposals, auth_method, single_dh);
+		return oakley_alg_mergedb(ike_proposals, auth_method, single_dh, logger);
 	}
 }
 
 struct db_sa *oakley_alg_mergedb(struct ike_proposals ike_proposals,
 				 enum ikev1_auth_method auth_method,
-				 bool single_dh)
+				 bool single_dh, struct logger *logger)
 {
 	passert(ike_proposals.p != NULL);
 
@@ -158,18 +157,18 @@ struct db_sa *oakley_alg_mergedb(struct ike_proposals ike_proposals,
 		unsigned modp = algs.dh->group;
 		unsigned eklen = algs.enckeylen;
 
-		DBG(DBG_CONTROL,
-		    DBG_log("oakley_alg_makedb() processing ealg=%s=%u halg=%s=%u modp=%s=%u eklen=%u",
-			    algs.encrypt->common.name, ealg,
-			    algs.prf->common.name, halg,
-			    algs.dh->common.name, modp,
-			    eklen));
+		dbg("oakley_alg_makedb() processing ealg=%s=%u halg=%s=%u modp=%s=%u eklen=%u",
+		    algs.encrypt->common.fqn, ealg,
+		    algs.prf->common.fqn, halg,
+		    algs.dh->common.fqn, modp,
+		    eklen);
 
 		const struct encrypt_desc *enc_desc = algs.encrypt;
 		if (eklen != 0 && !encrypt_has_key_bit_length(enc_desc, eklen)) {
-			PEXPECT_LOG("IKEv1 proposal with ENCRYPT%s (specified) keylen:%d, not valid, should have been dropped",
-				    enc_desc->common.name,
-				    eklen);
+			pexpect_fail(logger, HERE,
+				     "IKEv1 proposal with ENCRYPT%s (specified) keylen:%d, not valid, should have been dropped",
+				     enc_desc->common.fqn,
+				     eklen);
 			continue;
 		}
 
@@ -270,7 +269,7 @@ struct db_sa *oakley_alg_mergedb(struct ike_proposals ike_proposals,
 						 algs.encrypt->common.ikev1_oakley_id),
 				       enum_name(&oakley_hash_names,
 						 algs.prf->common.ikev1_oakley_id),
-				       algs.dh->common.name,
+				       algs.dh->common.fqn,
 				       algs.enckeylen);
 				free_sa(&emp_sp);
 			} else {
@@ -380,7 +379,6 @@ struct db_sa *oakley_alg_mergedb(struct ike_proposals ike_proposals,
 	if (gsp != NULL)
 		gsp->parentSA = TRUE;
 
-	DBG(DBG_CONTROL,
-	    DBG_log("oakley_alg_makedb() returning %p", gsp));
+	dbg("oakley_alg_makedb() returning %p", gsp);
 	return gsp;
 }

@@ -9,7 +9,7 @@
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013,2015 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 Tuomo Soini <tis@foobar.fi>
- * Copyright (C) 2017-2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2017-2020 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -31,9 +31,7 @@
 #include <syslog.h>
 
 #include "defs.h"
-#include "lswlog.h"
 #include "log.h"
-#include "peerlog.h"
 #include "state_db.h"
 #include "connections.h"
 #include "state.h"
@@ -44,10 +42,25 @@
 #include "demux.h"	/* for struct msg_digest */
 #include "pending.h"
 
+static void log_raw(int severity, const char *prefix, struct jambuf *buf);
+
+struct logger failsafe_logger = {
+	.where = { .basename = "<global>", .func = "<global>", },
+	.object = NULL,
+	.object_vec = &logger_global_vec,
+};
+
+const struct log_param default_log_param = {
+	.log_with_timestamp = true,	/* but testsuite requires no timestamps */
+};
+
+static struct log_param log_param = {
+	.log_with_timestamp = false,	/* initial logger to stderr requires no timestamp */
+};
+
 bool
 	log_to_stderr = TRUE,		/* should log go to stderr? */
 	log_to_syslog = TRUE,		/* should log go to syslog? */
-	log_with_timestamp = TRUE,	/* testsuite requires no timestamps */
 	log_append = TRUE,
 	log_to_audit = FALSE;
 
@@ -67,23 +80,18 @@ struct fd *whack_log_fd = NULL;      /* only set during whack_handle() */
 /*
  * Context for logging.
  *
- * CUR_FROM, CUR_CONNECTION and CUR_STATE work something like a stack.
- * lswlog_log_prefix() will use the first of CUR_STATE, CUR_CONNECTION
- * and CUR_FROM when looking for the context to use with a prefix.
- * Operations then "push" and "pop" (or clear all) contexts.
+ * CUR_CONNECTION and CUR_STATE work something like a stack.
+ * cur_logger() will use the first of CUR_STATE or CUR_CONNECTION when
+ * looking for the context to use with a prefix.  Operations then
+ * "push" and "pop" (or clear all) contexts.
  *
  * For instance, setting CUR_STATE will hide CUR_CONNECTION, and
  * resetting CUR_STATE will re-expose CUR_CONNECTION.
- *
- * Surely it would be easier to explicitly specify the context with
- * something like LSWLOG_RC_STATE()?
  *
  * Global variables: must be carefully adjusted at transaction
  * boundaries!
  */
 static struct state *cur_state = NULL;                 /* current state, for diagnostics */
-static struct connection *cur_connection = NULL;       /* current connection, for diagnostics */
-static ip_address cur_from;				/* source of current current message */
 
 /*
  * if any debugging is on, make sure that we log the connection we are
@@ -126,7 +134,7 @@ static void log_processing(enum processing processing, bool current,
 			jam_connection(buf, c);
 		}
 		if (from != NULL) {
-			lswlogf(buf, " from ");
+			jam(buf, " from ");
 			jam_endpoint(buf, from);
 		}
 		if (!current) {
@@ -158,15 +166,6 @@ void log_reset_globals(where_t where)
 		log_processing(RESET, true, cur_state, NULL, NULL, where);
 		cur_state = NULL;
 	}
-	if (cur_connection != NULL) {
-		log_processing(RESET, true, NULL, cur_connection, NULL, where);
-		cur_connection = NULL;
-	}
-	if (endpoint_type(&cur_from) != NULL) {
-		/* peer's IP address */
-		log_processing(RESET, true, NULL, NULL, &cur_from, where);
-		zero(&cur_from);
-	}
 }
 
 void log_pexpect_reset_globals(where_t where)
@@ -176,69 +175,6 @@ void log_pexpect_reset_globals(where_t where)
 			    cur_state->st_serialno);
 		cur_state = NULL;
 	}
-	if (cur_connection != NULL) {
-		log_pexpect(where, "processing: unexpected cur_connection %s should be NULL",
-			    cur_connection->name);
-		cur_connection = NULL;
-	}
-	if (endpoint_type(&cur_from) != NULL) {
-		endpoint_buf buf;
-		log_pexpect(where, "processing: unexpected cur_from %s should be NULL",
-			    str_sensitive_endpoint(&cur_from, &buf));
-		zero(&cur_from);
-	}
-}
-
-struct connection *log_push_connection(struct connection *new_connection,
-				       where_t where)
-{
-	bool current = (cur_state == NULL); /* not hidden by state? */
-	struct connection *old_connection = cur_connection;
-
-	if (old_connection != NULL &&
-	    old_connection != new_connection) {
-		log_processing(SUSPEND, current,
-			       NULL, old_connection, NULL, where);
-	}
-
-	cur_connection = new_connection;
-
-	if (new_connection == NULL) {
-		dbg("start processing: connection NULL "PRI_WHERE,
-		    pri_where(where));
-	} else if (old_connection == new_connection) {
-		log_processing(RESTART, current,
-			       NULL, new_connection, NULL, where);
-	} else {
-		log_processing(START, current,
-			       NULL, new_connection, NULL, where);
-	}
-
-	return old_connection;
-}
-
-void log_pop_connection(struct connection *c, where_t where)
-{
-	bool current = (cur_state == NULL); /* not hidden by state? */
-	if (cur_connection != NULL) {
-		log_processing(STOP, current /* current? */,
-			       NULL, cur_connection, NULL, where);
-	} else {
-		dbg("processing: STOP connection NULL "PRI_WHERE,
-		    pri_where(where));
-	}
-
-	cur_connection = c;
-
-	if (cur_connection != NULL) {
-		log_processing(RESUME, current /* current? */,
-			       NULL, cur_connection, NULL, where);
-	}
-}
-
-bool is_cur_connection(const struct connection *c)
-{
-	return cur_connection == c;
 }
 
 so_serial_t log_push_state(struct state *new_state, where_t where)
@@ -250,9 +186,6 @@ so_serial_t log_push_state(struct state *new_state, where_t where)
 			log_processing(SUSPEND, true /* must be current */,
 				       cur_state, NULL, NULL, where);
 		}
-	} else if (cur_connection != NULL && new_state != NULL) {
-		log_processing(SUSPEND, true /* current for now */,
-			       NULL, cur_connection, NULL, where);
 	}
 
 	cur_state = new_state;
@@ -285,49 +218,17 @@ void log_pop_state(so_serial_t serialno, where_t where)
 	if (cur_state != NULL) {
 		log_processing(RESUME, true, /* must be current */
 			       cur_state, NULL, NULL, where);
-	} else if (cur_connection != NULL) {
-		log_processing(RESUME, true, /* now current */
-			       NULL, cur_connection, NULL, where);
 	}
 }
-
-extern ip_address log_push_from(ip_address new_from, where_t where)
-{
-	bool current = (cur_state == NULL && cur_connection == NULL);
-	ip_address old_from = cur_from;
-	if (endpoint_type(&old_from) != NULL) {
-		log_processing(SUSPEND, current,
-			       NULL, NULL, &old_from, where);
-	}
-	cur_from = new_from;
-	if (endpoint_type(&cur_from) != NULL) {
-		log_processing(START, current,
-			       NULL, NULL, &cur_from, where);
-	}
-	return old_from;
-}
-
-extern void log_pop_from(ip_address old_from, where_t where)
-{
-	bool current = (cur_state == NULL && cur_connection == NULL);
-	if (endpoint_type(&cur_from) != NULL) {
-		log_processing(STOP, current,
-			       NULL, NULL, &cur_from, where);
-	}
-	if (endpoint_type(&old_from) != NULL) {
-		log_processing(RESUME, current,
-			       NULL, NULL, &old_from, where);
-	}
-	cur_from = old_from;
-}
-
 
 /*
  * Initialization.
  */
 
-void pluto_init_log(void)
+void pluto_init_log(struct log_param param)
 {
+	log_param = param;
+
 	if (log_to_stderr)
 		setbuf(stderr, NULL);
 
@@ -351,8 +252,6 @@ void pluto_init_log(void)
 	if (log_to_syslog)
 		openlog("pluto", LOG_CONS | LOG_NDELAY | LOG_PID,
 			LOG_AUTHPRIV);
-
-	peerlog_init();
 }
 
 /*
@@ -360,16 +259,15 @@ void pluto_init_log(void)
  * The compiler will likely inline these.
  */
 
-static void stdlog_raw(const char *prefix, char *message)
+static void stdlog_raw(const char *prefix, char *message, const struct realtm *t)
 {
 	if (log_to_stderr || pluto_log_fp != NULL) {
 		FILE *out = log_to_stderr ? stderr : pluto_log_fp;
 
-		if (log_with_timestamp) {
+		if (log_param.log_with_timestamp) {
 			char now[34] = "";
-			struct realtm t = local_realtime(realnow());
-			strftime(now, sizeof(now), "%b %e %T", &t.tm);
-			fprintf(out, "%s.%06ld: %s%s\n", now, t.microsec, prefix, message);
+			strftime(now, sizeof(now), "%b %e %T", &t->tm);
+			fprintf(out, "%s.%06ld: %s%s\n", now, t->microsec, prefix, message);
 		} else {
 			fprintf(out, "%s%s\n", prefix, message);
 		}
@@ -382,19 +280,8 @@ static void syslog_raw(int severity, const char *prefix, char *message)
 		syslog(severity, "%s%s", prefix, message);
 }
 
-static void peerlog_raw(const char *prefix, char *message)
+void jambuf_to_whack(struct jambuf *buf, const struct fd *whackfd, enum rc_type rc)
 {
-	if (log_to_perpeer) {
-		peerlog(cur_connection, prefix, message);
-	}
-}
-
-static void jambuf_to_whack_fd(struct lswlog *buf, struct fd *wfd, enum rc_type rc)
-{
-	if (!fd_p(wfd)) {
-		return;
-	}
-
 	/*
 	 * XXX: use iovec as it's easier than trying to deal with
 	 * truncation while still ensuring that the message is
@@ -425,7 +312,15 @@ static void jambuf_to_whack_fd(struct lswlog *buf, struct fd *wfd, enum rc_type 
 	};
 
 	/* write to whack socket, but suppress possible SIGPIPE */
-	fd_sendmsg(wfd, &msg, MSG_NOSIGNAL, HERE);
+	ssize_t s = fd_sendmsg(whackfd, &msg, MSG_NOSIGNAL);
+	if (s < 0) {
+		/* probably the other end hit cntrl-c */
+		JAMBUF(buf) {
+			jam(buf, "whack error: "PRI_ERRNO, pri_errno(-(int)s));
+			/* not whack */
+			log_raw(LOG_WARNING, "", buf);
+		}
+	}
 }
 
 /*
@@ -438,23 +333,23 @@ bool whack_prompt_for(struct state *st, const char *prompt,
 
 	/*
 	 * XXX: This includes the connection name twice: first from
-	 * the state prefix; and second explictly.  Only reason is so
+	 * the state prefix; and second explicitly.  Only reason is so
 	 * that tests are happy.
 	 */
-	LSWBUF(buf) {
+	JAMBUF(buf) {
 		/* XXX: one of these is redundant */
-		jam_log_prefix(buf, st, NULL/*connection*/, NULL/*from*/);
+		jam_logger_prefix(buf, st->st_logger);
 		jam(buf, "%s ", st->st_connection->name);
 		/* the real message */
 		jam(buf, "prompt for %s:", prompt);
-		jambuf_to_whack_fd(buf, st->st_whack_sock,
-				   echo ? RC_USERPROMPT : RC_ENTERSECRET);
+		jambuf_to_whack(buf, st->st_whack_sock,
+				echo ? RC_USERPROMPT : RC_ENTERSECRET);
 	}
 
-	ssize_t n = fd_read(st->st_whack_sock, ansbuf, ansbuf_len, HERE);
-	if (n == -1) {
-		log_state(RC_LOG_SERIOUS, st, "read(whackfd) failed: %s",
-			  strerror(errno));
+	ssize_t n = fd_read(st->st_whack_sock, ansbuf, ansbuf_len);
+	if (n < 0) {
+		log_state(RC_LOG_SERIOUS, st, "read(whackfd) failed: "PRI_ERRNO,
+			  pri_errno(-(int)n));
 		return false;
 	}
 
@@ -467,7 +362,7 @@ bool whack_prompt_for(struct state *st, const char *prompt,
 	return true;
 }
 
-static void whack_raw(jambuf_t *buf, enum rc_type rc)
+static void whack_raw(struct jambuf *buf, enum rc_type rc)
 {
 	/*
 	 * Override more specific STATE WHACKFD with global whack.
@@ -481,69 +376,45 @@ static void whack_raw(jambuf_t *buf, enum rc_type rc)
 	 * state?
 	 */
 	passert(in_main_thread()); /* whack_log_fd is global */
-	struct fd *wfd = (fd_p(whack_log_fd) ? whack_log_fd :
+	const struct fd *whackfd = (fd_p(whack_log_fd) ? whack_log_fd :
 		    cur_state != NULL ? cur_state->st_whack_sock :
 		    null_fd);
-	jambuf_to_whack_fd(buf, wfd, rc);
-}
-
-/*
- * This needs to mimic both lswlog_log_prefix() and
- * lswlog_dbg_prefix().
- */
-
-void jam_log_prefix(struct lswlog *buf,
-		    const struct state *st,
-		    const struct connection *c,
-		    const ip_address *from)
-{
-	if (!in_main_thread()) {
+	if (!fd_p(whackfd)) {
 		return;
 	}
 
-	if (st != NULL) {
-		/*
-		 * XXX: When delete state() triggers a delete
-		 * connection, this can be NULL.
-		 */
-		if (st->st_connection != NULL) {
-			jam_connection(buf, st->st_connection);
+	jambuf_to_whack(buf, whackfd, rc);
+}
+
+void jam_cur_prefix(struct jambuf *buf)
+{
+	if (!in_main_thread()) {
+		if (DBGP(DBG_BASE)) {
+			jam(buf, "[EXPECTATION FAILED: in main thread] ");
 		}
-		/* state number */
-		lswlogf(buf, " #%lu", st->st_serialno);
-		/* state name */
-		if (DBGP(DBG_ADD_PREFIX)) {
-			lswlogf(buf, " ");
-			lswlogs(buf, st->st_state->short_name);
-		}
-		jam(buf, ": ");
-	} else if (c != NULL) {
-		jam_connection(buf, c);
-		jam(buf, ": ");
-	} else if (from != NULL) {
-		/* peer's IP address */
-		jam(buf, "packet from ");
-		jam_sensitive_endpoint(buf, from);
-		jam(buf, ": ");
+		return;
 	}
+
+	if (cur_state != NULL) {
+		struct logger logger = *(cur_state->st_logger);
+		logger.global_whackfd = whack_log_fd;
+		jam_logger_prefix(buf, &logger);
+		return;
+	}
+
+	return;
 }
 
-void lswlog_log_prefix(struct lswlog *buf)
+static void log_raw(int severity, const char *prefix, struct jambuf *buf)
 {
-	/* convert FROM into a pointer so logic is easier */
-	const ip_address *from = (endpoint_type(&cur_from) != NULL ? &cur_from : NULL);
-	jam_log_prefix(buf, cur_state, cur_connection, from);
-}
-
-static void log_raw(int severity, const char *prefix, struct lswlog *buf)
-{
-	stdlog_raw(prefix, buf->array);
+	/* assume there's a logging prefix; normally there is */
+	struct realtm t = local_realtime(realnow());
+	stdlog_raw(prefix, buf->array, &t);
 	syslog_raw(severity, prefix, buf->array);
-	peerlog_raw(prefix, buf->array);
 	/* not whack */
 }
 
-void lswlog_to_error_stream(struct lswlog *buf)
+void jambuf_to_error_stream(struct jambuf *buf)
 {
 	log_raw(LOG_ERR, "", buf);
 	if (in_main_thread()) {
@@ -552,7 +423,12 @@ void lswlog_to_error_stream(struct lswlog *buf)
 	}
 }
 
-void lswlog_to_default_streams(struct lswlog *buf, enum rc_type rc)
+void jambuf_to_debug_stream(struct jambuf *buf)
+{
+	log_raw(LOG_DEBUG, DEBUG_PREFIX, buf);
+}
+
+void jambuf_to_default_streams(struct jambuf *buf, enum rc_type rc)
 {
 	log_raw(LOG_WARNING, "", buf);
 	if (in_main_thread()) {
@@ -570,38 +446,6 @@ void close_log(void)
 		(void)fclose(pluto_log_fp);
 		pluto_log_fp = NULL;
 	}
-
-	peerlog_close();
-}
-
-/* <prefix><state#N...><message>. Errno %d: <strerror> */
-
-void lswlog_errno_prefix(struct lswlog *buf, const char *prefix)
-{
-	lswlogs(buf, prefix);
-	lswlog_log_prefix(buf);
-}
-
-void lswlog_errno_suffix(struct lswlog *buf, int e)
-{
-	lswlogs(buf, ".");
-	jam(buf, " "PRI_ERRNO, pri_errno(e));
-	lswlog_to_error_stream(buf);
-}
-
-void exit_log(const char *message, ...)
-{
-	LSWBUF(buf) {
-		/* FATAL ERROR: <state...><message> */
-		lswlogs(buf, "FATAL ERROR: ");
-		lswlog_log_prefix(buf);
-		va_list args;
-		va_start(args, message);
-		lswlogvf(buf, message, args);
-		va_end(args);
-		lswlog_to_error_stream(buf);
-	}
-	exit_pluto(PLUTO_EXIT_FAIL);
 }
 
 void libreswan_exit(enum pluto_exit_code rc)
@@ -615,57 +459,42 @@ void libreswan_exit(enum pluto_exit_code rc)
  * - text is a human-readable annotation
  */
 
-void whack_log(enum rc_type rc, const char *message, ...)
+void whack_log(enum rc_type rc, const struct fd *whackfd, const char *message, ...)
 {
 	if (!in_main_thread()) {
-		LSWLOG_PEXPECT(buf) {
-			jam(buf, "whack_log() must be called from the main thread: ");
+		/* still get the message out */
+		JAMBUF(buf) {
+			jam(buf, "[EXPECTATION FAILED: whack_log() on main thread]: ");
 			va_list args;
 			va_start(args, message);
 			jam_va_list(buf, message, args);
 			va_end(args);
+			log_raw(LOG_ERR, "", buf);
 		}
 		return;
 	}
 
-	LSWBUF(buf) {
+	JAMBUF(buf) {
+		/* no-prefix: RC added by jambuf_to_whack() */
 		va_list args;
 		va_start(args, message);
 		jam_va_list(buf, message, args);
 		va_end(args);
-		jambuf_to_whack_fd(buf, whack_log_fd, rc);
+		jambuf_to_whack(buf, whackfd, rc);
 	}
 }
 
-void whack_print(struct fd *whackfd, const char *message, ...)
+void whack_comment(const struct fd *whackfd, const char *message, ...)
 {
 	pexpect(fd_p(whackfd));
 	pexpect(in_main_thread());
 	pexpect(cur_state == NULL);
-	pexpect(cur_connection == NULL);
-	pexpect(endpoint_type(&cur_from) == NULL);
-	LSWBUF(buf) {
+	JAMBUF(buf) {
 		va_list args;
 		va_start(args, message);
 		jam_va_list(buf, message, args);
 		va_end(args);
-		jambuf_to_whack_fd(buf, whackfd, RC_PRINT);
-	}
-}
-
-void whack_comment(struct fd *whackfd, const char *message, ...)
-{
-	pexpect(fd_p(whackfd));
-	pexpect(in_main_thread());
-	pexpect(cur_state == NULL);
-	pexpect(cur_connection == NULL);
-	pexpect(endpoint_type(&cur_from) == NULL);
-	LSWBUF(buf) {
-		va_list args;
-		va_start(args, message);
-		jam_va_list(buf, message, args);
-		va_end(args);
-		jambuf_to_whack_fd(buf, whackfd, RC_COMMENT);
+		jambuf_to_whack(buf, whackfd, RC_COMMENT);
 	}
 }
 
@@ -679,26 +508,26 @@ static unsigned nr_rate_limited_logs;
 
 static unsigned log_limit(void)
 {
-	if (impair_log_rate_limit == 0) {
+	if (impair.log_rate_limit == 0) {
 		/* --impair log-rate-limit:no */
 		return RATE_LIMIT;
 	} else {
 		/* --impair log-rate-limit:yes */
 		/* --impair log-rate-limit:NNN */
-		return impair_log_rate_limit;
+		return impair.log_rate_limit;
 	}
 }
 
 static void rate_log_raw(const char *prefix,
-			 const struct msg_digest *md,
+			 struct logger *logger,
 			 const char *message,
 			 va_list ap)
 {
-	LSWBUF(buf) {
+	JAMBUF(buf) {
 		jam_string(buf, prefix);
-		jam_log_prefix(buf, NULL/*st*/, NULL/*c*/, &md->sender);
+		jam_logger_prefix(buf, logger);
 		jam_va_list(buf, message, ap);
-		log_jambuf(LOG_STREAM, null_fd, buf);
+		jambuf_to_logger(buf, logger, LOG_STREAM);
 	}
 }
 
@@ -709,21 +538,21 @@ void rate_log(const struct msg_digest *md,
 	va_list ap;
 	va_start(ap, message);
 	if (nr_rate_limited_logs < limit) {
-		rate_log_raw("", md, message, ap);
+		rate_log_raw("", md->md_logger, message, ap);
 	} else if (nr_rate_limited_logs == limit) {
-		rate_log_raw("", md, message, ap);
+		rate_log_raw("", md->md_logger, message, ap);
 		plog_global("rate limited log reached limit of %u entries", limit);
 	} else if (DBGP(DBG_BASE)) {
-		rate_log_raw(DEBUG_PREFIX, md, message, ap);
+		rate_log_raw(DEBUG_PREFIX, md->md_logger, message, ap);
 	}
 	va_end(ap);
 	nr_rate_limited_logs++;
 }
 
-static void reset_log_rate_limit(void)
+static void reset_log_rate_limit(struct fd *whackfd)
 {
 	if (nr_rate_limited_logs > log_limit()) {
-		plog_global("rate limited log reset");
+		log_global(RC_LOG, whackfd, "rate limited log reset");
 	}
 	nr_rate_limited_logs = 0;
 }
@@ -735,37 +564,39 @@ void init_rate_log(void)
 			      RESET_LOG_RATE_LIMIT);
 }
 
-static void log_whack(enum rc_type rc, struct fd *object_fd, jambuf_t *buf)
+static void log_whacks(enum rc_type rc, const struct fd *global_whackfd,
+		       const struct fd *object_whackfd, struct jambuf *buf)
 {
-	if (in_main_thread()) {
-		jambuf_to_whack_fd(buf, object_fd, rc);
-		if (!same_fd(object_fd, whack_log_fd)) {
-			jambuf_to_whack_fd(buf, whack_log_fd, rc);
-		}
+	if (fd_p(object_whackfd)) {
+		jambuf_to_whack(buf, object_whackfd, rc);
+	}
+	if (fd_p(global_whackfd) &&
+	    !same_fd(object_whackfd, global_whackfd)) {
+		jambuf_to_whack(buf, global_whackfd, rc);
 	}
 }
 
-void log_jambuf(lset_t rc_flags, struct fd *object_fd, jambuf_t *buf)
+void jambuf_to_logger(struct jambuf *buf, const struct logger *logger, lset_t rc_flags)
 {
 	enum rc_type rc = rc_flags & RC_MASK;
-	enum stream only = rc_flags & ~RC_MASK;
+	enum stream only = rc_flags & STREAM_MASK;
 	switch (only) {
 	case DEBUG_STREAM:
 		log_raw(LOG_DEBUG, DEBUG_PREFIX, buf);
 		break;
 	case ALL_STREAMS:
 		log_raw(LOG_WARNING, "", buf);
-		log_whack(rc, object_fd, buf);
+		log_whacks(rc, logger->global_whackfd, logger->object_whackfd, buf);
 		break;
 	case LOG_STREAM:
 		log_raw(LOG_WARNING, "", buf);
 		break;
 	case WHACK_STREAM:
-		log_whack(rc, object_fd, buf);
+		log_whacks(rc, logger->global_whackfd, logger->object_whackfd, buf);
 		break;
 	case ERROR_STREAM:
 		log_raw(LOG_ERR, "", buf);
-		log_whack(rc, object_fd, buf);
+		log_whacks(rc, logger->global_whackfd, logger->object_whackfd, buf);
 		break;
 	case NO_STREAM:
 		/*
@@ -779,83 +610,354 @@ void log_jambuf(lset_t rc_flags, struct fd *object_fd, jambuf_t *buf)
 	}
 }
 
-static void broadcast(lset_t rc_flags, struct fd *object_fd,
-		      const struct state *st,
-		      const struct connection *c,
-		      const struct msg_digest *md,
-		      const char *message, va_list ap)
+static bool always_suppress_log(const void *object UNUSED)
 {
-	LSWBUF(buf) {
-		/*
-		 * XXX: Always include a prefix; even when
-		 * DEBUG_STREAM.  Presumably the message is written
-		 * with the assumption that it is prefixed by some
-		 * context.  If this wasn't the intend, the caller
-		 * would have used dbg().
-		 *
-		 * Can a shorter prefix be used?
-		 */
-		/* jam_debug_prefix(buf, st, c, from) */
-		jam_log_prefix(buf, st, c, md != NULL ? &md->sender : NULL);
-		jam_va_list(buf, message, ap);
-		log_jambuf(rc_flags, object_fd, buf);
-	}
+	return true;
 }
 
-void log_message(lset_t rc_flags,
-		 const struct state *st,
-		 const struct msg_digest *md,
-		 const char *format, ...)
+static bool never_suppress_log(const void *object UNUSED)
 {
+	return false;
+}
+
+static size_t jam_global_prefix(struct jambuf *unused_buf UNUSED,
+			      const void *unused_object UNUSED)
+{
+	/* jam(buf, "") - nothing to add */
+	return 0;
+}
+
+const struct logger_object_vec logger_global_vec = {
+	.name = "global",
+	.suppress_object_log = never_suppress_log,
+	.jam_object_prefix = jam_global_prefix,
+	.free_object = false,
+};
+
+static size_t jam_from_prefix(struct jambuf *buf, const void *object)
+{
+	size_t s = 0;
+	if (!in_main_thread()) {
+		s += jam(buf, "EXPECTATION FAILED: %s in main thread: ", __func__);
+	} else if (object == NULL) {
+		s += jam(buf, "EXPECTATION FAILED: %s NULL: ", __func__);
+	} else {
+		const ip_endpoint *from = object;
+		/* peer's IP address */
+		if (endpoint_protocol(from) == &ip_protocol_tcp) {
+			s += jam(buf, "connection from ");
+		} else {
+			s += jam(buf, "packet from ");
+		}
+		s += jam_sensitive_endpoint(buf, from);
+		s += jam(buf, ": ");
+	}
+	return s;
+}
+
+const struct logger_object_vec logger_from_vec = {
+	.name = "from",
+	.suppress_object_log = always_suppress_log,
+	.jam_object_prefix = jam_from_prefix,
+	.free_object = false,
+};
+
+static size_t jam_message_prefix(struct jambuf *buf, const void *object)
+{
+	size_t s = 0;
+	if (!in_main_thread()) {
+		s += jam(buf, "EXPECTATION FAILED: %s in main thread: ", __func__);
+	} else if (object == NULL) {
+		s += jam(buf, "EXPECTATION FAILED: %s NULL: ", __func__);
+	} else {
+		const struct msg_digest *md = object;
+		s += jam_from_prefix(buf, &md->sender);
+	}
+	return s;
+}
+
+const struct logger_object_vec logger_message_vec = {
+	.name = "message",
+	.suppress_object_log = always_suppress_log,
+	.jam_object_prefix = jam_message_prefix,
+	.free_object = false,
+};
+
+static size_t jam_connection_prefix(struct jambuf *buf, const void *object)
+{
+	size_t s = 0;
+	if (!in_main_thread()) {
+		s += jam(buf, "EXPECTATION FAILED: %s in main thread: ",
+			 __func__);
+	} else if (object == NULL) {
+		s += jam(buf, "EXPECTATION FAILED: %s NULL: ", __func__);
+	} else {
+		const struct connection *c = object;
+		s += jam_connection(buf, c);
+		s += jam(buf, ": ");
+	}
+	return s;
+}
+
+static bool suppress_connection_log(const void *object)
+{
+	const struct connection *connection = object;
+	return connection->policy & POLICY_OPPORTUNISTIC;
+}
+
+const struct logger_object_vec logger_connection_vec = {
+	.name = "connection",
+	.suppress_object_log = suppress_connection_log,
+	.jam_object_prefix = jam_connection_prefix,
+	.free_object = false,
+};
+
+static size_t jam_state_prefix(struct jambuf *buf, const void *object)
+{
+	size_t s = 0;
+	if (!in_main_thread()) {
+		s += jam(buf, "EXPECTATION FAILED: %s in main thread: ", __func__);
+	} else if (object == NULL) {
+		s += jam(buf, "EXPECTATION FAILED: %s NULL: ", __func__);
+	} else {
+		const struct state *st = object;
+		/*
+		 * XXX: When delete state() triggers a delete
+		 * connection, this can be NULL.
+		 */
+		if (st->st_connection != NULL) {
+			s += jam_connection(buf, st->st_connection);
+		}
+		/* state number */
+		s += jam(buf, " #%lu", st->st_serialno);
+		/* state name */
+		if (DBGP(DBG_ADD_PREFIX)) {
+			s += jam(buf, " ");
+			s += jam_string(buf, st->st_state->short_name);
+		}
+		s += jam(buf, ": ");
+	}
+	return s;
+}
+
+static bool suppress_state_log(const void *object)
+{
+	const struct state *state = object;
+	return state->st_connection->policy & POLICY_OPPORTUNISTIC;
+}
+
+const struct logger_object_vec logger_state_vec = {
+	.name = "state",
+	.suppress_object_log = suppress_state_log,
+	.jam_object_prefix = jam_state_prefix,
+	.free_object = false,
+};
+
+static size_t jam_string_prefix(struct jambuf *buf, const void *object)
+{
+	const char *string = object;
+	return jam_string(buf, string);
+}
+
+const struct logger_object_vec logger_string_vec = {
+	.name = "string(never-suppress)",
+	.suppress_object_log = never_suppress_log,
+	.jam_object_prefix = jam_string_prefix,
+	.free_object = true,
+};
+
+struct logger *alloc_logger(void *object, const struct logger_object_vec *vec, where_t where)
+{
+	struct logger logger = {
+		.object = object,
+		.object_vec = vec,
+		.where = where,
+	};
+	return clone_thing(logger, "logger");
+}
+
+struct logger *clone_logger(const struct logger *stack)
+{
+	/*
+	 * Convert the dynamicically generated OBJECT prefix into an
+	 * unchanging string.  This way the prefix can be safely
+	 * accessed on a helper thread.
+	 */
+	char prefix[LOG_WIDTH];
+	struct jambuf prefix_buf = ARRAY_AS_JAMBUF(prefix);
+	jam_logger_prefix(&prefix_buf, stack);
+	/*
+	 * choose a logger object vec with a hardwired suppress.
+	 */
+	const struct logger_object_vec *object_vec;
+	if (suppress_log(stack)) {
+		static const struct logger_object_vec always_suppress_vec = {
+			.name = "string(always-suppressed)",
+			.suppress_object_log = always_suppress_log,
+			.jam_object_prefix = jam_string_prefix,
+			.free_object = true,
+		};
+		object_vec = &always_suppress_vec;
+	} else {
+		object_vec = &logger_string_vec;
+	}
+	/* construct the clone */
+	struct logger heap = {
+		.global_whackfd = dup_any(stack->global_whackfd),
+		.object_whackfd = dup_any(stack->object_whackfd),
+		.where = stack->where,
+		.object_vec = object_vec,
+		.object = clone_str(prefix, "heap logger prefix"),
+	};
+	/* and clone it */
+	return clone_thing(heap, "heap logger");
+}
+
+struct logger *string_logger(struct fd *whackfd, where_t where, const char *fmt, ...)
+{
+	/*
+	 * Convert the dynamicically generated OBJECT prefix into an
+	 * unchanging string.  This way the prefix can be safely
+	 * accessed on a helper thread.
+	 */
+	char prefix[LOG_WIDTH];
+	{
+		struct jambuf prefix_buf = ARRAY_AS_JAMBUF(prefix);
+		va_list ap;
+		va_start(ap, fmt);
+		jam_va_list(&prefix_buf, fmt, ap);
+		va_end(ap);
+	}
+	/* construct the clone */
+	struct logger logger = {
+		.global_whackfd = dup_any(whackfd),
+		.object_whackfd = null_fd,
+		.where = where,
+		.object_vec = &logger_string_vec,
+		.object = clone_str(prefix, "string logger prefix"),
+	};
+	/* and clone it */
+	return clone_thing(logger, "string logger");
+}
+
+void free_logger(struct logger **logp)
+{
+	close_any(&(*logp)->global_whackfd);
+	close_any(&(*logp)->object_whackfd);
+	/*
+	 * For instance the string allocated by clone_logger().  More
+	 * complex objects are freed by other means.
+	 */
+	if ((*logp)->object_vec->free_object) {
+		pfree((void*) (*logp)->object);
+	}
+	/* done */
+	pfree(*logp);
+	*logp = NULL;
+}
+
+struct logger cur_logger(void)
+{
+	if (!pexpect(in_main_thread())) {
+		static const struct logger_object_vec logger_pexpect_vec = {
+			.name = "pexpect",
+			.suppress_object_log = never_suppress_log,
+			.jam_object_prefix = jam_string_prefix,
+			.free_object = false,
+		};
+		static const struct logger pexpect_logger = {
+			.object = "[EXPECTATION FAILED on-main-thread] ",
+			.where = { .func = __func__, .basename = HERE_BASENAME , .line = __LINE__},/*HERE*/
+			.object_vec = &logger_pexpect_vec,
+		};
+		return pexpect_logger;
+	}
+
+	if (cur_state != NULL) {
+		struct logger logger = *(cur_state->st_logger);
+		logger.global_whackfd = whack_log_fd;
+		return logger;
+	}
+
+	return GLOBAL_LOGGER(whack_log_fd);
+};
+
+/*
+ * XXX: these were macros only older GCC's, seeing for some code
+ * paths, OBJECT was always non-NULL and pexpect(OBJECT!=NULL) was
+ * constant, would generate a -Werror=address:
+ *
+ * error: the comparison will always evaluate as 'true' for the
+ * address of 'stack_md' will never be NULL [-Werror=address]
+ */
+
+void log_md(lset_t rc_flags, const struct msg_digest *md, const char *msg, ...)
+{
+	struct logger *logger =
+		(pexpect(md != NULL) && pexpect(md->md_logger != NULL) && pexpect(in_main_thread()))
+		? md->md_logger
+		: &failsafe_logger;
 	va_list ap;
-	va_start(ap, format);
-	struct fd *whackfd = (st != NULL ? st->st_whack_sock : null_fd);
-	broadcast(rc_flags, whackfd, st, NULL/*connection*/, md, format, ap);
+	va_start(ap, msg);
+	log_va_list(rc_flags, logger, msg, ap);
 	va_end(ap);
 }
 
-void log_pending(lset_t rc_flags, const struct pending *pending,
-		 const char *format, ...)
+void log_connection(lset_t rc_flags, struct fd *whackfd,
+		    const struct connection *c, const char *msg, ...)
 {
 	va_list ap;
-	va_start(ap, format);
-	broadcast(rc_flags, pending->whack_sock,
-		  NULL/*ST*/, pending->connection, NULL/*MD*/,
-		  format, ap);
+	va_start(ap, msg);
+	struct logger logger = (pexpect(c != NULL) && pexpect(in_main_thread()))
+		? CONNECTION_LOGGER(c, whackfd)
+		: failsafe_logger;
+	log_va_list(rc_flags, &logger, msg, ap);
+	va_end(ap);
+}
+
+void log_pending(lset_t rc_flags, const struct pending *p, const char *msg, ...)
+{
+	va_list ap;
+	va_start(ap, msg);
+	struct logger logger = (pexpect(p != NULL) && pexpect(in_main_thread()))
+		? PENDING_LOGGER(p)
+		: failsafe_logger;
+	log_va_list(rc_flags, &logger, msg, ap);
 	va_end(ap);
 }
 
 void log_state(lset_t rc_flags, const struct state *st,
-	       const char *format, ...)
+	       const char *msg, ...)
 {
 	va_list ap;
-	va_start(ap, format);
-	broadcast(rc_flags, st->st_whack_sock,
-		  st/*ST*/, NULL/*connection**/, NULL/*MD*/,
-		  format, ap);
+	va_start(ap, msg);
+	if (pexpect((st) != NULL) &&
+	    pexpect(in_main_thread())) {
+		struct logger logger = *(st->st_logger);
+		/*
+		 * XXX: the state logger still needs to pick up the
+		 * global whack FD :-(
+		 */
+		if (whack_log_fd != NULL) {
+			logger.global_whackfd = whack_log_fd;
+		}
+		log_va_list(rc_flags, &logger, msg, ap);
+	} else {
+		/* still get the message out */
+		log_va_list(rc_flags, &failsafe_logger, msg, ap);
+
+	}
 	va_end(ap);
 }
 
-void log_connection(lset_t rc_flags, const struct connection *c,
-		    const char *format, ...)
+void loglog(enum rc_type rc, const char *fmt, ...)
 {
-	va_list ap;
-	va_start(ap, format);
-	broadcast(rc_flags,
-		  null_fd, /* no object FD */
-		  NULL/*state*/, c/*connection**/, NULL/*MD*/,
-		  format, ap);
-	va_end(ap);
-}
-
-void log_md(lset_t rc_flags, const struct msg_digest *md,
-	    const char *format, ...)
-{
-	va_list ap;
-	va_start(ap, format);
-	broadcast(rc_flags,
-		  null_fd, /* no object FD */
-		  NULL/*state*/, NULL/*connection**/, md/*MD*/,
-		  format, ap);
-	va_end(ap);
+	JAMBUF(buf) {
+		jam_cur_prefix(buf);
+		va_list ap;
+		va_start(ap, fmt);
+		jam_va_list(buf, fmt, ap);
+		va_end(ap);
+		jambuf_to_default_streams(buf, rc);
+	}
 }

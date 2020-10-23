@@ -23,8 +23,9 @@
 #include "shunk.h"
 #include "chunk.h"
 #include "err.h"
+#include "where.h"
 
-struct lswlog;
+struct jambuf;
 struct ip_info;
 
 extern bool log_ip; /* false -> redact (aka sanitize) ip addresses */
@@ -51,7 +52,7 @@ typedef struct {
 	 * We need something that makes static IPv4 initializers possible
 	 * (struct in_addr requires htonl() which is run-time only).
 	 */
-	uint8_t bytes[16];
+	struct ip_bytes { uint8_t byte[16]; } bytes;
 #ifndef ENDPOINT_TYPE
 	/*
 	 * XXX: An address abstraction - type+bytes - should not
@@ -61,16 +62,27 @@ typedef struct {
 	 * In pluto, port "0" is reserved and indicates all ports (but
 	 * does it also denote no port?).  Hopefully it is only paired
 	 * with the zero (any) address.
-	 *
-	 * XXX: Would separate and incompatible ip_hport and ip_nport
-	 * types help stop host <-> network port conversion screwups?
-	 * For instance, using ntohs() when using htons() is needed -
-	 * while wrong they have the same effect.
-	 *
 	 */
 	uint16_t hport;
+	unsigned ipproto;
+	bool is_address;
+	bool is_endpoint;
 #endif
 } ip_address;
+
+#define PRI_ADDRESS "%s version=%d hport=%u ipproto=%u is_address=%s is_endpoint=%s"
+#define pri_address(A, B)						\
+		str_address(A, B),					\
+		(A)->version,						\
+		(A)->hport,						\
+		(A)->ipproto,						\
+		bool_str((A)->is_address),				\
+		bool_str((A)->is_endpoint)
+
+void pexpect_address(const ip_address *a, const char *t, where_t where);
+#define paddress(A) pexpect_address(A, #A, HERE)
+
+ip_address strip_endpoint(const ip_address *address, where_t where);
 
 /*
  * Constructors.
@@ -101,7 +113,7 @@ typedef struct {
 	char buf[(4+1)*8/*0000:...*/ + 1/*\0*/ + 1/*CANARY*/];
 } address_buf;
 
-void jam_address(struct lswlog *buf, const ip_address *src);
+size_t jam_address(struct jambuf *buf, const ip_address *src);
 const char *str_address(const ip_address *src, address_buf *dst);
 
 /*
@@ -119,9 +131,9 @@ typedef struct {
 	char buf[sizeof("4.0.0.0.3.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.2.0.0.0.1.0.0.0.IP6.ARPA.") + 1];
 }  address_reversed_buf;
 
-void jam_address_sensitive(struct lswlog *buf, const ip_address *src);
-void jam_address_reversed(struct lswlog *buf, const ip_address *src);
-void jam_address_raw(struct lswlog *buf, const ip_address *src, char sepc);
+size_t jam_address_sensitive(struct jambuf *buf, const ip_address *src);
+size_t jam_address_reversed(struct jambuf *buf, const ip_address *src);
+size_t jam_address_raw(struct jambuf *buf, const ip_address *src, char sepc);
 
 const char *str_address_sensitive(const ip_address *src, address_buf *dst);
 const char *str_address_reversed(const ip_address *src, address_reversed_buf *buf);
@@ -139,26 +151,25 @@ const char *sensitive_ipstr(const ip_address *src, ipstr_buf *b);
  * unspecified (for instance IN6_IS_ADDR_UNSPECIFIED()) leaving the
  * term "unspecified" underspecified.
  *
- * Consequently to identify an AF_UNSPEC address (i.e.,
- * uninitialized), see if *_type() returns NULL.  There's an
- * address_is_invalid() wrapper for completeness.
+ * Consequently an AF_UNSPEC address (i.e., uninitialized or unset),
+ * is identified by *_type() returning NULL.
  */
 
-/* AF=AF_UNSPEC, ADDR = 0; aka all zeros */
-extern const ip_address address_invalid;
+extern const ip_address unset_address;
 
-/* returns NULL when address_invalid */
 const struct ip_info *address_type(const ip_address *address);
+
+bool address_is_set(const ip_address *address);
+/* subset of is_set */
+bool address_is_specified(const ip_address *address);
+
+/* are two is_set() addresses identical? */
+bool address_eq(const ip_address *address, const ip_address *another);
+bool address_eq_loopback(const ip_address *address);
+bool address_eq_any(const ip_address *address);
 
 /* AF={INET,INET6}, ADDR = 0; aka %any? */
 ip_address address_any(const struct ip_info *info);
-
-/* mutually exclusive */
-#define address_is_invalid(A) (address_type(A) == NULL)
-bool address_is_any(const ip_address *address);
-bool address_is_specified(const ip_address *address);
-/* implies specified */
-bool address_is_loopback(const ip_address *address);
 
 /*
  * Raw address bytes, both read-only and read-write.
@@ -170,6 +181,19 @@ chunk_t address_as_chunk(ip_address *address);
  * XXX: prop up IPv4 centric code that just isn't worth the effort.
  */
 uint32_t ntohl_address(const ip_address *address);
+
+/*
+ * Modify an address routing-prefix:host-id.
+ */
+
+extern const struct ip_blit set_bits;
+extern const struct ip_blit clear_bits;
+extern const struct ip_blit keep_bits;
+
+ip_address address_blit(const ip_address in,
+			const struct ip_blit *routing_prefix,
+			const struct ip_blit *host_id,
+			unsigned nr_mask_bits);
 
 /*
  * Old style.

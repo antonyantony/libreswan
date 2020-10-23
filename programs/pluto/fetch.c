@@ -142,7 +142,7 @@ static err_t fetch_curl(chunk_t url,
 
 	if (curl != NULL) {
 		/* we need a NUL-terminated string for curl */
-		uri = clone_chunk_as_string(url, "NUL-terminated url");
+		uri = clone_hunk_as_string(url, "NUL-terminated url");
 
 		if (curl_timeout > 0)
 			timeout = curl_timeout;
@@ -173,10 +173,9 @@ static err_t fetch_curl(chunk_t url,
 		curl_easy_cleanup(curl);
 
 		/* ??? where/how should this be logged? */
-		DBG(DBG_X509, {
-			if (errorbuffer[0] != '\0')
-				DBG_log("libcurl(%s) yielded %s", uri, errorbuffer);
-		});
+		if (errorbuffer[0] != '\0') {
+			dbg("libcurl(%s) yielded %s", uri, errorbuffer);
+		}
 		pfreeany(uri);
 
 		if (response.ptr != NULL)
@@ -258,7 +257,7 @@ static err_t fetch_ldap_url(chunk_t url, chunk_t *blob)
 	err_t ugh = NULL;
 	int rc;
 
-	char *ldap_url = clone_chunk_as_string(url, "ldap query");
+	char *ldap_url = clone_hunk_as_string(url, "ldap query");
 
 	dbg("Trying LDAP URL '%s'", ldap_url);
 
@@ -367,12 +366,12 @@ static err_t fetch_asn1_blob(chunk_t url, chunk_t *blob)
 	if (ugh == NULL && blob->len == 0)
 		ugh = "empty ASN.1 blob";
 	if (ugh != NULL)
-		freeanychunk(*blob);
+		free_chunk_content(blob);
 	return ugh;
 }
 
 /* Note: insert_crl_nss frees *blob */
-static bool insert_crl_nss(chunk_t *blob, const chunk_t crl_uri)
+static bool insert_crl_nss(chunk_t *blob, const chunk_t crl_uri, struct logger *logger)
 {
 	/* for CRL use the name passed to helper for the uri */
 	bool ret = FALSE;
@@ -380,13 +379,13 @@ static bool insert_crl_nss(chunk_t *blob, const chunk_t crl_uri)
 	if (crl_uri.len == 0) {
 		dbg("no CRL URI available");
 	} else {
-		char *uri_str = clone_chunk_as_string(crl_uri, "URI str");
-		int r = send_crl_to_import(blob->ptr, blob->len, uri_str);
+		char *uri_str = clone_hunk_as_string(crl_uri, "NUL-terminated URI");
+		int r = send_crl_to_import(blob->ptr, blob->len, uri_str, logger);
 		if (r == -1) {
-			libreswan_log("_import_crl internal error");
+			log_message(RC_LOG, logger, "_import_crl internal error");
 		} else if (r != 0) {
-			libreswan_log("NSS CRL import error: %s",
-				      nss_err_str((PRInt32)r));
+			log_message(RC_LOG, logger, "NSS CRL import error: %s",
+				    nss_err_str((PRInt32)r));
 		} else {
 			dbg("CRL imported");
 			ret = TRUE;
@@ -394,14 +393,14 @@ static bool insert_crl_nss(chunk_t *blob, const chunk_t crl_uri)
 		pfreeany(uri_str);
 	}
 
-	freeanychunk(*blob);
+	free_chunk_content(blob);
 	return ret;
 }
 
 /*
  * try to fetch the crls defined by the fetch requests
  */
-static void fetch_crls(void)
+static void fetch_crls(struct logger *logger)
 {
 	lock_crl_fetch_list("fetch_crls");
 
@@ -424,7 +423,7 @@ static void fetch_crls(void)
 
 			if (ugh != NULL) {
 				dbg("fetch failed:  %s", ugh);
-			} else if (insert_crl_nss(&blob, gn->name)) {
+			} else if (insert_crl_nss(&blob, gn->name, logger)) {
 				dbg("we have a valid crl");
 				/* delete fetch request */
 				*reqp = req->next;	/* remove from list */
@@ -448,8 +447,10 @@ static void fetch_crls(void)
  * Similarly, if check_crls() is called more frequently than
  * fetch_crls() can process, redundant fetches will be merged.
  */
-void check_crls(void)
+void check_crls(struct fd *whackfd)
 {
+	struct logger logger[1] = { GLOBAL_LOGGER(whackfd), };
+
 	schedule_oneshot_timer(EVENT_CHECK_CRLS, crl_check_interval);
 	struct crl_fetch_request *requests = NULL;
 
@@ -472,18 +473,19 @@ void check_crls(void)
 			SECItem *issuer = &n->crl->crl.derName;
 
 			if (n->crl->url == NULL) {
-				requests = crl_fetch_request(issuer, NULL, requests);
+				requests = crl_fetch_request(issuer, NULL,
+							     requests, logger);
 			} else {
 				generalName_t end_dp = {
 					.kind = GN_URI,
 					.name = {
-						.ptr = (u_char *)n->crl->url,
+						.ptr = (uint8_t *)n->crl->url,
 						.len = strlen(n->crl->url)
 					},
 					.next = NULL
 				};
 				requests = crl_fetch_request(issuer, &end_dp,
-							     requests);
+							     requests, logger);
 			}
 		}
 	}
@@ -496,7 +498,8 @@ void check_crls(void)
 		struct pubkey *key = pkl->key;
 		if (key != NULL) {
 			SECItem issuer = same_chunk_as_dercert_secitem(key->issuer);
-			requests = crl_fetch_request(&issuer, NULL, requests);
+			requests = crl_fetch_request(&issuer, NULL,
+						     requests, logger);
 		}
 	}
 
@@ -504,14 +507,14 @@ void check_crls(void)
 	 * Iterate all X.509 certificates in database. This is needed to
 	 * process middle and end certificates.
 	 */
-	CERTCertList *certs = get_all_certificates();
+	CERTCertList *certs = get_all_certificates(logger);
 
 	if (certs != NULL) {
 		for (CERTCertListNode *node = CERT_LIST_HEAD(certs);
 		     !CERT_LIST_END(node, certs);
 		     node = CERT_LIST_NEXT(node)) {
 			requests = crl_fetch_request(&node->cert->derSubject,
-						     NULL, requests);
+						     NULL, requests, logger);
 		}
 		CERT_DestroyCertList(certs);
 	}
@@ -522,8 +525,10 @@ static void merge_crl_fetch_request(struct crl_fetch_request *);
 
 static void *fetch_thread(void *arg UNUSED)
 {
-	dbg("fetch thread started");
+	/* XXX: on thread so no whack */
+	struct logger logger[1] = { GLOBAL_LOGGER(null_fd), };
 
+	dbg("fetch thread started");
 	while (true) {
 		dbg("fetching crl requests (may block)");
 		struct crl_fetch_request *requests = get_crl_fetch_requests();
@@ -555,7 +560,7 @@ static void *fetch_thread(void *arg UNUSED)
 		 *
 		 * Old requests then get processed at the end.
 		 */
-		fetch_crls();
+		fetch_crls(logger);
 	}
 	dbg("shutting down crl fetch thread");
 	return NULL;
@@ -654,7 +659,7 @@ static void add_distribution_points(const generalName_t *newPoints,
 				break;
 			}
 			if (gn->kind == newPoints->kind &&
-			    chunk_eq(gn->name, newPoints->name)) {
+			    hunk_eq(gn->name, newPoints->name)) {
 				/* newPoint already present */
 				break;
 			}
@@ -749,10 +754,10 @@ void list_crl_fetch_requests(struct fd *whackfd, bool utc)
 	}
 
 	for (; req != NULL; req = req->next) {
-		LSWLOG_WHACK(RC_COMMENT, buf) {
-			lswlog_realtime(buf, req->installed, utc);
-			lswlogf(buf, ", trials: %d", req->trials);
-		}
+		realtime_buf rtb;
+		whack_comment(whackfd, "%s, trials: %d",
+			      str_realtime(req->installed, utc, &rtb),
+			      req->trials);
 		dn_buf buf;
 		whack_comment(whackfd, "       issuer:  '%s'",
 			  str_dn(req->issuer, &buf));

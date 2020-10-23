@@ -29,17 +29,12 @@
 #include <errno.h>
 
 #include <string.h>
-#include <nss.h>
 #include <nspr.h>
 #include <pk11pub.h>
 
 static struct lsw_conf_options global_oco;
 
-#ifdef SINGLE_CONF_DIR
-#define SUBDIRNAME(X) ""
-#else
 #define SUBDIRNAME(X) X
-#endif
 
 /*
  * Fill in the basics, return true, of lsw_conf_calculate should be
@@ -139,22 +134,24 @@ void lsw_conf_rootdir(const char *root_dir)
 	lsw_conf_calculate();
 }
 
-void lsw_conf_confddir(const char *confddir)
+void lsw_conf_confddir(const char *confddir, struct logger *logger)
 {
 	lsw_conf_setdefault();
 	subst(&global_oco.confddir, confddir, "override ipsec.d");
 	lsw_conf_calculate();
 
-	libreswan_log("adjusting ipsec.d to %s", global_oco.confddir);
+	if (!streq(global_oco.confddir, IPSEC_CONFDDIR))
+		log_message(RC_LOG, logger, "adjusting ipsec.d to %s", global_oco.confddir);
 }
 
-void lsw_conf_nssdir(const char *nssdir)
+void lsw_conf_nssdir(const char *nssdir, struct logger *logger)
 {
 	lsw_conf_setdefault();
 	subst(&global_oco.nssdir, nssdir, "override nssdir");
 	lsw_conf_calculate();
 
-	libreswan_log("adjusting nssdir to %s", global_oco.nssdir);
+	if (!streq(global_oco.confddir, IPSEC_NSSDIR))
+		log_message(RC_LOG, logger, "adjusting nssdir to %s", global_oco.nssdir);
 }
 
 void lsw_conf_secretsfile(const char *secretsfile)
@@ -176,7 +173,7 @@ void lsw_conf_nsspassword(const char *nsspassword)
  * 1 enabled
  * 2 indeterminate
  */
-int libreswan_selinux(void)
+int libreswan_selinux(struct logger *logger)
 {
 	char selinux_flag[1];
 	int n;
@@ -186,7 +183,7 @@ int libreswan_selinux(void)
 		/* try new location first, then old location */
 		fd = fopen("/selinux/enforce", "r");
 		if (fd == NULL) {
-			DBGF(DBG_CONTROL, "SElinux: disabled, could not open /sys/fs/selinux/enforce or /selinux/enforce");
+			dbg("SElinux: disabled, could not open /sys/fs/selinux/enforce or /selinux/enforce");
 			return 0;
 		}
 	}
@@ -194,7 +191,7 @@ int libreswan_selinux(void)
 	n = fread((void *)selinux_flag, 1, 1, fd);
 	fclose(fd);
 	if (n != 1) {
-		libreswan_log("SElinux: could not read 1 byte from the selinux enforce file");
+		log_message(RC_LOG, logger, "SElinux: could not read 1 byte from the selinux enforce file");
 		return 2;
 	}
 	if (selinux_flag[0] == '1')

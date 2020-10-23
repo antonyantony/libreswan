@@ -6,7 +6,7 @@ east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
  ipsec auto --add westnet-eastnet-ikev2
-002 added connection description "westnet-eastnet-ikev2"
+002 added IKEv2 connection "westnet-eastnet-ikev2"
 east #
  # should be unoriented
 east #
@@ -17,11 +17,11 @@ east #
 east #
  ipsec whack --listen
 002 listening for IKE messages
-002 adding interface eth1/eth1 (esp-hw-offload not supported by kernel) 192.1.2.24:500
-002 adding interface eth1/eth1 192.1.2.24:4500
+002 adding UDP interface eth1 192.1.2.24:500
+002 adding UDP interface eth1 192.1.2.24:4500
 002 forgetting secrets
 002 loading secrets from "/etc/ipsec.secrets"
-002 loaded private key for keyid: PKK_RSA:AQO9bJbr3
+002 no secrets filename matched "/etc/ipsec.d/*.secrets"
 east #
  # should be oriented
 east #

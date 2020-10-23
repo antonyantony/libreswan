@@ -10,7 +10,7 @@ road #
  /testing/pluto/bin/wait-until-pluto-started
 road #
  ipsec auto --add road-east-ikev2
-002 added connection description "road-east-ikev2"
+002 added IKEv2 connection "road-east-ikev2"
 road #
  ipsec whack --impair suppress-retransmits
 road #
@@ -37,11 +37,11 @@ road #
 000 TIMESTAMP, 2192 RSA Key AQPl33O2P (has private key), until --- -- --:--:-- ---- ok (expires never)
 000        ID_FQDN '@north.testing.libreswan.org'
 road #
- ipsec auto --up  road-east-ikev2
-1v2 "road-east-ikev2" #1: initiating IKEv2 IKE SA
-1v2 "road-east-ikev2" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
-1v2 "road-east-ikev2" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
-002 "road-east-ikev2" #2: IKE SA authentication request rejected by peer: AUTHENTICATION_FAILED
+ ipsec auto --up road-east-ikev2
+1v2 "road-east-ikev2" #1: initiating IKEv2 connection
+1v2 "road-east-ikev2" #1: sent IKE_SA_INIT request
+1v2 "road-east-ikev2" #1: sent IKE_AUTH request {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
+002 "road-east-ikev2" #1: IKE SA authentication request rejected by peer: AUTHENTICATION_FAILED
 000 "road-east-ikev2" #2: scheduling retry attempt 1 of an unlimited number, but releasing whack
 road #
  # there should be two public keys. including road
@@ -62,8 +62,6 @@ road #
 000  
 000 List of Public Keys:
 000  
-000 TIMESTAMP, 2192 RSA Key AQO9bJbr3 (no private key), until TIMESTAMP warning (expires in X days)
-000        ID_IPV4_ADDR '192.1.2.23'
 000 TIMESTAMP, 2192 RSA Key AQPl33O2P (has private key), until --- -- --:--:-- ---- ok (expires never)
 000        ID_FQDN '@north.testing.libreswan.org'
 road #

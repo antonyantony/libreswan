@@ -21,11 +21,11 @@
 #include <unistd.h>
 #include <errno.h>
 
+#include <nss.h>		/* for NSS_IsInitialized() */
+
 #include "lswlog.h"
 #include "lswnss.h"
 #include "lswfips.h"
-
-#define LSW_FIPS_DEFAULT LSW_FIPS_UNSET
 
 /*
  * Is the machine running in FIPS kernel mode (fips=1 kernel argument)
@@ -45,42 +45,48 @@ static enum lsw_fips_mode lsw_fips_system(void)
  * yes (1), no (0), unknown(-1)
  */
 #ifdef FIPS_CHECK
-static enum lsw_fips_mode lsw_fipsproduct(void)
+static enum lsw_fips_mode lsw_fips_product(struct logger *logger)
 {
 	if (access(FIPSPRODUCTCHECK, F_OK) != 0) {
 		if (errno == ENOENT || errno == ENOTDIR) {
 			return LSW_FIPS_OFF;
-		} else {
-			loglog(RC_LOG_SERIOUS,
-				"FIPS ABORT: FIPS product check failed to determine status for %s: %d: %s",
-				FIPSPRODUCTCHECK, errno, strerror(errno));
-			return LSW_FIPS_UNKNOWN;
 		}
+
+		log_message(RC_LOG_SERIOUS, logger,
+			    "FIPS ABORT: FIPS product check failed to determine status for %s "PRI_ERRNO,
+			    FIPSPRODUCTCHECK, pri_errno(errno));
+		return LSW_FIPS_UNKNOWN;
 	}
 	return LSW_FIPS_ON;
 }
 #endif
 
-static enum lsw_fips_mode fips_mode = LSW_FIPS_DEFAULT;
+static enum lsw_fips_mode fips_mode = LSW_FIPS_UNKNOWN;
 
 /*
- * Should only be called directly by plutomain.c
+ * Only called by lsw_nss_setup().
  */
-enum lsw_fips_mode lsw_get_fips_mode(void)
+
+enum lsw_fips_mode lsw_get_fips_mode(struct logger *logger)
 {
 	/*
-	 * Fips mode as set by the below.
-	 *
-	 * Otherwise determine value using fipsproduct and fips_system.
-	 * The problem here is that confread.c calls this (from
-	 * addconn) without first calling set_fipsmode.
+	 * NSS returns bogus results for the FIPS check if you did not
+	 * open a database. If the program/tool runs libswan code
+	 * without a config file (and so it doesn't know where any nss
+	 * db lives), that tool should call NSS_NoDB_Init("."); before
+	 * using libswan code. See lsw_nss_setup() for an example.
 	 */
-	if (fips_mode > LSW_FIPS_UNSET) {
+	passert(NSS_IsInitialized());
+
+	/*
+	 * Has FIPS mode been forced using set_fips_mode()?
+	 */
+	if (fips_mode > LSW_FIPS_UNKNOWN) {
 		return fips_mode;
 	}
 
 #ifdef FIPS_CHECK
-	enum lsw_fips_mode product = lsw_fipsproduct();
+	enum lsw_fips_mode product = lsw_fips_product(logger);
 #endif
 	enum lsw_fips_mode system = lsw_fips_system();
 
@@ -92,23 +98,22 @@ enum lsw_fips_mode lsw_get_fips_mode(void)
 	if (product == LSW_FIPS_OFF && system == LSW_FIPS_ON)
 		fips_mode = LSW_FIPS_OFF;
 
-	libreswan_log("FIPS Product: %s", product == LSW_FIPS_UNKNOWN ? "UNKNOWN" : product == LSW_FIPS_ON ? "YES" : "NO");
-	libreswan_log("FIPS System: %s",  system == LSW_FIPS_UNKNOWN ? "UNKNOWN" :  system == LSW_FIPS_ON ? "YES" : "NO");
+	log_message(RC_LOG, logger, "FIPS Product: %s", product == LSW_FIPS_UNKNOWN ? "UNKNOWN" : product == LSW_FIPS_ON ? "YES" : "NO");
+	log_message(RC_LOG, logger, "FIPS System: %s",  system == LSW_FIPS_UNKNOWN ? "UNKNOWN" :  system == LSW_FIPS_ON ? "YES" : "NO");
 #endif
-	libreswan_log("FIPS Mode: %s", fips_mode == LSW_FIPS_ON ? "YES" : fips_mode == LSW_FIPS_OFF ? "NO" : "UNKNOWN");
+	log_message(RC_LOG, logger, "FIPS Mode: %s", fips_mode == LSW_FIPS_ON ? "YES" : fips_mode == LSW_FIPS_OFF ? "NO" : "UNKNOWN");
 	return fips_mode;
 }
 
 /*
- * Is the machine running in FIPS mode (fips product AND fips system (kernel) mode)
- * Only pluto needs to know UNKNOWN, so it can abort. Every other caller can
- * just check for fips mode using: if (libreswan_fipsmode())
+ * Is the machine running in FIPS mode (fips product AND fips system
+ * (kernel) mode) Only pluto needs to know UNKNOWN, so it can
+ * abort. Every other caller can just check for fips mode using: if
+ * (libreswan_fipsmode())
  */
 bool libreswan_fipsmode(void)
 {
-	if (fips_mode == LSW_FIPS_UNSET)
-		fips_mode = lsw_get_fips_mode();
-
+	pexpect(fips_mode != LSW_FIPS_UNKNOWN);
 	return fips_mode == LSW_FIPS_ON;
 }
 

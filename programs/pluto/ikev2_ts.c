@@ -23,15 +23,16 @@
  *
  */
 
-#include "lswlog.h"
-
 #include "defs.h"
+
+#include "log.h"
 #include "ikev2_ts.h"
 #include "connections.h"	/* for struct end */
 #include "demux.h"
 #include "virtual.h"
 #include "hostpair.h"
 #include "ip_info.h"
+#include "ip_selector.h"
 
 /*
  * While the RFC seems to suggest that the traffic selectors come in
@@ -54,66 +55,6 @@ enum fit {
 	END_WIDER_THAN_TS,
 };
 
-static bool rangeinrange(struct traffic_selector *ts1_ts, struct traffic_selector *ts2_ts)
-{
-	ip_subnet ts1_net, ts2_net;
-	err_t e;
-
-	e = rangetosubnet(&ts1_ts->net.start, &ts1_ts->net.end, &ts1_net);
-	if (e != NULL)
-		return FALSE;
-	e = rangetosubnet(&ts2_ts->net.start, &ts2_ts->net.end, &ts2_net);
-	if (e != NULL)
-		return FALSE;
-
-	subnet_buf b1,b2;
-	dbg("Checking to see if subnet %s is within subnet %s",
-		str_subnet_port(&ts1_net, &b1),
-		str_subnet_port(&ts2_net, &b2));
-
-	return subnetinsubnet(&ts1_net, &ts2_net);
-}
-
-/*
- * This is used when responding to a rekey. We only want to ensure
- * that their request is wider or equal to ours. We will ignore
- * their content afterwards and just re-propose our existing TS
- */
-static bool ts_in_tslist(struct traffic_selectors *recv,
-			struct traffic_selector *our_ts,
-			bool narrowing)
-{
-	for (unsigned int i = 0; i < recv->nr; i++) {
-		struct traffic_selector their = recv->ts[i];
-
-		if (narrowing) {
-			if (our_ts->ts_type == their.ts_type &&
-				(our_ts->ipprotoid == their.ipprotoid ||
-				their.ipprotoid == 0) &&
-				our_ts->startport >= their.startport &&
-				our_ts->endport <= their.endport &&
-				rangeinrange(our_ts, &their))
-				{
-					dbg("ts_in_tslist() is happy with narrowing");
-					return TRUE;
-				}
-		} else {
-			if (our_ts->ts_type == their.ts_type &&
-				our_ts->ipprotoid == their.ipprotoid &&
-				our_ts->startport == their.startport &&
-				our_ts->endport == their.endport &&
-				sameaddr(&our_ts->net.start, &their.net.start) &&
-				sameaddr(&our_ts->net.end, &their.net.end))
-				{
-					dbg("ts_in_tslist() is happy without narrowing");
-					return TRUE;
-				}
-		}
-	}
-
-	dbg("ts_in_tslist() did not find an acceptable Traffic Selector in the proposal that matches our connection");
-	return FALSE;
-}
 
 static const char *fit_string(enum fit fit)
 {
@@ -127,14 +68,14 @@ static const char *fit_string(enum fit fit)
 
 void ikev2_print_ts(const struct traffic_selector *ts)
 {
-	DBG(DBG_CONTROLMORE, {
+	if (DBGP(DBG_BASE)) {
 		DBG_log("printing contents struct traffic_selector");
 		DBG_log("  ts_type: %s", enum_name(&ikev2_ts_type_names, ts->ts_type));
 		DBG_log("  ipprotoid: %d", ts->ipprotoid);
 		DBG_log("  port range: %d-%d", ts->startport, ts->endport);
 		range_buf b;
 		DBG_log("  ip range: %s", str_range(&ts->net, &b));
-	});
+	}
 }
 
 /* rewrite me with address_as_{chunk,shunk}()? */
@@ -202,11 +143,9 @@ static stf_status ikev2_emit_ts(pb_stream *outpbs,
 		switch (ts->ts_type) {
 		case IKEv2_TS_IPV4_ADDR_RANGE:
 			its1.isat1_type = IKEv2_TS_IPV4_ADDR_RANGE;
-			its1.isat1_sellen = 2 * 4 + 8; /* See RFC 5669 SEction 13.3.1, 8 octet header plus 2 ip addresses */
 			break;
 		case IKEv2_TS_IPV6_ADDR_RANGE:
 			its1.isat1_type = IKEv2_TS_IPV6_ADDR_RANGE;
-			its1.isat1_sellen = 2 * 16 + 8; /* See RFC 5669 SEction 13.3.1, 8 octet header plus 2 ip addresses */
 			break;
 		case IKEv2_TS_FC_ADDR_RANGE:
 			DBG_log("IKEv2 Traffic Selector IKEv2_TS_FC_ADDR_RANGE not yet supported");
@@ -215,6 +154,7 @@ static stf_status ikev2_emit_ts(pb_stream *outpbs,
 		default:
 			DBG_log("IKEv2 Traffic Selector type '%d' not supported",
 				ts->ts_type);
+			return STF_INTERNAL_ERROR;	/* ??? should be bad_case()? */
 		}
 
 		if (!out_struct(&its1, &ikev2_ts1_desc, &ts_pbs, &ts_pbs2))
@@ -225,13 +165,20 @@ static stf_status ikev2_emit_ts(pb_stream *outpbs,
 	switch (ts->ts_type) {
 	case IKEv2_TS_IPV4_ADDR_RANGE:
 	case IKEv2_TS_IPV6_ADDR_RANGE:
-		if (!pbs_out_address(&ts->net.start, &ts_pbs2, "IP start")) {
+	{
+		diag_t d;
+		d = pbs_out_address(&ts_pbs2, &ts->net.start, "IP start");
+		if (d != NULL) {
+			log_diag(RC_LOG_SERIOUS, outpbs->out_logger, &d, "%s", "");
 			return STF_INTERNAL_ERROR;
 		}
-		if (!pbs_out_address(&ts->net.end, &ts_pbs2, "IP end")) {
+		d = pbs_out_address(&ts_pbs2, &ts->net.end, "IP end");
+		if (d != NULL) {
+			log_diag(RC_LOG_SERIOUS, outpbs->out_logger, &d, "%s", "");
 			return STF_INTERNAL_ERROR;
 		}
 		break;
+	}
 	case IKEv2_TS_FC_ADDR_RANGE:
 		DBG_log("Traffic Selector IKEv2_TS_FC_ADDR_RANGE not supported");
 		return STF_FAIL;
@@ -263,11 +210,10 @@ static struct traffic_selector impair_ts_to_supernet(const struct traffic_select
 {
 	struct traffic_selector ts_ret = *ts;
 
-	if (ts_ret.ts_type == IKEv2_TS_IPV4_ADDR_RANGE) {
+	if (ts_ret.ts_type == IKEv2_TS_IPV4_ADDR_RANGE)
 		ts_ret.net = range_from_subnet(&ipv4_info.all_addresses);
-	} else if (ts_ret.ts_type == IKEv2_TS_IPV6_ADDR_RANGE) {
+	else if (ts_ret.ts_type == IKEv2_TS_IPV6_ADDR_RANGE)
 		ts_ret.net = range_from_subnet(&ipv6_info.all_addresses);
-	}
 
 	ts_ret.net.is_subnet = true;
 
@@ -287,7 +233,7 @@ stf_status v2_emit_ts_payloads(const struct child_sa *child,
 		ts_i = &child->sa.st_ts_this;
 		ts_r = &child->sa.st_ts_that;
 		if (child->sa.st_state->kind == STATE_V2_REKEY_CHILD_I0 &&
-				DBGP(IMPAIR_REKEY_INITIATOR_SUPERNET)) {
+				impair.rekey_initiate_supernet) {
 			ts_i_impaired =  impair_ts_to_supernet(ts_i);
 			ts_i = ts_r =  &ts_i_impaired; /* supernet TSi = TSr = 0/0 */
 			range_buf tsi_buf;
@@ -296,13 +242,26 @@ stf_status v2_emit_ts_payloads(const struct child_sa *child,
 					str_range(&ts_i->net, &tsi_buf),
 					str_range(&ts_r->net, &tsr_buf));
 
+		} else if (child->sa.st_state->kind == STATE_V2_REKEY_CHILD_I0 &&
+				impair.rekey_initiate_subnet) {
+			ts_i_impaired =  impair_ts_to_subnet(ts_i);
+			ts_r_impaired =  impair_ts_to_subnet(ts_r);
+			ts_i = &ts_i_impaired;
+			ts_r = &ts_r_impaired;
+			range_buf tsi_buf;
+			range_buf tsr_buf;
+			dbg("rekey-initiate-subnet TSi and TSr set to %s %s",
+					str_range(&ts_i->net, &tsi_buf),
+					str_range(&ts_r->net, &tsr_buf));
+
 		}
+
 		break;
 	case SA_RESPONDER:
 		ts_i = &child->sa.st_ts_that;
 		ts_r = &child->sa.st_ts_this;
-		if (child->sa.st_state->kind == STATE_V2_REKEY_CHILD_R &&
-				DBGP(IMPAIR_REKEY_RESPOND_SUBNET)) {
+		if (child->sa.st_state->kind == STATE_V2_REKEY_CHILD_R0 &&
+				impair.rekey_respond_subnet) {
 			ts_i_impaired =  impair_ts_to_subnet(ts_i);
 			ts_r_impaired =  impair_ts_to_subnet(ts_r);
 
@@ -314,8 +273,8 @@ stf_status v2_emit_ts_payloads(const struct child_sa *child,
 					str_range(&ts_i->net, &tsi_buf),
 					str_range(&ts_r->net, &tsr_buf));
 		}
-		if (child->sa.st_state->kind == STATE_V2_REKEY_CHILD_R &&
-				DBGP(IMPAIR_REKEY_RESPOND_SUPERNET)) {
+		if (child->sa.st_state->kind == STATE_V2_REKEY_CHILD_R0 &&
+				impair.rekey_respond_supernet) {
 			ts_i_impaired =  impair_ts_to_supernet(ts_i);
 			ts_i = ts_r =  &ts_i_impaired; /* supernet TSi = TSr = 0/0 */
 			range_buf tsi_buf;
@@ -333,9 +292,9 @@ stf_status v2_emit_ts_payloads(const struct child_sa *child,
 	 * XXX: this looks wrong
 	 *
 	 * - instead of emitting two traffic selector payloads (TSi
-	 *   TSr) each containg all the corresponding traffic
+	 *   TSr) each containing all the corresponding traffic
 	 *   selectors, it is emitting a sequence of traffic selector
-	 *   payloads each containg just one traffic selector
+	 *   payloads each containing just one traffic selector
 	 *
 	 * - should multiple initiator (responder) traffic selector
 	 *   payloads be emitted then they will all contain the same
@@ -504,14 +463,14 @@ static int score_narrow_protocol(const struct end *end,
 	}
 	LSWDBGP(DBG_BASE, buf) {
 		const struct traffic_selector *ts = &tss->ts[index];
-		lswlogf(buf, MATCH_PREFIX "match end->protocol=%s%d %s %s[%u].ipprotoid=%s%d: ",
+		jam(buf, MATCH_PREFIX "match end->protocol=%s%d %s %s[%u].ipprotoid=%s%d: ",
 			end->protocol == 0 ? "*" : "", end->protocol,
 			fit_string(fit),
 			which, index, ts->ipprotoid == 0 ? "*" : "", ts->ipprotoid);
 		if (f > 0) {
-			lswlogf(buf, "YES fitness %d", f);
+			jam(buf, "YES fitness %d", f);
 		} else {
-			lswlogf(buf, "NO");
+			jam(buf, "NO");
 		}
 	}
 	return f;
@@ -676,15 +635,15 @@ static int score_address_range(const struct end *end,
 		f = f << 1;
 
 	LSWDBGP(DBG_BASE, buf) {
-	    lswlogf(buf, MATCH_PREFIX "match address end->client=");
+	    jam(buf, MATCH_PREFIX "match address end->client=");
 	    jam_subnet(buf, &end->client);
 	    jam(buf, " %s %s[%u]net=", fit_string(fit), which, index);
 	    jam_range(buf, &ts->net);
 	    jam(buf, ": ");
 	    if (f > 0) {
-		    lswlogf(buf, "YES fitness %d", f);
+		    jam(buf, "YES fitness %d", f);
 	    } else {
-		    lswlogf(buf, "NO");
+		    jam(buf, "NO");
 	    }
 	}
 	return f;
@@ -703,14 +662,13 @@ static struct score score_end(const struct end *end,
 			      const char *what, unsigned index)
 {
 	const struct traffic_selector *ts = &tss->ts[index];
-	DBG(DBG_CONTROLMORE,
-	    range_buf ts_net;
-	    DBG_log("    %s[%u] .net=%s .iporotoid=%d .{start,end}port=%d..%d",
-		    what, index,
-		    str_range(&ts->net, &ts_net),
-		    ts->ipprotoid,
-		    ts->startport,
-		    ts->endport));
+	range_buf ts_net;
+	dbg("    %s[%u] .net=%s .iporotoid=%d .{start,end}port=%d..%d",
+	    what, index,
+	    str_range(&ts->net, &ts_net),
+	    ts->ipprotoid,
+	    ts->startport,
+	    ts->endport);
 
 	struct score score = { .ok = false, };
 	score.address = score_address_range(end, tss, fit, what, index);
@@ -756,13 +714,13 @@ static struct best_score score_ends(enum fit fit,
 				    const struct traffic_selectors *tsr)
 {
 	if (DBGP(DBG_BASE)) {
-		subnet_buf ei3;
-		subnet_buf er3;
+		selector_buf ei3;
+		selector_buf er3;
 		connection_buf cib;
 		DBG_log("evaluating our conn="PRI_CONNECTION" I=%s:%d/%d R=%s:%d/%d%s to their:",
 			pri_connection(d, &cib),
-			str_subnet_port(&ends->i->client, &ei3), ends->i->protocol, ends->i->port,
-			str_subnet_port(&ends->r->client, &er3), ends->r->protocol, ends->r->port,
+			str_selector(&ends->i->client, &ei3), ends->i->protocol, ends->i->port,
+			str_selector(&ends->r->client, &er3), ends->r->protocol, ends->r->port,
 			is_virtual_connection(d) ? " (virt)" : "");
 	}
 
@@ -827,7 +785,7 @@ bool v2_process_ts_request(struct child_sa *child,
 	 */
 	if (md->st == &child->sa) {
 		dbg("Child SA TS Request has child->sa == md->st; so using child connection");
-	} else if (md->st == &ike_sa(&child->sa)->sa) {
+	} else if (md->st == &ike_sa(&child->sa, HERE)->sa) {
 		dbg("Child SA TS Request has ike->sa == md->st; so using parent connection");
 	} else {
 		dbg("Child SA TS Request has an unknown md->st; so using unknown connection");
@@ -893,11 +851,11 @@ bool v2_process_ts_request(struct child_sa *child,
 				    &sra->that.host_addr);
 
 		if (DBGP(DBG_BASE)) {
-			subnet_buf s2;
-			subnet_buf d2;
+			selector_buf s2;
+			selector_buf d2;
 			DBG_log("  checking hostpair %s -> %s is %s",
-				str_subnet_port(&sra->this.client, &s2),
-				str_subnet_port(&sra->that.client, &d2),
+				str_selector(&sra->this.client, &s2),
+				str_selector(&sra->that.client, &d2),
 				hp == NULL ? "not found" : "found");
 		}
 
@@ -1031,12 +989,12 @@ bool v2_process_ts_request(struct child_sa *child,
 				continue;
 			}
 			LSWDBGP(DBG_BASE, buf) {
-				lswlogf(buf, "  investigating template \"%s\";",
+				jam(buf, "  investigating template \"%s\";",
 					t->name);
 				if (t->foodgroup != NULL) {
-					lswlogf(buf, " food-group=\"%s\"", t->foodgroup);
+					jam(buf, " food-group=\"%s\"", t->foodgroup);
 				}
-				lswlogf(buf, " policy=%s", prettypolicy(t->policy & CONNECTION_POLICIES));
+				jam(buf, " policy=%s", prettypolicy(t->policy & CONNECTION_POLICIES));
 			}
 
 			/*
@@ -1069,7 +1027,7 @@ bool v2_process_ts_request(struct child_sa *child,
 				break;
 			case POLICY_IKEV2_ALLOW_NARROWING:
 				if (!LIN(POLICY_IKEV2_ALLOW_NARROWING, t->policy)) {
-					dbg("    skipping; can not narrow");
+					dbg("    skipping; cannot narrow");
 					continue;
 				}
 				break;
@@ -1224,13 +1182,12 @@ bool v2_process_ts_response(struct child_sa *child,
 	struct best_score best = score_ends(initiator_widening, c, &e, &tsi, &tsr);
 
 	if (!best.ok) {
-		loglog(RC_LOG_SERIOUS, "rejecting responder TSi/TSr Traffic Selector");
-			/* prevents parent from going to I3 */
-			return false;
+		dbg("reject responder TSi/TSr Traffic Selector");
+		/* prevents parent from going to I3 */
+		return false;
 	}
 
-	DBG(DBG_CONTROLMORE,
-	    DBG_log("found an acceptable TSi/TSr Traffic Selector"));
+	dbg("found an acceptable TSi/TSr Traffic Selector");
 	struct state *st = &child->sa;
 	memcpy(&st->st_ts_this, best.tsi,
 	       sizeof(struct traffic_selector));
@@ -1250,8 +1207,6 @@ bool v2_process_ts_response(struct child_sa *child,
 	c->spd.this.port = st->st_ts_this.startport;
 	c->spd.this.protocol = st->st_ts_this.ipprotoid;
 	setportof(htons(c->spd.this.port),
-		  &c->spd.this.host_addr);
-	setportof(htons(c->spd.this.port),
 		  &c->spd.this.client.addr);
 
 	c->spd.this.has_client =
@@ -1262,8 +1217,6 @@ bool v2_process_ts_response(struct child_sa *child,
 	c->spd.that.client = tmp_subnet_r;
 	c->spd.that.port = st->st_ts_that.startport;
 	c->spd.that.protocol = st->st_ts_that.ipprotoid;
-	setportof(htons(c->spd.that.port),
-		  &c->spd.that.host_addr);
 	setportof(htons(c->spd.that.port),
 		  &c->spd.that.client.addr);
 
@@ -1280,36 +1233,51 @@ bool v2_process_ts_response(struct child_sa *child,
  * "when rekeying, the new Child SA SHOULD NOT have different Traffic
  *  Selectors and algorithms than the old one."
  *
+ * However, when narrowed down, the original TSi/TSr is wider than the
+ * returned narrowed TSi/TSr. Windows 10 is known to use the original
+ * and not the narrowed TSi/TSr.
+ *
+ * RFC 7296 #1.3.3 "The Traffic Selectors for traffic to be sent
+ * on that SA are specified in the TS payloads in the response,
+ * which may be a subset of what the initiator of the Child SA proposed."
+ *
+ * However, the rekey initiator, when it is the original initiator of
+ * the Child SA, may request a super set. And responder should
+ * respond with same set as initially negotiated, ie RFC 7296 #2.8
+ *
+ * See RFC 7296 Section 1.7. for the above change.
+ * Significant Differences between RFC 4306 and RFC 5996
+ *
  * We already matched the right connection by the SPI of v2N_REKEY_SA
  */
-stf_status child_rekey_ts_verify(struct msg_digest *md)
+bool child_rekey_responder_ts_verify(struct child_sa *child, struct msg_digest *md)
 {
-	struct state *st = md->st;
-	passert(st->st_state->kind == STATE_V2_REKEY_CHILD_R || st->st_state->kind == STATE_V2_REKEY_CHILD_I);
+	if (!pexpect(child->sa.st_state->kind == STATE_V2_REKEY_CHILD_R0))
+		return false;
 
+	const struct connection *c = child->sa.st_connection;
 	struct traffic_selectors their_tsis = { .nr = 0, };
 	struct traffic_selectors their_tsrs = { .nr = 0, };
-	enum message_role md_role = v2_msg_role(md);
 
-	/* should really return stf_status, not bool */
 	if (!v2_parse_tss(md, &their_tsis, &their_tsrs)) {
-		loglog(RC_LOG_SERIOUS, "Received malformed TSi/TSr payload(s)");
-		return STF_FAIL + v2N_INVALID_SYNTAX;
+		log_state(RC_LOG_SERIOUS, &child->sa, "received malformed TSi/TSr payload(s)");
+		return false;
 	}
 
-	struct traffic_selector ts_this = ikev2_end_to_ts(&st->st_connection->spd.this);
-	struct traffic_selector ts_that = ikev2_end_to_ts(&st->st_connection->spd.that);
-	bool narrowing = LIN(POLICY_IKEV2_ALLOW_NARROWING, md->st->st_connection->policy) ||
-			 md->st->st_connection->pool != NULL; /* using addresspool really means narrowing */
+	const struct ends ends = {
+		.i = &c->spd.that,
+		.r = &c->spd.this,
+	};
 
-	if (!ts_in_tslist(&their_tsis, (md_role == MESSAGE_REQUEST) ? &ts_that : &ts_this, narrowing)) {
-		loglog(RC_LOG_SERIOUS, "Received TSi payload does not contain existing IPsec SA traffic Selectors");
-		return STF_FAIL + v2N_TS_UNACCEPTABLE;
+	enum fit fitness = END_NARROWER_THAN_TS;
+
+	struct best_score score = score_ends(fitness, c, &ends, &their_tsis,
+			&their_tsrs);
+
+	if (!score.ok) {
+		loglog(RC_LOG_SERIOUS, "Rekey: received Traffic Selectors does not contain existing IPsec SA Traffic Selectors");
+		return false;
 	}
 
-	if (!ts_in_tslist(&their_tsrs, (md_role == MESSAGE_REQUEST) ? &ts_this : &ts_that, narrowing)) {
-		loglog(RC_LOG_SERIOUS, "Received TSr payload(s) does not contain existing IPsec SA Traffic Selectors");
-		return STF_FAIL + v2N_TS_UNACCEPTABLE;
-	}
-	return STF_OK;
+	return true;
 }

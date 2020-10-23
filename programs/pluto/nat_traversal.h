@@ -74,16 +74,13 @@
 void init_nat_traversal(deltatime_t keep_alive_period);
 
 extern bool nat_traversal_enabled;
-extern bool nat_traversal_support_non_ike;
-extern bool nat_traversal_support_port_floating;
 
 /**
  * NAT-D
  */
-extern bool ikev1_nat_traversal_add_natd(uint8_t np, pb_stream *outs,
-				   const struct msg_digest *md);
-extern void ikev2_natd_lookup(struct msg_digest *md,
-			      const ike_spi_t *ike_responder_spi);
+extern bool ikev1_nat_traversal_add_natd(pb_stream *outs,
+					 const struct msg_digest *md);
+extern bool v2_nat_detected(struct ike_sa *ike, struct msg_digest *md);
 
 /**
  * NAT-OA
@@ -92,12 +89,12 @@ struct hidden_variables;	/* forward */
 
 void nat_traversal_natoa_lookup(struct msg_digest *md,
 				struct hidden_variables *hv);
-bool nat_traversal_add_natoa(uint8_t np, pb_stream *outs,
+bool nat_traversal_add_natoa(pb_stream *outs,
 			     struct state *st, bool initiator);
 /*
  * move initiator endpoints (src, dst) to NAT ports.
  */
-void natify_initiator_endpoints(struct state *st, where_t where);
+bool v2_natify_initiator_endpoints(struct ike_sa *ike, where_t where);
 void v1_maybe_natify_initiator_endpoints(struct state *st,
 					 where_t where);
 
@@ -105,17 +102,14 @@ void v1_maybe_natify_initiator_endpoints(struct state *st,
  * NAT-keep_alive
  */
 void nat_traversal_new_ka_event(void);
-void nat_traversal_ka_event(void);
+void nat_traversal_ka_event(struct fd *whackfd);
 
 extern void ikev1_natd_init(struct state *st, struct msg_digest *md);
-
-extern int nat_traversal_espinudp_socket(int sk, const char *fam);
 
 /**
  * Vendor ID
  */
-bool nat_traversal_add_vid(uint8_t np, pb_stream *outs);
-bool nat_traversal_insert_vid(uint8_t np, pb_stream *outs, const struct connection *c);
+bool nat_traversal_insert_vid(pb_stream *outs, const struct connection *c);
 void set_nat_traversal(struct state *st, const struct msg_digest *md);
 
 void nat_traversal_change_port_lookup(struct msg_digest *md, struct state *st);

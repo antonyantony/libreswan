@@ -20,7 +20,6 @@
  * for more details.
  */
 
-#include <nss.h>
 
 #include "lswalloc.h"
 #include "lswlog.h"
@@ -39,8 +38,8 @@ static err_t rsa_pubkey_to_rfc_resource_record(chunk_t exponent, chunk_t modulus
 	 * just allocate 3 extra bytes.
 	 */
 	size_t rrlen = exponent.len + modulus.len + 3;
-	u_char *buf = alloc_bytes(rrlen, "buffer for rfc3110");
-	u_char *p = buf;
+	uint8_t *buf = alloc_bytes(rrlen, "buffer for rfc3110");
+	uint8_t *p = buf;
 
 	if (exponent.len <= 255) {
 		*p++ = exponent.len;
@@ -105,8 +104,8 @@ static err_t rfc_resource_record_to_rsa_pubkey(chunk_t rr, chunk_t *e, chunk_t *
 	/*
 	 * Does the exponent fall off the end of the resource record?
 	 */
-	u_char *const exponent_end = exponent.ptr + exponent.len;
-	u_char *const rr_end = rr.ptr + rr.len;
+	uint8_t *const exponent_end = exponent.ptr + exponent.len;
+	uint8_t *const rr_end = rr.ptr + rr.len;
 	if (exponent_end > rr_end) {
 		return "truncated RSA public key resource record exponent";
 	}
@@ -155,13 +154,13 @@ err_t rsa_pubkey_to_base64(chunk_t exponent, chunk_t modulus, char **base64_rr)
 	char *rr = alloc_bytes(rr_len, "base64 resource record");
 	size_t n = datatot(rr_chunk.ptr, rr_chunk.len, 's', rr, rr_len);
 	if (n >= rr_len) {
-		freeanychunk(rr_chunk);
+		free_chunk_content(&rr_chunk);
 		pfreeany(rr);
 		return "base64 encoded RSA public key resource record larger than expected";
 	}
 
 	*base64_rr = rr;
-	freeanychunk(rr_chunk);
+	free_chunk_content(&rr_chunk);
 	return NULL;
 }
 
@@ -208,7 +207,7 @@ err_t unpack_RSA_public_key(struct RSA_public_key *rsa, const chunk_t *pubkey)
 		DBG_log("keyid: *%s", rsa->keyid);
 		DBG_dump_hunk("  n", rsa->n);
 		DBG_dump_hunk("  e", rsa->e);
-		DBG_log_ckaid("  CKAID", rsa->ckaid);
+		DBG_dump_hunk("  CKAID", rsa->ckaid);
 	}
 
 	return NULL;
@@ -216,30 +215,28 @@ err_t unpack_RSA_public_key(struct RSA_public_key *rsa, const chunk_t *pubkey)
 
 err_t unpack_ECDSA_public_key(struct ECDSA_public_key *ecdsa, const chunk_t *pubkey)
 {
-	/* ??? can this be cloned later, after form_ckaid_ecdsa has succeeded? */
-	ecdsa->pub = clone_hunk(*pubkey, "public value");
+	err_t e;
 
-	ckaid_t ckaid;
-	err_t err = form_ckaid_ecdsa(ecdsa->pub, &ckaid);
-	if (err != NULL) {
-		freeanychunk(ecdsa->pub);
-		return err;
+	e = form_ckaid_ecdsa(*pubkey, &ecdsa->ckaid);
+	if (e != NULL) {
+		return e;
 	}
 
-	memcpy(ecdsa->keyid, pubkey->ptr, KEYID_BUF-1);
-	ecdsa->keyid[KEYID_BUF-1] = '\0';
+	/* use the ckaid since that digested the entire pubkey */
+	int n = keyblobtoid(ecdsa->ckaid.ptr, ecdsa->ckaid.len, ecdsa->keyid, sizeof(ecdsa->keyid));
+	if (n == 0) {
+		return "problem creating key-id from ECDSA public";
+	}
 
+	ecdsa->pub = clone_hunk(*pubkey, "public value");
 	ecdsa->k = pubkey->len;
-	ecdsa->ckaid = ckaid;
-
-	/* generate the CKAID */ /* ??? really? Not done above? */
 
 	if (DBGP(DBG_BASE)) {
 		/* pubkey information isn't DBG_PRIVATE */
 		DBG_log("keyid: *%s", ecdsa->keyid);
-		DBG_log("  key size: *%s", ecdsa->keyid);
+		DBG_log("  k: %d", ecdsa->k);
 		DBG_dump_hunk("  pub", ecdsa->pub);
-		DBG_log_ckaid("  CKAID", ecdsa->ckaid);
+		DBG_dump_hunk("  CKAID", ecdsa->ckaid);
 	}
 
        return NULL;

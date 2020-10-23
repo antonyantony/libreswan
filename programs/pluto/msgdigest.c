@@ -15,12 +15,12 @@
  *
  */
 
-#include "lswlog.h"
-
 #include "defs.h"
+#include "log.h"
 #include "demux.h"      /* needs packet.h */
+#include "iface.h"
 
-struct msg_digest *alloc_md(const char *mdname)
+struct msg_digest *alloc_md(const struct iface_port *ifp, const ip_endpoint *sender, where_t where)
 {
 	/* convenient initializer:
 	 * - all pointers NULL
@@ -28,19 +28,21 @@ struct msg_digest *alloc_md(const char *mdname)
 	 * - .encrypted = FALSE
 	 */
 	static const struct msg_digest blank_md;
-	struct msg_digest *md = alloc_thing(struct msg_digest, mdname);
+	struct msg_digest *md = alloc_thing(struct msg_digest, where.func);
 	*md = blank_md;
+	ref_init(md, where);
+	md->iface = ifp;
+	md->sender = *sender;
+	md->md_logger = alloc_logger(md, &logger_message_vec, where);
 	return md;
 }
 
 struct msg_digest *clone_raw_md(struct msg_digest *md, const char *name)
 {
-	struct msg_digest *clone = alloc_md(name);
+	struct msg_digest *clone = alloc_md(md->iface, &md->sender, HERE);
 	clone->fake_clone = true;
 	clone->md_inception = threadtime_start();
-	/* raw_packet */
-	clone->iface = md->iface; /* copy reference */
-	clone->sender = md->sender; /* copy value */
+	clone->md_logger = alloc_logger(md, &logger_message_vec, HERE);
 	/* packet_pbs ... */
 	size_t packet_size = pbs_room(&md->packet_pbs);
 	void *packet_bytes = clone_bytes(md->packet_pbs.start, packet_size, name);
@@ -48,17 +50,22 @@ struct msg_digest *clone_raw_md(struct msg_digest *md, const char *name)
 	return clone;
 }
 
-static void free_mdp(struct msg_digest **mdp)
+struct msg_digest *md_addref(struct msg_digest *md, where_t where)
 {
-	freeanychunk((*mdp)->raw_packet);
+	return ref_add(md, where);
+}
+
+static void free_mdp(struct msg_digest **mdp,
+		     where_t unused_where UNUSED)
+{
+	free_chunk_content(&(*mdp)->raw_packet);
+	free_logger(&(*mdp)->md_logger);
 	pfreeany((*mdp)->packet_pbs.start);
 	pfree(*mdp);
 	*mdp = NULL;
 }
 
-void release_any_md(struct msg_digest **mdp)
+void md_delref(struct msg_digest **mdp, where_t where)
 {
-	if (*mdp != NULL) {
-		free_mdp(mdp);
-	}
+	ref_delete(mdp, free_mdp, where);
 }

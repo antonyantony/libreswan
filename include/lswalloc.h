@@ -21,19 +21,29 @@
 #ifndef _LSW_ALLOC_H_
 #define _LSW_ALLOC_H_
 
-#include "constants.h"
 #include <sys/types.h>
+#include <stdarg.h>
+
+#include "constants.h"
+#include "lswcdefs.h"
+
+struct logger;
 
 /* memory allocation */
 
 extern void pfree(void *ptr);
+
+/* Never returns NULL; allocates 0 bytes as 1-byte */
 extern void *alloc_bytes(size_t size, const char *name);
+
+/* clone's NULL bytes as NULL bytes, not 1-byte */
 extern void *clone_bytes(const void *orig, size_t size,
-			  const char *name);
+			 const char *name);
+
 void realloc_bytes(void **ptr, size_t old_size, size_t new_size, const char *name);
 
 extern bool leak_detective;
-extern void report_leaks(void);
+extern void report_leaks(struct logger *logger);
 
 /*
  * Notes on __typeof__().
@@ -74,8 +84,8 @@ extern void report_leaks(void);
 	{								\
 		void *things_ = THINGS;					\
 		realloc_bytes(&things_,					\
-			      OLD_COUNT * sizeof((THINGS)[0]),		\
-			      NEW_COUNT * sizeof((THINGS)[0]),		\
+			      (OLD_COUNT) * sizeof((THINGS)[0]),	\
+			      (NEW_COUNT) * sizeof((THINGS)[0]),	\
 			      NAME);					\
 		THINGS = things_;					\
 	}
@@ -105,5 +115,9 @@ extern void report_leaks(void);
  */
 void *uninitialized_malloc(size_t size, const char *name);
 void *uninitialized_realloc(void *ptr, size_t size, const char *name);
+
+/* can't use vaprintf() as it calls malloc() directly */
+char *alloc_printf(const char *fmt, ...) PRINTF_LIKE(1) MUST_USE_RESULT;
+char *alloc_vprintf(const char *fmt, va_list ap) MUST_USE_RESULT;
 
 #endif /* _LSW_ALLOC_H_ */

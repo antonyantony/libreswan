@@ -1,28 +1,9 @@
-USE_NETKEY = true
+USE_XFRM = true
 
 USERLAND_CFLAGS += -DTimeZoneOffset=timezone
 
-# This normally comes in via bind9/config.h
-# Fixes a warning in lib/libisc/random.c:44
-USERLAND_CFLAGS += -DHAVE_SYS_TYPES_H=1
-USERLAND_CFLAGS += -DHAVE_UNISTD_H=1
-
 # Not all environments set this? happened on a arm_tools cross compile
 USERLAND_CFLAGS += -Dlinux
-
-# udpfromto socket option for Linux
-USERLAND_CFLAGS += -DHAVE_UDPFROMTO=1
-USERLAND_CFLAGS += -DHAVE_IP_PKTINFO=1
-
-
-KLIPSSRC=${LIBRESWANSRCDIR}/linux/net/ipsec
-
-MODULE_DEF_INCLUDE=${LIBRESWANSRCDIR}/packaging/linus/config-all.h
-MODULE_DEFCONFIG?=${KLIPSSRC}/defconfig
-MOD24BUILDDIR?=${LIBRESWANSRCDIR}/modobj24
-MODBUILDDIR?=${LIBRESWANSRCDIR}/modobj
-
-MODULE_FLAGS:=KLIPSMODULE=true -f ${MODULE_DEFCONFIG}
 
 PORTDEFINE=-DSCANDIR_HAS_CONST
 
@@ -49,19 +30,91 @@ ifndef LINUX_VARIANT_VERSION
 endif
 #(info LINUX_VARIANT_VERSION=$(LINUX_VARIANT_VERSION))
 
+ifeq ($(LINUX_VARIANT),debian)
+  DEFAULT_DNSSEC_ROOTKEY_FILE?=/usr/share/dns/root.key
+  ifndef VERSION_CODENAME
+    ifneq ($(wildcard /etc/os-release),)
+      VERSION_CODENAME:=$(shell sed -n -e 's/^VERSION_CODENAME=//p' /etc/os-release)
+      export VERSION_CODENAME
+    endif
+  endif
+
+  ifeq ($(VERSION_CODENAME),buster)
+    USE_NSS_KDF?=false
+  endif
+
+  ifeq ($(VERSION_CODENAME),stretch)
+    USE_NSS_KDF?=false
+    USE_XFRM_INTERFACE_IFLA_HEADER?=true
+    USE_DNSSEC?=false
+    USE_DH31?=false
+    USE_NSS_IPSEC_PROFILE?=false
+    USE_NSS_AVA_COPY?=true
+  endif
+endif
+
+ifeq ($(LINUX_VARIANT),ubuntu)
+  DEFAULT_DNSSEC_ROOTKEY_FILE?=/usr/share/dns/root.key
+  VERSION_CODENAME:=$(shell sed -n -e 's/^VERSION_CODENAME=//p' /etc/os-release)
+
+  ifeq ($(VERSION_CODENAME),focal)
+    USE_NSS_KDF?=false
+  endif
+
+  ifeq ($(VERSION_CODENAME),stretch)
+    USE_NSS_KDF?=false
+    USE_XFRM_INTERFACE_IFLA_HEADER?=true
+    USE_DNSSEC?=false
+    USE_DH31?=false
+    USE_NSS_IPSEC_PROFILE?=false
+    USE_NSS_AVA_COPY?=true
+  endif
+
+  ifeq ($(VERSION_CODENAME),cosmic)
+    USE_NSS_KDF?=false
+    USE_XFRM_INTERFACE_IFLA_HEADER?=true
+    USE_NSS_IPSEC_PROFILE?=false
+  endif
+
+  ifeq ($(VERSION_CODENAME),bionic)
+    USE_NSS_KDF?=false
+    USE_XFRM_INTERFACE_IFLA_HEADER?=true
+    USE_NSS_IPSEC_PROFILE?=false
+  endif
+
+  ifeq ($(VERSION_CODENAME),xenial)
+    USE_NSS_KDF?=false
+    USE_XFRM_INTERFACE?=false
+    USE_DNSSEC?=false
+    USE_DH31?=false
+    USE_NSS_IPSEC_PROFILE?=false
+    USE_NSS_AVA_COPY?=true
+    WERROR_CFLAGS=-Werror -Wno-missing-field-initializers -Wno-error=address
+    USE_GLIBC_KERN_FLIP_HEADERS?=true
+  endif
+endif
+
 ifeq ($(LINUX_VARIANT),fedora)
-  USE_FIPSCHECK?=true
   USE_LINUX_AUDIT?=true
   USE_SECCOMP?=true
   USE_LABELED_IPSEC?=true
+
+  ifeq ($(LINUX_VARIANT_VERSION),30)
+    USE_NSS_KDF?=false
+  endif
+
+  ifeq ($(LINUX_VARIANT_VERSION),29)
+    USE_NSS_KDF?=false
+  endif
+
+  ifeq ($(LINUX_VARIANT_VERSION),28)
+    USE_NSS_KDF?=false
+  endif
+
   # Assume that fedora 22 (used by test VMs) needs the hack
   ifeq ($(LINUX_VARIANT_VERSION),22)
     USE_GLIBC_KERN_FLIP_HEADERS=true
   endif
+
 endif
 #(info USE_GLIBC_KERN_FLIP_HEADERS=$(USE_GLIBC_KERN_FLIP_HEADERS))
-
-ifndef NSS_CFLAGS
-  NSS_CFLAGS := $(shell pkg-config --cflags nss)
-  export NSS_CFLAGS
-endif

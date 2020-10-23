@@ -15,10 +15,10 @@
  * for more details.
  */
 
-#include "lswlog.h"
 #include "ike_alg_hash.h"
 
 #include "defs.h"	/* for all_zero */
+#include "log.h"
 #include "state.h"	/* for ike_sa */
 #include "ike_spi.h"
 #include "rnd.h"
@@ -56,6 +56,15 @@ void refresh_ike_spi_secret(void)
  */
 ike_spi_t ike_initiator_spi(void)
 {
+	if (impair.ike_initiator_spi > 0) {
+		/* 1-biased so that 0 is "disable" */
+		uintmax_t v = impair.ike_initiator_spi - 1;
+		dbg("forcing IKE initiator SPI to 0x%jx", v);
+		ike_spi_t spi;
+		hton_chunk(v, THING_AS_CHUNK(spi));
+		return spi;
+	}
+
 	ike_spi_t spi;
 	do {
 		get_rnd_bytes(spi.bytes, sizeof(spi));
@@ -72,21 +81,31 @@ ike_spi_t ike_initiator_spi(void)
  * it will prevent an attacker from depleting our random pool
  * or entropy.
  */
-ike_spi_t ike_responder_spi(const ip_address *addr)
+ike_spi_t ike_responder_spi(const ip_address *addr, struct logger *logger)
 {
+	if (impair.ike_responder_spi > 0) {
+		/* 1-biased so that 0 is "disable" */
+		uintmax_t v = impair.ike_responder_spi - 1;
+		dbg("forcing IKE responder SPI to 0x%jx", v);
+		ike_spi_t spi;
+		hton_chunk(v, THING_AS_CHUNK(spi));
+		return spi;
+	}
+
 	ike_spi_t spi;
 	do {
 		static uint32_t counter = 0; /* STATIC */
 
 		struct crypt_hash *ctx = crypt_hash_init("IKE SPIr",
-							 &ike_alg_hash_sha2_256);
+							 &ike_alg_hash_sha2_256,
+							 logger);
 
 		crypt_hash_digest_thing(ctx, "addr", *addr);
 		crypt_hash_digest_thing(ctx, "sod", ike_spi_secret);
 		counter++;
 		crypt_hash_digest_thing(ctx, "counter", counter);
 
-		u_char buffer[SHA2_256_DIGEST_SIZE];
+		uint8_t buffer[SHA2_256_DIGEST_SIZE];
 		crypt_hash_final_bytes(&ctx, buffer, SHA2_256_DIGEST_SIZE);
 		/* cookie size is smaller than hash output size */
 		passert(IKE_SA_SPI_SIZE <= SHA2_256_DIGEST_SIZE);

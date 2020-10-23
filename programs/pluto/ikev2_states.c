@@ -34,6 +34,7 @@
 #include "ikev2.h"
 #include "log.h"
 #include "connections.h"
+#include "ikev2_notify.h"
 
 struct finite_state v2_states[] = {
 
@@ -41,6 +42,14 @@ struct finite_state v2_states[] = {
 		.kind = KIND,					\
 		.name = #KIND,					\
 		.short_name = #KIND + 6/*STATE_*/,		\
+		.story = STORY,					\
+		.category = CAT,				\
+	}
+
+#define V2(KIND, STORY, CAT) [KIND - STATE_IKEv2_FLOOR] = {	\
+		.kind = KIND,					\
+		.name = #KIND,					\
+		.short_name = #KIND + 9/*STATE_V2_*/,		\
 		.story = STORY,					\
 		.category = CAT,				\
 	}
@@ -60,45 +69,44 @@ struct finite_state v2_states[] = {
 	 * IKE SA.
 	 */
 
-	S(STATE_PARENT_I1, "sent v2I1, expected v2R1", CAT_HALF_OPEN_IKE_SA),
-	S(STATE_PARENT_R0, "processing SA_INIT request", CAT_HALF_OPEN_IKE_SA),
-	S(STATE_PARENT_R1, "received v2I1, sent v2R1", CAT_HALF_OPEN_IKE_SA),
+	S(STATE_PARENT_I1, "sent IKE_SA_INIT request", CAT_HALF_OPEN_IKE_SA),
+	S(STATE_PARENT_R0, "processing IKE_SA_INIT request", CAT_HALF_OPEN_IKE_SA),
+	S(STATE_PARENT_R1, "sent IKE_SA_INIT reply", CAT_HALF_OPEN_IKE_SA),
 
 	/*
 	 * All IKEv1 MAIN modes except the first (half-open) and last
 	 * ones are not authenticated.
 	 */
 
-	S(STATE_PARENT_I2, "sent v2I2, expected v2R2", CAT_OPEN_IKE_SA),
+	S(STATE_PARENT_I2, "sent IKE_AUTH request", CAT_OPEN_IKE_SA),
+
+	/* IKE exchange can also create a child */
+
+	S(STATE_V2_IKE_AUTH_CHILD_I0, "ephemeral: initiator creating child from IKE exchange", CAT_IGNORE),
+	S(STATE_V2_IKE_AUTH_CHILD_R0, "ephemeral: responder creating child from IKE exchange", CAT_IGNORE),
 
 	/*
-	 * IKEv1 established states.
-	 *
-	 * XAUTH, seems to a second level of authentication performed
-	 * after the connection is established and authenticated.
+	 * CREATE_CHILD_SA exchanges.
 	 */
 
 	/* isn't this an ipsec state */
-	S(STATE_V2_CREATE_I0, "STATE_V2_CREATE_I0", CAT_ESTABLISHED_IKE_SA),
-	 /* isn't this an ipsec state */
-	S(STATE_V2_CREATE_I, "sent IPsec Child req wait response", CAT_ESTABLISHED_IKE_SA),
-	S(STATE_V2_REKEY_IKE_I0, "STATE_V2_REKEY_IKE_I0", CAT_ESTABLISHED_IKE_SA),
-	S(STATE_V2_REKEY_IKE_I, "STATE_V2_REKEY_IKE_I", CAT_ESTABLISHED_IKE_SA),
+	S(STATE_V2_NEW_CHILD_I0, "STATE_V2_NEW_CHILD_I0", CAT_ESTABLISHED_IKE_SA),
+	S(STATE_V2_NEW_CHILD_I1, "sent CREATE_CHILD_SA request for new IPsec SA", CAT_ESTABLISHED_IKE_SA),
+	S(STATE_V2_NEW_CHILD_R0, "STATE_V2_NEW_CHILD_R0", CAT_ESTABLISHED_IKE_SA),
 	S(STATE_V2_REKEY_CHILD_I0, "STATE_V2_REKEY_CHILD_I0", CAT_ESTABLISHED_IKE_SA),
-	S(STATE_V2_REKEY_CHILD_I, "STATE_V2_REKEY_CHILD_I", CAT_ESTABLISHED_IKE_SA),
-	S(STATE_V2_CREATE_R, "STATE_V2_CREATE_R", CAT_ESTABLISHED_IKE_SA),
-	S(STATE_V2_REKEY_IKE_R, "STATE_V2_REKEY_IKE_R", CAT_ESTABLISHED_IKE_SA),
-	S(STATE_V2_REKEY_CHILD_R, "STATE_V2_REKEY_CHILD_R", CAT_ESTABLISHED_IKE_SA),
+	S(STATE_V2_REKEY_CHILD_I1, "sent CREATE_CHILD_SA request to rekey IPsec SA", CAT_ESTABLISHED_IKE_SA),
+	S(STATE_V2_REKEY_CHILD_R0, "STATE_V2_REKEY_CHILD_R0", CAT_ESTABLISHED_IKE_SA),
+	S(STATE_V2_REKEY_IKE_I0, "STATE_V2_REKEY_IKE_I0", CAT_ESTABLISHED_IKE_SA),
+	S(STATE_V2_REKEY_IKE_I1, "sent CREATE_CHILD_SA request to rekey IKE SA", CAT_ESTABLISHED_IKE_SA),
+	S(STATE_V2_REKEY_IKE_R0, "STATE_V2_REKEY_IKE_R0", CAT_ESTABLISHED_IKE_SA),
 
 	/*
 	 * IKEv2 established states.
 	 */
 
-	S(STATE_PARENT_I3, "PARENT SA established", CAT_ESTABLISHED_IKE_SA),
-	S(STATE_PARENT_R2, "received v2I2, PARENT SA established", CAT_ESTABLISHED_IKE_SA),
-
-	S(STATE_V2_IPSEC_I, "IPsec SA established", CAT_ESTABLISHED_CHILD_SA),
-	S(STATE_V2_IPSEC_R, "IPsec SA established", CAT_ESTABLISHED_CHILD_SA),
+	V2(STATE_V2_ESTABLISHED_IKE_SA, "established IKE SA", CAT_ESTABLISHED_IKE_SA),
+	/* this message is used for both initial exchanges and rekeys */
+	V2(STATE_V2_ESTABLISHED_CHILD_SA, "IPsec SA established", CAT_ESTABLISHED_CHILD_SA),
 
 	/* ??? better story needed for these */
 	S(STATE_IKESA_DEL, "STATE_IKESA_DEL", CAT_ESTABLISHED_IKE_SA),
@@ -171,15 +179,8 @@ struct ikev2_payload_errors ikev2_verify_payloads(struct msg_digest *md,
 	}
 
 	if (payloads->notification != v2N_NOTHING_WRONG) {
-		bool found = false;
-		for (struct payload_digest *pd = md->chain[ISAKMP_NEXT_v2N];
-		     pd != NULL; pd = pd->next) {
-			if (pd->payload.v2n.isan_type == payloads->notification) {
-				found = true;
-				break;
-			}
-		}
-		if (!found) {
+		enum v2_pbs v2_pbs = v2_notification_to_v2_pbs(payloads->notification);
+		if (md->pbs[v2_pbs] == NULL) {
 			errors.bad = true;
 			errors.notification = payloads->notification;
 		}
@@ -188,24 +189,26 @@ struct ikev2_payload_errors ikev2_verify_payloads(struct msg_digest *md,
 	return errors;
 }
 
-const struct state_v2_microcode *find_v2_state_transition(const struct finite_state *state,
+const struct state_v2_microcode *find_v2_state_transition(struct logger *logger,
+							  const struct finite_state *state,
 							  struct msg_digest *md)
 {
+	dbg("looking for message matching transition from %s", state->name);
 	struct ikev2_payload_errors message_payload_status = { .bad = false };
 	struct ikev2_payload_errors encrypted_payload_status = { .bad = false };
 	for (unsigned i = 0; i < state->nr_transitions; i++) {
 		const struct state_v2_microcode *transition = &state->v2_transitions[i];
+		dbg("  trying %s", transition->story);
 		/* message type? */
 		if (transition->recv_type != md->hdr.isa_xchg) {
+			dbg("    message has wrong exchange type");
 			continue;
 		}
 		/* role? */
-		if (transition->flags & SMF2_MESSAGE_RESPONSE &&
-		    v2_msg_role(md) != MESSAGE_RESPONSE) {
-			continue;
-		}
-		if (transition->flags & SMF2_MESSAGE_REQUEST &&
-		    v2_msg_role(md) != MESSAGE_REQUEST) {
+		if (transition->recv_role != v2_msg_role(md)) {
+			dbg("    not a %s", (transition->recv_role == MESSAGE_REQUEST ? "request" :
+					     transition->recv_role == MESSAGE_RESPONSE ? "response" :
+					     "no-message"));
 			continue;
 		}
 		/* message payloads */
@@ -215,13 +218,14 @@ const struct state_v2_microcode *find_v2_state_transition(const struct finite_st
 		struct ikev2_payload_errors message_payload_errors
 			= ikev2_verify_payloads(md, &md->message_payloads,
 						&transition->message_payloads);
-		if (message_payload_errors.bad &&
-		    !message_payload_status.bad) {
-			/* save first */
+		if (message_payload_errors.bad) {
+			dbg("    message has errors");
+			/* save error for last pattern!?! */
 			message_payload_status = message_payload_errors;
 			continue;
 		}
 		if (!(transition->message_payloads.required & P(SK))) {
+			dbg("    matched unencrypted message");
 			return transition;
 		}
 		/* SK{} payloads */
@@ -231,12 +235,13 @@ const struct state_v2_microcode *find_v2_state_transition(const struct finite_st
 		struct ikev2_payload_errors encrypted_payload_errors
 			= ikev2_verify_payloads(md, &md->encrypted_payloads,
 						&transition->encrypted_payloads);
-		if (encrypted_payload_errors.bad &&
-		    !encrypted_payload_status.bad) {
-			/* save first */
+		if (encrypted_payload_errors.bad) {
+			dbg("    encrypted payload has errors");
+			/* save error for last pattern!?! */
 			encrypted_payload_status = encrypted_payload_errors;
 			continue;
 		}
+		dbg("    matched encrypted message");
 		return transition;
 	}
 	/*
@@ -248,10 +253,12 @@ const struct state_v2_microcode *find_v2_state_transition(const struct finite_st
 		 * A very messed up message - none of the state
 		 * transitions recognized it!.
 		 */
-		log_v2_payload_errors(NULL, md, &message_payload_status);
+		log_v2_payload_errors(logger, md,
+				      &message_payload_status);
 	} else {
 		pexpect(encrypted_payload_status.bad);
-		log_v2_payload_errors(NULL, md, &encrypted_payload_status);
+		log_v2_payload_errors(logger, md,
+				      &encrypted_payload_status);
 	}
 	return NULL;
 
@@ -261,26 +268,25 @@ const struct state_v2_microcode *find_v2_state_transition(const struct finite_st
  * report problems - but less so when OE
  */
 
-void log_v2_payload_errors(struct state *st, struct msg_digest *md,
+void log_v2_payload_errors(struct logger *logger, struct msg_digest *md,
 			   const struct ikev2_payload_errors *errors)
 {
-	if (!DBGP(DBG_OPPO)) {
-		/*
-		 * ??? this logic is contorted.
-		 * If we have no state, we act as if this is opportunistic.
-		 * But if there is a state, but no connection,
-		 * we act as if this is NOT opportunistic.
-		 */
-		if (st == NULL ||
-		    (st->st_connection != NULL &&
-		     (st->st_connection->policy & POLICY_OPPORTUNISTIC)))
-		{
+	enum stream log_stream;
+	if (suppress_log(logger)) {
+		if (DBGP(DBG_BASE)) {
+			log_stream = DEBUG_STREAM;
+		} else {
+			/*
+			 * presumably the responder so tone things
+			 * down
+			 */
 			return;
 		}
+	} else {
+		log_stream = ALL_STREAMS;
 	}
 
-	/* LOG_MESSAGE(RC_LOG_SERIOUS, st, NULL, &md->from, buf) */
-	LSWLOG_RC(RC_LOG_SERIOUS, buf) {
+	LOG_JAMBUF(RC_LOG_SERIOUS | log_stream, logger, buf) {
 		const enum isakmp_xchg_types ix = md->hdr.isa_xchg;
 		jam(buf, "dropping unexpected ");
 		jam_enum_short(buf, &ikev2_exchange_names, ix);
@@ -326,5 +332,16 @@ void log_v2_payload_errors(struct state *st, struct msg_digest *md,
 			jam_enum_short(buf, &ikev2_notify_names,
 				       errors->notification);
 		}
+	}
+}
+
+void jam_v2_transition(struct jambuf *buf, const struct state_v2_microcode *transition)
+{
+	if (transition == NULL) {
+		jam(buf, "NULL");
+	} else {
+		jam(buf, "%s->%s",
+		    finite_states[transition->state]->short_name,
+		    finite_states[transition->next_state]->short_name);
 	}
 }

@@ -19,12 +19,11 @@
 #include "ike_alg.h"
 #include "ike_alg_encrypt.h"
 #include "ike_alg_encrypt_ops.h"
-#include "sadb.h"
+#include "lsw-pfkeyv2.h"	/* for SADB_*ALG_* */
 
 const struct encrypt_desc ike_alg_encrypt_3des_cbc =
 {
 	.common = {
-		.name = "3des_cbc",
 		.fqn = "3DES_CBC",
 		.names = "3des,3des_cbc",
 		.algo_type =     IKE_ALG_ENCRYPT,

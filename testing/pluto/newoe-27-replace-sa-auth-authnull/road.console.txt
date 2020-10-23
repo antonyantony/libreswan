@@ -10,7 +10,7 @@ road #
  /testing/pluto/bin/wait-until-pluto-started
 road #
  ipsec auto --add authenticated
-002 added connection description "authenticated"
+002 added IKEv2 connection "authenticated"
 road #
  # ensure for tests acquires expire before our failureshunt=2m
 road #
@@ -26,13 +26,13 @@ road #
  # setup authenticated static conn
 road #
  ipsec auto --up authenticated
-1v2 "authenticated" #1: initiating IKEv2 IKE SA
-1v2 "authenticated" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
-1v2 "authenticated" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
+1v2 "authenticated" #1: initiating IKEv2 connection
+1v2 "authenticated" #1: sent IKE_SA_INIT request
+1v2 "authenticated" #1: sent IKE_AUTH request {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
 002 "authenticated" #2: IKEv2 mode peer ID is ID_FQDN: '@east'
-003 "authenticated" #2: Authenticated using authby=secret
+003 "authenticated" #1: authenticated using authby=secret
 002 "authenticated" #2: negotiated connection [192.1.3.209-192.1.3.209:0-65535 0] -> [192.1.2.23-192.1.2.23:0-65535 0]
-004 "authenticated" #2: STATE_V2_IPSEC_I: IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256-NONE NATOA=none NATD=none DPD=passive}
+004 "authenticated" #2: IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256-NONE NATOA=none NATD=none DPD=passive}
 road #
  # should show established tunnel and no bare shunts
 road #
@@ -122,9 +122,9 @@ road #
 road #
  ipsec auto --delete authenticated
 002 "authenticated": terminating SAs using this connection
-002 "authenticated" #2: deleting state (STATE_V2_IPSEC_I) and NOT sending notification
+002 "authenticated" #2: deleting state (STATE_V2_ESTABLISHED_CHILD_SA) and NOT sending notification
 005 "authenticated" #2: ESP traffic information: in=168B out=168B
-002 "authenticated" #1: deleting state (STATE_PARENT_I3) and NOT sending notification
+002 "authenticated" #1: deleting state (STATE_V2_ESTABLISHED_IKE_SA) and NOT sending notification
 road #
  sleep 5
 road #
@@ -142,7 +142,7 @@ road #
  sleep 5
 road #
  ipsec status |grep STATE_
-000 #3: "private-or-clear#192.1.2.0/24"[1] ...192.1.2.23:500 STATE_PARENT_I2 (sent v2I2, expected v2R2); EVENT_SA_REPLACE in XXs; idle;
+000 #3: "private-or-clear#192.1.2.0/24"[1] ...192.1.2.23:500 STATE_PARENT_I2 (sent IKE_AUTH request); EVENT_SA_REPLACE in XXs; idle;
 road #
  ipsec whack --trafficstatus
 road #
@@ -164,7 +164,7 @@ road #
  # additional 'authenticated' partial state lingers
 road #
  ipsec status | grep STATE_
-000 #3: "private-or-clear#192.1.2.0/24"[1] ...192.1.2.23:500 STATE_PARENT_I2 (sent v2I2, expected v2R2); EVENT_SA_REPLACE in XXs; idle;
+000 #3: "private-or-clear#192.1.2.0/24"[1] ...192.1.2.23:500 STATE_PARENT_I2 (sent IKE_AUTH request); EVENT_SA_REPLACE in XXs; idle;
 road #
  ../bin/check-for-core.sh
 road #

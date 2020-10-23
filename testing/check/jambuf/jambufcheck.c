@@ -18,7 +18,7 @@
 #include <stdarg.h>
 #include <string.h>
 
-#include "jambuf.h"		/* for jambuf_t */
+#include "jambuf.h"		/* for struct jambuf */
 #include "constants.h"		/* for streq() */
 
 unsigned fails;
@@ -34,37 +34,46 @@ static void check_jambuf(const char *expect, bool ok, ...)
 		printf("%s: %s '%s' %s\n", __func__, op, expect, oks);
 		/* 10 characters + NUL + SENTINEL */
 		char array[12] = "abcdefghijkl";
-		jambuf_t buf = ARRAY_AS_JAMBUF(array);
-#define FAIL(FMT, ...) {						\
+		struct jambuf buf = ARRAY_AS_JAMBUF(array);
+#define FAIL(FMT, ...)							\
+		{							\
 			fprintf(stderr, "%s: %s '%s' ", __func__, op, expect); \
 			fprintf(stderr, FMT,##__VA_ARGS__);		\
 			fprintf(stderr, "\n");				\
 			fails++;					\
+			return;						\
+		}
+
+		/*
+		 * XXX: because coverity can't see ARRAY_AS_JAMBUF()
+		 * setting ARRAY[-2]=NUL and ARRAY[-1]=SENTINEL it
+		 * complains that the ARRAY is overrun.
+		 *
+		 * This hopefully drops a hint.
+		 */
+		if (array[sizeof(array)-2] != '\0') {
+			FAIL("array[-2] != NUL");
 		}
 		/*
 		 * Buffer initialized ok?
 		 */
 		if (!jambuf_ok(&buf)) {
 			FAIL("jambuf_ok() failed at start");
-			return;
 		}
 		if (array[0] != '\0') {
 			FAIL("array[0] is 0x%x but should be NUL at start\n",
 			     array[0]);
-			return;
 		}
 		const char *pos = jambuf_cursor(&buf);
 		if (pos != array) {
 			FAIL("jambuf_cursor() is %p but should be %p (aka array) at start",
 			     pos, array);
-			return;
 		}
 		shunk_t shunk = jambuf_as_shunk(&buf);
 		if ((const char *)shunk.ptr != array ||
 		    shunk.len != 0) {
 			FAIL("jambuf_as_shunk() is "PRI_SHUNK" but should be %p/0 (aka array) at start",
 			     pri_shunk(shunk), array);
-			return;
 		}
 		/*
 		 * Concat va_list.
@@ -104,6 +113,7 @@ static void check_jambuf(const char *expect, bool ok, ...)
 			}
 			str = va_arg(ap, const char *);
 		} while (str != NULL);
+		va_end(ap);
 		if (jambuf_ok(&buf) != ok) {
 			FAIL("jambuf_ok() is not %s at end", oks);
 			return;
@@ -151,7 +161,7 @@ static void check_jambuf_pos(const char *pre, const char *pre_expect,
 	}
 
 	char array[5/*stuff*/+2/*NUL+CANARY*/];
-	jambuf_t buf = ARRAY_AS_JAMBUF(array);
+	struct jambuf buf = ARRAY_AS_JAMBUF(array);
 
 	jam_string(&buf, pre);
 	if (!streq(array, pre_expect)) {
@@ -177,7 +187,7 @@ static void check_jam_bytes(const char *what, jam_bytes_fn *jam_bytes,
 {
 	fprintf(stdout, "%s: %s('%s') -> '%s'\n", __func__, what, in, out);
 	char outbuf[1024];
-	jambuf_t buf = ARRAY_AS_JAMBUF(outbuf);
+	struct jambuf buf = ARRAY_AS_JAMBUF(outbuf);
 	jam_bytes(&buf, in, size);
 	if (!streq(outbuf, out)) {
 		fprintf(stderr, "%s: %s('%s') failed, expecting '%s' returned '%s'\n", __func__,

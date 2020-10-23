@@ -7,24 +7,26 @@
 #include "lswalloc.h"
 #include "lswtool.h"
 #include "jambuf.h"
-#include "libreswan/passert.h"
+#include "passert.h"
 
 #define PREFIX "         "
 
-enum where {
+unsigned errors;
+
+enum enum_name_expectation {
 	OPTIONAL,
 	PRESENT,
 	ABSENT,
 };
 
 static void test_enum(enum_names *enum_test, int i,
-		      enum where where)
+		      enum enum_name_expectation expect)
 {
 	char scratch[100];
 
 	/* find a name, if any, for this value */
 	const char *name = enum_name(enum_test, i);
-	switch (where) {
+	switch (expect) {
 	case OPTIONAL:
 		if (name == NULL) {
 			return;
@@ -56,13 +58,15 @@ static void test_enum(enum_names *enum_test, int i,
 
 	{
 		printf(PREFIX "jam_enum %d: ", i);
-		jambuf_t buf = ARRAY_AS_JAMBUF(scratch);
+		struct jambuf buf = ARRAY_AS_JAMBUF(scratch);
 		jam_enum(&buf, enum_test, i);
 		shunk_t s = jambuf_as_shunk(&buf);
+		printf(""PRI_SHUNK" ", pri_shunk(s));
 		if (hunk_streq(s, name)) {
 			printf("OK\n");
 		} else {
 			printf("ERROR\n");
+			errors++;
 		}
 	}
 
@@ -71,6 +75,7 @@ static void test_enum(enum_names *enum_test, int i,
 		int e = enum_search(enum_test, name);
 		if (e != i) {
 			printf("%d ERROR\n", e);
+			errors++;
 		} else {
 			printf("OK\n");
 		}
@@ -81,6 +86,7 @@ static void test_enum(enum_names *enum_test, int i,
 		int e = enum_match(enum_test, shunk1(name));
 		if (e != i) {
 			printf("%d ERROR\n", e);
+			errors++;
 		} else {
 			printf("OK\n");
 		}
@@ -97,6 +103,7 @@ static void test_enum(enum_names *enum_test, int i,
 		pfree(clone);
 		if (e != i) {
 			printf("%d ERROR\n", e);
+			errors++;
 		} else {
 			printf("OK\n");
 		}
@@ -104,22 +111,26 @@ static void test_enum(enum_names *enum_test, int i,
 
 	printf(PREFIX "short_name %d: ", i);
 	const char *short_name = enum_short_name(enum_test, i);
+	printf("%s ", short_name);
 	if (short_name == NULL) {
 		printf("ERROR\n");
+		errors++;
 		return;
 	} else {
-		printf(" OK\n");
+		printf("OK\n");
 	}
 
 	{
 		printf(PREFIX "jam_enum_short %d: ", i);
-		jambuf_t buf = ARRAY_AS_JAMBUF(scratch);
+		struct jambuf buf = ARRAY_AS_JAMBUF(scratch);
 		jam_enum_short(&buf, enum_test, i);
 		shunk_t s = jambuf_as_shunk(&buf);
+		printf(""PRI_SHUNK" ", pri_shunk(s));
 		if (hunk_streq(s, short_name)) {
 			printf("OK\n");
 		} else {
 			printf("ERROR\n");
+			errors++;
 		}
 	}
 
@@ -133,6 +144,7 @@ static void test_enum(enum_names *enum_test, int i,
 		int e = enum_match(enum_test, shunk1(short_name));
 		if (e != i) {
 			printf("%d ERROR\n", e);
+			errors++;
 		} else {
 			printf("OK\n");
 		}
@@ -146,6 +158,7 @@ static void test_enum(enum_names *enum_test, int i,
 		pfree(trunc_short_name);
 		if (e != i) {
 			printf("%d ERROR\n", e);
+			errors++;
 		} else {
 			printf("OK\n");
 		}
@@ -197,15 +210,18 @@ static void test_enum_enum(const char *title, enum_enum_names *een,
 			printf("OK\n");
 		} else {
 			printf("ERROR\n");
+			errors++;
 		}
 	}
 
 	printf(PREFIX "enum_enum_name %lu %lu: ", table, val);
 	const char *name = enum_enum_name(een, table, val);
+	printf("%s ", name == NULL ? "NULL" : name);
 	if ((val_ok) == (name != NULL)) {
 		printf("OK\n");
 	} else {
 		printf("ERROR\n");
+		errors++;
 	}
 
 	printf(PREFIX "enum_name table %lu: ", val);
@@ -215,13 +231,15 @@ static void test_enum_enum(const char *title, enum_enum_names *een,
 		printf("OK\n");
 	} else {
 		printf("ERROR\n");
+		errors++;
 	}
 
 	{
 		printf(PREFIX "jam_enum_enum %lu %lu: ", table, val);
-		jambuf_t buf = ARRAY_AS_JAMBUF(scratch);
+		struct jambuf buf = ARRAY_AS_JAMBUF(scratch);
 		jam_enum_enum(&buf, een, table, val);
 		shunk_t s = jambuf_as_shunk(&buf);
+		printf(""PRI_SHUNK" ", pri_shunk(s));
 		/* ??? clang says that name might be NULL */
 		if (val_ok && name == NULL) {
 			printf("name == NULL\n");
@@ -231,20 +249,23 @@ static void test_enum_enum(const char *title, enum_enum_names *een,
 			printf("OK\n");
 		} else {
 			printf("ERROR [empty]\n");
+			errors++;
 		}
 	}
 
 	{
 		printf(PREFIX "jam_enum_enum_short %lu %lu: ", table, val);
-		jambuf_t buf = ARRAY_AS_JAMBUF(scratch);
+		struct jambuf buf = ARRAY_AS_JAMBUF(scratch);
 		jam_enum_enum_short(&buf, een, table, val);
 		shunk_t s = jambuf_as_shunk(&buf);
+		printf(""PRI_SHUNK" ", pri_shunk(s));
 		if (val_ok && hunk_streq(s, enum_short_name(en, val))) {
 			printf("OK\n");
 		} else if (s.len > 0) {
 			printf("OK\n");
 		} else {
 			printf("ERROR [empty]\n");
+			errors++;
 		}
 	}
 }
@@ -255,7 +276,7 @@ static void test_enum_lset(const char *name, const enum_names *en, lset_t val)
 	printf("\t<<");
 	{
 		char scratch[100];
-		jambuf_t buf = ARRAY_AS_JAMBUF(scratch);
+		struct jambuf buf = ARRAY_AS_JAMBUF(scratch);
 		jam_enum_lset_short(&buf, en, "+", val);
 		printf(PRI_SHUNK, pri_shunk(jambuf_as_shunk(&buf)));
 	}
@@ -264,7 +285,7 @@ static void test_enum_lset(const char *name, const enum_names *en, lset_t val)
 
 int main(int argc UNUSED, char *argv[])
 {
-	tool_init_log(argv[0]);
+	struct logger *logger = tool_init_log(argv[0]);
 
 	/* don't hold back */
 	setbuf(stdout, NULL);
@@ -283,8 +304,6 @@ int main(int argc UNUSED, char *argv[])
 	test_enums("ikev2_exchange_names", &ikev2_exchange_names);
 	test_enums("exchange_names_ikev1orv2", &exchange_names_ikev1orv2);
 	test_enums("ikev1_protocol_names", &ikev1_protocol_names);
-	test_enums("ikev2_protocol_names", &ikev2_protocol_names);
-	test_enums("ikev2_del_protocol_names", &ikev2_del_protocol_names);
 	test_enums("isakmp_transformid_names", &isakmp_transformid_names);
 	test_enums("ah_transformid_names", &ah_transformid_names);
 	test_enums("esp_transformid_names", &esp_transformid_names);
@@ -308,7 +327,9 @@ int main(int argc UNUSED, char *argv[])
 	test_enums("xauth_type_names", &xauth_type_names);
 	test_enum_range("xauth_attr_names", &xauth_attr_names, 0, 256);
 	test_enums("attr_msg_type_names", &attr_msg_type_names);
-	test_enums("ikev2_sec_proto_id_names", &ikev2_sec_proto_id_names);
+	test_enums("ikev2_proposal_protocol_id_names", &ikev2_proposal_protocol_id_names);
+	test_enums("ikev2_delete_protocol_id_names", &ikev2_delete_protocol_id_names);
+	test_enums("ikev2_notify_protocol_id_names", &ikev2_notify_protocol_id_names);
 	test_enums("ikev2_auth_names", &ikev2_auth_names);
 	test_enum_range("ikev2_trans_type_encr_names", &ikev2_trans_type_encr_names, 0, 256);
 	test_enums("ikev2_trans_type_prf_names", &ikev2_trans_type_prf_names);
@@ -343,6 +364,6 @@ int main(int argc UNUSED, char *argv[])
 	test_enum_lset("debug", &debug_names, DBG_CRYPT|DBG_CPU_USAGE);
 	printf("\n");
 
-	report_leaks();
-	exit(0);
+	report_leaks(logger);
+	exit(errors > 0 ? 1 : 0);
 }

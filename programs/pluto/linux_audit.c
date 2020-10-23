@@ -37,17 +37,13 @@
 #include <sys/types.h>
 #include <fcntl.h>
 
-#include "libreswan/pfkeyv2.h"
-
 #include "sysdep.h"
 #include "constants.h"
 #include "lswconf.h"
 #include "lswfips.h"
-#include "lswlog.h"
 
 #include "defs.h"
 #include "log.h"
-#include "peerlog.h"
 #include "server.h"
 #include "state.h"
 #include "id.h"
@@ -164,7 +160,7 @@ void linux_audit_conn(const struct state *st, enum linux_audit_kind op)
 	}
 
 	char audit_str[AUDIT_LOG_SIZE];
-	jambuf_t buf = ARRAY_AS_JAMBUF(audit_str);
+	struct jambuf buf = ARRAY_AS_JAMBUF(audit_str);
 	struct connection *const c = st->st_connection;
 	/* we need to free() this */
 	char *conn_encode = audit_encode_nv_string("conn-name", c->name, 0);
@@ -174,7 +170,9 @@ void linux_audit_conn(const struct state *st, enum linux_audit_kind op)
 	case LAK_PARENT_DESTROY:
 	case LAK_PARENT_FAIL:
 	{
-		bool initiator = (st->st_original_role == ORIGINAL_INITIATOR) || IS_PHASE1_INIT(st->st_state);
+		bool initiator = (st->st_ike_version == IKEv2 ? st->st_sa_role == SA_INITIATOR :
+				  st->st_ike_version == IKEv1 ? IS_PHASE1_INIT(st->st_state) :
+				  pexpect(false));
 		/* head */
 		jam(&buf, "op=%s direction=%s %s connstate=%lu ike-version=%s",
 		    op == LAK_PARENT_DESTROY ? "destroy" : "start", /* fail to start logged under op=start */
@@ -193,7 +191,7 @@ void linux_audit_conn(const struct state *st, enum linux_audit_kind op)
 				jam_string(&buf, (c->policy & POLICY_PSK) ? "PRESHARED_KEY" :
 					(c->policy & POLICY_RSASIG) ? "RSA_SIG" : "unknown");
 			else
-				lswlog_enum_short(&buf, &oakley_auth_names, st->st_oakley.auth);
+				jam_enum_short(&buf, &oakley_auth_names, st->st_oakley.auth);
 		}
 
 		jam(&buf, " cipher=%s ksize=%d",
@@ -238,7 +236,7 @@ void linux_audit_conn(const struct state *st, enum linux_audit_kind op)
 
 		jam(&buf, " prf=%s", prfname); /* could be "none" */
 		jam(&buf, " pfs=%s", (st->st_oakley.ta_dh == NULL ? "none"
-				      : st->st_oakley.ta_dh->common.name));
+				      : st->st_oakley.ta_dh->common.fqn));
 
 		/* XXX: empty SPI to keep tests happy */
 		jam(&buf, " ");

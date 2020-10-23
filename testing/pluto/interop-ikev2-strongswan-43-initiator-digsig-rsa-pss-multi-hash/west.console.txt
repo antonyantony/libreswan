@@ -7,7 +7,7 @@ destination -I 192.0.1.254 192.0.2.254 is alive
 west #
  # ensure that clear text does not get through
 west #
- iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j LOGDROP
+ iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j DROP
 west #
  iptables -I INPUT -m policy --dir in --pol ipsec -j ACCEPT
 west #
@@ -61,11 +61,11 @@ received end entity cert "C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Depa
   using trusted ca certificate "C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=Libreswan test CA for mainca, E=testing@libreswan.org"
 checking certificate status of "C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=east.testing.libreswan.org, E=user-east@testing.libreswan.org"
   requesting ocsp status from 'http://nic.testing.libreswan.org:2560' ...
-libcurl request failed [7]: Failed to connect to nic.testing.libreswan.org port 2560: No route to host
+libcurl request failed [7]: Failed to connect to nic.testing.libreswan.org XXX
 ocsp request to http://nic.testing.libreswan.org:2560 failed
 ocsp check failed, fallback to crl
   fetching crl from 'http://nic.testing.libreswan.org/revoked.crl' ...
-libcurl request failed [7]: Failed to connect to nic.testing.libreswan.org port 80: No route to host
+libcurl request failed [7]: Failed to connect to nic.testing.libreswan.org XXX
 crl fetching failed
 certificate status is not available
   reached self-signed root ca with a path length of 0
@@ -88,7 +88,7 @@ PING 192.0.2.254 (192.0.2.254) from 192.0.1.254 : 56(84) bytes of data.
 4 packets transmitted, 4 received, 0% packet loss, time XXXX
 rtt min/avg/max/mdev = 0.XXX/0.XXX/0.XXX/0.XXX ms
 west #
- # hash algorithm notication should be received
+ # hash algorithm notification should be received
 west #
  grep SIGNATURE_HASH_ALGO /tmp/charon.log | cut -f 2 -d "]"
  received SIGNATURE_HASH_ALGORITHMS notify
@@ -96,7 +96,9 @@ west #
  echo done
 done
 west #
- if [ -f /var/run/pluto/pluto.pid ]; then grep "Authenticated using RSA" /tmp/pluto.log ; fi
+ # expect state #2, state #1 responded with INVALID_KE
+west #
+ if [ -f /var/run/pluto/pluto.pid ]; then grep "authenticated using RSA" /tmp/pluto.log ; fi
 west #
  if [ -f /var/run/charon.pid -o -f /var/run/strongswan/charon.pid ]; then strongswan status ; fi
 Shunted Connections:

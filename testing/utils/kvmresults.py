@@ -65,7 +65,7 @@ def main():
 
     # how to parse --print directory,saved-directory,...?
     parser.add_argument("--print", action="store",
-                        default=printer.Print(printer.Print.path, printer.Print.result, printer.Print.issues),
+                        default=printer.Print(printer.Print.PATH, printer.Print.RESULT, printer.Print.ISSUES),
                         type=printer.Print, metavar=str(printer.Print),
                         help="comman separate list of attributes to print for each test; default: '%(default)s'")
 
@@ -94,7 +94,7 @@ def main():
     # XXX: while checking for an UNTESTED test should be very cheap
     # (does OUTPUT/ exist?) it isn't.  Currently it triggers a full
     # post-mortem analysis.
-    skip.add_arguments(parser, skip.skip.untested)
+    skip.add_arguments(parser, skip.Skip.UNTESTED)
     ignore.add_arguments(parser)
     publish.add_arguments(parser)
 
@@ -102,10 +102,6 @@ def main():
     args = parser.parse_args()
     logutil.config(args, sys.stderr)
     logger = logutil.getLogger("kvmresults")
-
-    # The option -vvvvvvv is a short circuit for these; make
-    # re-ordering easy by using V as a counter.
-    v = 0
 
     if args.dump_args:
         logger.info("Arguments:")
@@ -131,9 +127,11 @@ def main():
         baseline = testsuite.load(logger, logutil.DEBUG, args,
                                   testsuite_directory=args.baseline,
                                   error_level=logutil.DEBUG)
-        if not baseline:
-            # Perhaps the baseline just contains output, magic up the
-            # corresponding testsuite directory.
+        if not baseline and os.path.isdir(args.baseline):
+            # Perhaps, AKA BACKUP/YYYY-MM-DDD-..., the baseline
+            # directory only contains a copy of the output.  Magic up
+            # a baseline by combining the output with the tests in
+            # ARGS.TESTING_DIRECTORY.
             baseline_directory = os.path.join(args.testing_directory, "pluto")
             baseline = testsuite.load(logger, logutil.DEBUG, args,
                                       testsuite_directory=baseline_directory,
@@ -216,7 +214,8 @@ def results(logger, tests, baseline, args, result_stats):
             if args.update:
                 result.save()
             if args.skip:
-                if skip.result(logger, args, result):
+                if printer.Print.RESULT in args.print \
+                and skip.result(logger, args, result):
                     result_stats.add_skipped(result)
                     continue
             result_stats.add_result(result)
@@ -234,7 +233,8 @@ def results(logger, tests, baseline, args, result_stats):
             publish.test_output_files(logger, args, result)
             publish.json_result(logger, args, result)
 
-            if baseline and post.Issues.CRASHED.isdisjoint(result.issues):
+            if baseline and test in baseline \
+               and not result.issues.crashed():
                 # Since there is a baseline and the test didn't crash
                 # limit what is printed to just those where the
                 # baseline's result is different.

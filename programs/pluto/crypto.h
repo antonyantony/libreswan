@@ -21,15 +21,17 @@
 #ifndef _CRYPTO_H
 #define _CRYPTO_H
 
-#include <nss.h>
 #include <pk11pub.h>
 
 extern void init_crypto(void);
 
 struct connection;
+struct show;
 
-void ike_alg_show_connection(const struct connection *c, const char *instance);
+void show_ike_alg_connection(struct show *s,
+			     const struct connection *c,
+			     const char *instance);
 
-void ike_alg_show_status(struct fd *whackfd);
+void show_ike_alg_status(struct show *s);
 
 #endif /* _CRYPTO_H */

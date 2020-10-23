@@ -19,6 +19,8 @@
 #ifndef _PLUTO_STATS_H
 #define _PLUTO_STATS_H
 
+enum delete_reason;
+
 struct pluto_stat {
 	const enum_names *names;
 	const char *what;
@@ -49,11 +51,15 @@ extern unsigned long pstats_ike_dpd_recv;
 extern unsigned long pstats_ike_dpd_sent;
 extern unsigned long pstats_ike_dpd_replied;
 
+extern unsigned long pstats_iketcp_started[2];
+extern unsigned long pstats_iketcp_aborted[2];
+extern unsigned long pstats_iketcp_stopped[2];
+
 extern unsigned long pstats_xauth_started;
 extern unsigned long pstats_xauth_stopped;
 extern unsigned long pstats_xauth_aborted;
 
-extern void show_pluto_stats(struct fd *whackfd);
+extern void show_pluto_stats(struct show *s);
 extern void clear_pluto_stats(void);
 
 /*
@@ -68,7 +74,7 @@ extern void clear_pluto_stats(void);
 		const unsigned __pstat = (INDEX);			\
 		if (__pstat < elemsof(pstats_##TYPE)) {			\
 			pstats_##TYPE[__pstat]++;			\
-		} else if (DBGP(DBG_CONTROLMORE)) {			\
+		} else if (DBGP(DBG_BASE)) {			\
 			DBG_log("pstats %s %d", #TYPE, __pstat);	\
 		}							\
 	}

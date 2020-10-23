@@ -18,17 +18,18 @@
 
 #include <stdio.h>
 
-#include "lswlog.h" /* for log_ip */
 #include "constants.h"
 #include "ip_address.h"
 #include "stdlib.h"
 #include "ipcheck.h"
+#include "lswtool.h"
 
 unsigned fails;
 bool use_dns = true;
 
 int main(int argc, char *argv[])
 {
+	struct logger *logger = tool_init_log(argv[0]);
 	log_ip = false; /* force sensitive */
 
 	for (char **argp = argv+1; argp < argv+argc; argp++) {
@@ -43,10 +44,15 @@ int main(int argc, char *argv[])
 
 	ip_address_check();
 	ip_endpoint_check();
-	ip_range_check();
-	ip_subnet_check();
+	ip_range_check(logger);
+	ip_subnet_check(logger);
 	ip_said_check();
 	ip_info_check();
+	ip_protoport_check();
+	ip_selector_check(logger);
+	ip_sockaddr_check();
+	ip_port_check();
+	ip_port_range_check();
 
 	if (fails > 0) {
 		fprintf(stderr, "TOTAL FAILURES: %d\n", fails);

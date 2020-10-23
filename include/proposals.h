@@ -29,13 +29,16 @@
 #include "constants.h"
 #include "ike_alg.h"
 #include "shunk.h"
+#include "diag.h"
 
+struct jambuf;
 struct alg_info;
 struct proposal_protocol;
 struct proposal;
 struct proposals;
 struct proposal_policy;
 struct proposal_parser;
+enum stream;
 
 /*
  * XXX: needs to be merged with IKE_ALG_TYPE.
@@ -55,8 +58,7 @@ struct proposal_parser {
 	const struct proposal_protocol *protocol;
 	const struct proposal_param *param;
 	const struct proposal_policy *policy;
-	/* need to eliminate hardwired size */
-	char error[200];
+	diag_t diag;
 };
 
 /*
@@ -78,9 +80,10 @@ struct proposal_policy {
 	 */
 	bool (*alg_is_ok)(const struct ike_alg *alg);
 	/*
-	 * Print a warning.  Signature needs to match libreswan_log.
+	 * logging context
 	 */
-	int (*warning)(const char *fmt, ...) PRINTF_LIKE(1);
+	struct logger *logger;
+	lset_t logger_rc_flags;
 };
 
 /*
@@ -170,6 +173,9 @@ void free_algorithms(struct proposal *proposal, enum proposal_algorithm algorith
 void append_proposal(struct proposals *proposals, struct proposal **proposal);
 void append_algorithm(struct proposal_parser *parser, struct proposal *proposal,
 		      const struct ike_alg *alg, int enckeylen);
+void remove_duplicate_algorithms(struct proposal_parser *parser,
+				 struct proposal *proposal,
+				 enum proposal_algorithm algorithm);
 
 struct proposal_parser *alloc_proposal_parser(const struct proposal_policy *policy,
 					      const struct proposal_protocol *protocol);
@@ -189,9 +195,9 @@ struct child_proposals {
 	struct proposals *p;
 };
 
-void fmt_proposal(struct lswlog *log,
+void jam_proposal(struct jambuf *log,
 		  const struct proposal *proposal);
-void fmt_proposals(struct lswlog *log, const struct proposals *proposals);
+void jam_proposals(struct jambuf *log, const struct proposals *proposals);
 
 /*
  * Iterate through all the proposals and the proposal's algorithms.
@@ -267,5 +273,27 @@ struct v1_proposal {
 };
 
 struct v1_proposal v1_proposal(const struct proposal *proposal);
+
+/*
+ * INTERNAL: tokenize <input> into <delim_before><current><delim_after><input>
+ */
+
+struct proposal_tokenizer {
+	char prev_term;
+	shunk_t this;
+	char this_term;
+	shunk_t next;
+	char next_term;
+	shunk_t input;
+	const char *delims;
+};
+
+struct proposal_tokenizer proposal_first_token(shunk_t input, const char *delim);
+void proposal_next_token(struct proposal_tokenizer *token);
+
+bool proposal_parse_encrypt(struct proposal_parser *parser,
+			    struct proposal_tokenizer *tokens,
+			    const struct ike_alg **encrypt,
+			    int *enckeylen);
 
 #endif /* PROPOSALS_H */

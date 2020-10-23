@@ -82,7 +82,6 @@ KVM_UPGRADE_PACKAGES ?= \
     pam-devel \
     patch \
     perf \
-    pexpect \
     policycoreutils-python-utils \
     psmisc \
     python3-pyOpenSSL \
@@ -135,7 +134,7 @@ KVM_DEBUGINFO = \
     openssl-libs \
     pam \
     pcre \
-    python-libs \
+    python3-libs \
     sqlite \
     unbound-libs \
     xz-libs \

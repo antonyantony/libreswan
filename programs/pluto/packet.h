@@ -28,8 +28,10 @@
 #include "chunk.h"
 #include "shunk.h"
 #include "ip_address.h"
+#include "diag.h"
 
 struct ip_info;
+struct logger;
 
 /* a struct_desc describes a structure for the struct I/O routines.
  * This requires arrays of field_desc values to describe struct fields.
@@ -160,6 +162,22 @@ struct packet_byte_stream {
 	 * changed the names to avoid confusion).
 	 */
 	struct fixup last_substructure;
+
+	/*
+	 * XXX: IKEv2 and output only logger.
+	 *
+	 * IKEv2 uses on-stack pbs_out which should ensure the
+	 * lifetime of the logger pointer is LE the lifetime of the
+	 * logger.
+	 *
+	 * IKEv1 uses the global reply_stream which is a sure way to
+	 * break any lifetime guarentees
+	 *
+	 * The input stream logger starts out with MD but then
+	 * switches to a state so more complicated; and its lifetime
+	 * is that of MD.
+	 */
+	struct logger *out_logger;
 };
 
 typedef struct packet_byte_stream pb_stream;
@@ -217,9 +235,16 @@ extern shunk_t pbs_in_as_shunk(pb_stream *pbs);
  */
 extern shunk_t pbs_in_left_as_shunk(const pb_stream *pbs);
 
+diag_t pbs_in_struct(struct pbs_in *ins, struct_desc *sd,
+		     void *struct_ptr, size_t struct_size,
+		     struct pbs_in *obj_pbs) MUST_USE_RESULT;
+diag_t pbs_in_raw(struct pbs_in *pbs, void *bytes, size_t len,
+		  const char *name) MUST_USE_RESULT;
+
 extern bool in_struct(void *struct_ptr, struct_desc *sd,
 		      pb_stream *ins, pb_stream *obj_pbs) MUST_USE_RESULT;
-extern bool in_raw(void *bytes, size_t len, pb_stream *ins, const char *name) MUST_USE_RESULT;
+extern bool in_raw(void *bytes, size_t len, pb_stream *ins,
+		   const char *name) MUST_USE_RESULT; /* XXX: use pbs_in_raw() */
 
 /*
  * Output PBS
@@ -227,18 +252,16 @@ extern bool in_raw(void *bytes, size_t len, pb_stream *ins, const char *name) MU
 
 #define pbs_out packet_byte_stream
 
+void log_pbs_out(lset_t rc_flags, struct pbs_out *outs, const char *message, ...) PRINTF_LIKE(3);
+
 /*
  * Initializers; point PBS at a pre-allocated (or static) buffer.
  *
- * init_out_pbs(): Same as init_pbs() except it scribbles on the
- * buffer to prevent leakage.  Should be totally redundant.
- *
  * XXX: should the buffer instead be allocated as part of the PBS?
  */
-extern void init_out_pbs(pb_stream *pbs, uint8_t *start, size_t len,
-			 const char *name);
-extern pb_stream open_out_pbs(const char *name, uint8_t *buffer,
-			      size_t sizeof_buffer);
+extern struct pbs_out open_pbs_out(const char *name, uint8_t *buffer,
+				   size_t sizeof_buffer, struct logger *logger);
+extern void close_output_pbs(struct pbs_out *pbs);
 
 /*
  * Map/clone the current contents (i.e., everything written so far)
@@ -248,26 +271,40 @@ extern pb_stream open_out_pbs(const char *name, uint8_t *buffer,
 extern chunk_t same_out_pbs_as_chunk(pb_stream *pbs);
 extern chunk_t clone_out_pbs_as_chunk(pb_stream *pbs, const char *name);
 
-extern bool out_struct(const void *struct_ptr, struct_desc *sd,
-		       pb_stream *outs, pb_stream *obj_pbs) MUST_USE_RESULT;
-extern pb_stream open_output_struct_pbs(pb_stream *outs, const void *struct_ptr,
-				 struct_desc *sd) MUST_USE_RESULT;
+diag_t pbs_out_struct(struct pbs_out *outs, struct_desc *sd,
+		      const void *struct_ptr, size_t struct_size,
+		      struct pbs_out *obj_pbs) MUST_USE_RESULT;
 
-extern bool ikev1_out_generic(uint8_t np, struct_desc *sd,
-			pb_stream *outs, pb_stream *obj_pbs) MUST_USE_RESULT;
-extern bool ikev1_out_generic_raw(uint8_t np, struct_desc *sd,
-			    pb_stream *outs, const void *bytes, size_t len,
-			    const char *name) MUST_USE_RESULT;
-#define ikev1_out_generic_chunk(np, sd, outs, ch, name) \
-	ikev1_out_generic_raw((np), (sd), (outs), (ch).ptr, (ch).len, (name))
-extern bool out_zero(size_t len, pb_stream *outs, const char *name) MUST_USE_RESULT;
-extern bool out_repeated_byte(uint8_t, size_t len, pb_stream *outs, const char *name) MUST_USE_RESULT;
-extern bool out_raw(const void *bytes, size_t len, pb_stream *outs,
+bool out_struct(const void *struct_ptr, struct_desc *sd,
+		struct pbs_out *outs, struct pbs_out *obj_pbs) MUST_USE_RESULT;
+
+extern bool ikev1_out_generic(struct_desc *sd,
+			      pb_stream *outs, pb_stream *obj_pbs) MUST_USE_RESULT;
+extern bool ikev1_out_generic_raw(struct_desc *sd,
+				  pb_stream *outs, const void *bytes, size_t len,
+				  const char *name) MUST_USE_RESULT;
+#define ikev1_out_generic_chunk(sd, outs, ch, name) \
+	ikev1_out_generic_raw((sd), (outs), (ch).ptr, (ch).len, (name))
+
+diag_t pbs_out_zero(struct pbs_out *outs, size_t len,
 		    const char *name) MUST_USE_RESULT;
-#define out_chunk(ch, outs, name) out_raw((ch).ptr, (ch).len, (outs), (name))
 
-extern void close_output_pbs(pb_stream *pbs);
+diag_t pbs_out_repeated_byte(struct pbs_out *pbs, uint8_t, size_t len,
+			     const char *name) MUST_USE_RESULT;
 
+diag_t pbs_out_raw(struct pbs_out *outs, const void *bytes, size_t len,
+		   const char *name) MUST_USE_RESULT;
+
+#define pbs_out_hunk(HUNK, OUTS, NAME)					\
+	({								\
+		typeof(HUNK) hunk_ = HUNK; /* evaluate once */		\
+		struct pbs_out *outs_ = OUTS;				\
+		diag_t d_ = pbs_out_raw(outs_, hunk_.ptr, hunk_.len, (NAME)); \
+		if (d_ != NULL) {					\
+			log_diag(RC_LOG_SERIOUS, outs_->out_logger, &d_, "%s", ""); \
+		}							\
+		d_ == NULL;						\
+	})
 
 /* ISAKMP Header: for all messages
  * layout from RFC 2408 "ISAKMP" section 3.1
@@ -408,7 +445,11 @@ extern struct_desc ipsec_sit_desc;
 /* ISAKMP Proposal Payload
  * layout from RFC 2408 "ISAKMP" section 3.5
  * A variable length SPI follows.
- * Previous next payload: ISAKMP_NEXT_P
+ *
+ * XXX: Don't be confused by the field "Next Payload" in the below -
+ * it has nothing to do with the next payload chain.  It's values are
+ * either 0 (last) or ISAKMP_NEXT_P.
+ *
  *                      1                   2                   3
  *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
  * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -420,7 +461,7 @@ extern struct_desc ipsec_sit_desc;
  * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  */
 struct isakmp_proposal {
-	uint8_t isap_np;
+	uint8_t isap_pnp;
 	uint8_t isap_reserved;
 	uint16_t isap_length;
 	uint8_t isap_proposal;
@@ -434,7 +475,11 @@ extern struct_desc isakmp_proposal_desc;
 /* ISAKMP Transform Payload
  * layout from RFC 2408 "ISAKMP" section 3.6
  * Variable length SA Attributes follow.
- * Previous next payload: ISAKMP_NEXT_T
+ *
+ * XXX: Don't be confused by the field "Next Payload" in the below -
+ * it has nothing to do with the next payload chain.  It's values are
+ * either 0 (last) or ISAKMP_NEXT_T.
+ *
  *                      1                   2                   3
  *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
  * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -448,7 +493,7 @@ extern struct_desc isakmp_proposal_desc;
  * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  */
 struct isakmp_transform {
-	uint8_t isat_np;
+	uint8_t isat_tnp;
 	uint8_t isat_reserved;
 	uint16_t isat_length;
 	uint8_t isat_transnum;		/* Number of the transform */
@@ -940,7 +985,8 @@ struct ikev2_id {
 	uint16_t isai_length;		/* Payload length */
 	uint8_t isai_type;		/* ID type */
 	uint8_t isai_res1;
-	uint16_t isai_res2;
+	uint8_t isai_res2;
+	uint8_t isai_res3;
 };
 extern struct_desc ikev2_id_i_desc;
 extern struct_desc ikev2_id_r_desc;
@@ -950,7 +996,7 @@ struct ikev2_auth {
 	uint8_t isaa_np;		/* Next payload */
 	uint8_t isaa_critical;
 	uint16_t isaa_length;		/* Payload length */
-	uint8_t isaa_type;		/* auth type */
+	uint8_t isaa_auth_method;
 	uint8_t isaa_res1;
 	uint16_t isaa_res2;
 };
@@ -1161,13 +1207,7 @@ extern struct_desc sec_ctx_desc;
  * Nasty evil global packet buffer.
  */
 
-extern pb_stream reply_stream;
 extern uint8_t reply_buffer[MAX_OUTPUT_UDP_SIZE];
-
-struct pbs_reply_backup {
-	pb_stream stream;
-	uint8_t *buffer;
-};
 
 /*
  * Utilities:
@@ -1179,6 +1219,6 @@ struct pbs_reply_backup {
 bool pbs_in_address(ip_address *address, const struct ip_info *af,
 		    struct pbs_in *input_pbs,
 		    const char *WHAT) MUST_USE_RESULT;
-bool pbs_out_address(const ip_address *address, struct pbs_out *output_pbs, const char *what);
+diag_t pbs_out_address(struct pbs_out *output_pbs, const ip_address *address, const char *what);
 
 #endif /* _PACKET_H */

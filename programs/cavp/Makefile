@@ -40,29 +40,19 @@ OBJS += acvp.o
 # XXX: For the moment build things by pulling in chunks of pluto.
 # What, if anything, should be moved to libswan or another library?
 #
-CFLAGS += -I$(top_srcdir)/programs/pluto
-PLUTOOBJS += crypt_symkey.o
-PLUTOOBJS += crypt_hash.o
-PLUTOOBJS += crypt_prf.o
+USERLAND_CFLAGS += -I$(top_srcdir)/programs/pluto
 PLUTOOBJS += test_buffer.o
 PLUTOOBJS += ikev1_prf.o
 PLUTOOBJS += ikev2_prf.o
 # Need absolute path as 'make' (check dependencies) and 'ld' (do link)
 # are run from different directories.
 OBJS += $(addprefix $(abs_top_builddir)/programs/pluto/, $(PLUTOOBJS))
-# $(PROGRAM): pluto-base
-# .PHONY: pluto-base
-# pluto-base:
-#	$(MAKE) -C $(top_srcdir)/programs/pluto base
 
 OBJS += $(LIBRESWANLIB)
 OBJS += $(LSWTOOLLIBS)
 
-OBJS += $(LIBSERPENT)
-OBJS += $(LIBTWOFISH)
-
-LDFLAGS += $(NSS_LDFLAGS)
-LDFLAGS += $(NSPR_LDFLAGS)
+USERLAND_LDFLAGS += $(NSS_LDFLAGS)
+USERLAND_LDFLAGS += $(NSPR_LDFLAGS)
 
 default: check
 .PHONY: check default

@@ -254,7 +254,7 @@ def set_cert_extensions(cert, issuer, isCA=False, isRoot=False, ocsp=False, ocsp
         cf = False
         if 'kuCritical' in cnstr:
             cf = True
-        if ku_str is not '' and ku_str[0] == ',':
+        if ku_str != '' and ku_str[0] == ',':
             ku_str = ku_str[1:]
         add_ext(cert, 'keyUsage', cf, ku_str)
 
@@ -289,7 +289,7 @@ def set_cert_extensions(cert, issuer, isCA=False, isRoot=False, ocsp=False, ocsp
         cf = False
         if 'ekuCritical' in cnstr:
             cf = True
-        if eku_str is not '' and eku_str[0] == ',':
+        if eku_str != '' and eku_str[0] == ',':
             eku_str = eku_str[1:]
         add_ext(cert, 'extendedKeyUsage', cf, eku_str)
 
@@ -446,13 +446,15 @@ def create_mainca_end_certs(mainca_end_certs):
     for name in mainca_end_certs:
         # put special cert handling here
         print(" - creating %s"% name)
+        keysize = 3072
         if name == 'smallkey':
             keysize = 1024
-        else:
-            if name == 'key4096':
-                keysize = 4096
-            else:
-                keysize = 3072
+        if name == 'mediumkey':
+            keysize = 2048
+        if name == 'key2032':
+            keysize = 2032
+        if name == 'key4096':
+            keysize = 4096
 
         if name == 'notyetvalid':
             startdate = dates['FUTURE']
@@ -724,7 +726,7 @@ def create_ec_certs():
     for name in ['east', 'west', 'north', 'road']:
         print("- creating %s-ec"% name)
         #create end certs
-        if name is 'west':
+        if name == 'west':
             pexpect.run('openssl ecparam -out keys/' + name +
                     '-ec.key -name secp256r1 -genkey -noout')
         else:
@@ -803,7 +805,7 @@ def create_mainec_certs():
     for name in ['east', 'west', 'north', 'road']:
         print("- creating %s-mainec"% name)
         #create end certs; west is secp256r1
-        if name is 'west':
+        if name == 'west':
             alg = "secp256r1"
         else:
             alg = "secp384r1"
@@ -888,9 +890,9 @@ def run_dist_certs():
                         'west-eku-ipsecIKE', 'east-eku-ipsecIKE', # Should work
                         'west-ekuCritical-eku-ipsecIKE', 'east-ekuCritical-eku-ipsecIKE', # Should still work
                         'west-ekuCritical-eku-emailProtection', 'east-ekuCritical-eku-emailProtection', # Should still work
-			'usage-server', 'usage-client', 'usage-both',
+                        'usage-server', 'usage-client', 'usage-both',
                         'nic-noext', 'nic-nourl',
-                        'smallkey', 'key4096',
+                        'smallkey', 'mediumkey', 'key2032', 'key4096',
                         'notyetvalid','notvalidanymore',
                         'signedbyother','otherwest','othereast','wrongdnorg',
                         'unwisechar','spaceincn','hashsha1',
@@ -916,7 +918,8 @@ def create_nss_pw():
 def main():
     outdir = os.path.dirname(sys.argv[0])
     cwd = os.getcwd()
-    os.chdir(outdir)
+    if outdir:
+        os.chdir(outdir)
     global dates
     global dirbase
     reset_files()

@@ -32,7 +32,8 @@
 static PK11SymKey *signature_skeyid(const struct prf_desc *prf_desc,
 				    const chunk_t Ni,
 				    const chunk_t Nr,
-				    /*const*/ PK11SymKey *dh_secret /* NSS doesn't do const */)
+				    /*const*/ PK11SymKey *dh_secret /* NSS doesn't do const */,
+				    struct logger *logger)
 {
 	CK_NSS_IKE_PRF_DERIVE_PARAMS ike_prf_params = {
 		.prfMechanism = prf_desc->nss.mechanism,
@@ -50,7 +51,8 @@ static PK11SymKey *signature_skeyid(const struct prf_desc *prf_desc,
 
         return crypt_derive(dh_secret, CKM_NSS_IKE_PRF_DERIVE, &params,
 			    "skeyid", CKM_NSS_IKE1_PRF_DERIVE, CKA_DERIVE,
-			    /*key,flags*/ 0, 0, HERE);
+			    /*key,flags*/ 0, 0,
+			    HERE, logger);
 }
 
 /*
@@ -58,9 +60,10 @@ static PK11SymKey *signature_skeyid(const struct prf_desc *prf_desc,
  */
 static PK11SymKey *pre_shared_key_skeyid(const struct prf_desc *prf_desc,
 					 chunk_t pre_shared_key,
-					 chunk_t Ni, chunk_t Nr)
+					 chunk_t Ni, chunk_t Nr,
+					 struct logger *logger)
 {
-	PK11SymKey *psk = prf_key_from_hunk("psk", prf_desc, pre_shared_key);
+	PK11SymKey *psk = prf_key_from_hunk("psk", prf_desc, pre_shared_key, logger);
 	PK11SymKey *skeyid;
 	if (psk == NULL) {
 		return NULL;
@@ -82,7 +85,8 @@ static PK11SymKey *pre_shared_key_skeyid(const struct prf_desc *prf_desc,
 
 	skeyid = crypt_derive(psk, CKM_NSS_IKE_PRF_DERIVE, &params,
 			      "skeyid", CKM_NSS_IKE1_PRF_DERIVE, CKA_DERIVE,
-			      /*key_size*/0, /*flags*/0, HERE);
+			      /*key_size*/0, /*flags*/0,
+			      HERE, logger);
 	release_symkey("SKEYID psk", "psk", &psk);
 	return skeyid;
 }
@@ -93,7 +97,8 @@ static PK11SymKey *pre_shared_key_skeyid(const struct prf_desc *prf_desc,
 static PK11SymKey *skeyid_d(const struct prf_desc *prf_desc,
 			    PK11SymKey *skeyid,
 			    PK11SymKey *dh_secret,
-			    chunk_t cky_i, chunk_t cky_r)
+			    chunk_t cky_i, chunk_t cky_r,
+			    struct logger *logger)
 {
 	CK_NSS_IKE1_PRF_DERIVE_PARAMS ike1_prf_params = {
 		.prfMechanism = prf_desc->nss.mechanism,
@@ -112,7 +117,8 @@ static PK11SymKey *skeyid_d(const struct prf_desc *prf_desc,
 
 	return crypt_derive(skeyid, CKM_NSS_IKE1_PRF_DERIVE, &params,
 			    "skeyid_d", CKM_EXTRACT_KEY_FROM_KEY, CKA_DERIVE,
-			    /*key-size*/0, /*flags*/0, HERE);
+			    /*key-size*/0, /*flags*/0,
+			    HERE, logger);
 }
 
 /*
@@ -121,7 +127,8 @@ static PK11SymKey *skeyid_d(const struct prf_desc *prf_desc,
 static PK11SymKey *skeyid_a(const struct prf_desc *prf_desc,
 			    PK11SymKey *skeyid,
 			    PK11SymKey *skeyid_d, PK11SymKey *dh_secret,
-			    chunk_t cky_i, chunk_t cky_r)
+			    chunk_t cky_i, chunk_t cky_r,
+			    struct logger *logger)
 {
 	CK_NSS_IKE1_PRF_DERIVE_PARAMS ike1_prf_params = {
 		.prfMechanism = prf_desc->nss.mechanism,
@@ -141,7 +148,8 @@ static PK11SymKey *skeyid_a(const struct prf_desc *prf_desc,
 
 	return crypt_derive(skeyid, CKM_NSS_IKE1_PRF_DERIVE, &params,
 			    "skeyid_a", CKM_EXTRACT_KEY_FROM_KEY, CKA_DERIVE,
-			    /*key-size*/0, /*flags*/0, HERE);
+			    /*key-size*/0, /*flags*/0,
+			    HERE, logger);
 }
 
 /*
@@ -150,7 +158,8 @@ static PK11SymKey *skeyid_a(const struct prf_desc *prf_desc,
 static PK11SymKey *skeyid_e(const struct prf_desc *prf_desc,
 			    PK11SymKey *skeyid,
 			    PK11SymKey *skeyid_a, PK11SymKey *dh_secret,
-			    chunk_t cky_i, chunk_t cky_r)
+			    chunk_t cky_i, chunk_t cky_r,
+			    struct logger *logger)
 {
 	CK_NSS_IKE1_PRF_DERIVE_PARAMS ike1_prf_params = {
 		.prfMechanism = prf_desc->nss.mechanism,
@@ -170,15 +179,27 @@ static PK11SymKey *skeyid_e(const struct prf_desc *prf_desc,
 
 	return crypt_derive(skeyid, CKM_NSS_IKE1_PRF_DERIVE, &params,
 			    "skeyid_e", CKM_EXTRACT_KEY_FROM_KEY, CKA_DERIVE,
-			    /*key-size*/0, /*flags*/0, HERE);
+			    /*key-size*/0, /*flags*/0,
+			    HERE, logger);
 }
 
 static PK11SymKey *appendix_b_keymat_e(const struct prf_desc *prf,
 				       const struct encrypt_desc *encrypter,
 				       PK11SymKey *skeyid_e,
-				       unsigned required_keymat)
+				       unsigned required_keymat,
+				       struct logger *logger)
 {
-#ifdef USE_NSS_PRF
+
+	/*
+	 * XXX: This requires a fix to an old bug adding
+	 * CKM_NSS_IKE1_APP_B_PRF_DERIVE to the allowed operations
+	 * that was embedded in the below changeset.
+	 *
+	 * changeset:   15575:225bb39eade1
+	 * user:        Robert Relyea <rrelyea@redhat.com>
+	 * date:        Mon Apr 20 16:58:16 2020 -0700
+	 * summary:     Bug 1629663 NSS missing IKEv1 Quick Mode KDF prf r=kjacobs
+	 */
 	CK_MECHANISM_TYPE mechanism = prf->nss.mechanism;
 	CK_MECHANISM_TYPE target = encrypter->nss.mechanism;
 	SECItem params = {
@@ -190,12 +211,8 @@ static PK11SymKey *appendix_b_keymat_e(const struct prf_desc *prf,
 
 	return crypt_derive(skeyid_e, CKM_NSS_IKE1_APP_B_PRF_DERIVE,
 			    &params, "keymat_e", target, CKA_ENCRYPT,
-			    /*key-size*/required_keymat, /*flags*/CKF_DECRYPT|CKF_ENCRYPT, HERE);
-#else
-	DBG_log("using MAC ops for %s", __func__);
-	return ike_alg_prf_ikev1_mac_ops.appendix_b_keymat_e(prf, encrypter, skeyid_e,
-							     required_keymat);
-#endif
+			    /*key-size*/required_keymat, /*flags*/CKF_DECRYPT|CKF_ENCRYPT,
+			    HERE, logger);
 }
 
 static chunk_t section_5_keymat(const struct prf_desc *prf,
@@ -204,9 +221,39 @@ static chunk_t section_5_keymat(const struct prf_desc *prf,
 				uint8_t protocol,
 				shunk_t SPI,
 				chunk_t Ni_b, chunk_t Nr_b,
-				unsigned required_keymat)
+				unsigned required_keymat,
+				struct logger *logger)
 {
-#ifdef USE_NSS_PRF
+	/*
+	 * XXX: this requires:
+	 *
+	 * changeset:   15575:225bb39eade1
+	 * user:        Robert Relyea <rrelyea@redhat.com>
+	 * date:        Mon Apr 20 16:58:16 2020 -0700
+	 * summary:     Bug 1629663 NSS missing IKEv1 Quick Mode KDF prf r=kjacobs
+	 *
+	 * We found another KDF function in libreswan that is not
+	 * using the NSS KDF API.
+	 *
+	 * Unfortunately, it seems the existing IKE KDF's in NSS are
+	 * not usable for the Quick Mode use.
+	 *
+	 * The libreswan code is in compute_proto_keymat() and the
+	 * specification is in
+	 * https://tools.ietf.org/html/rfc2409#section-5.5
+	 *
+	 * [...]
+	 *
+	 * This patch implements this by extendind the Appendix B
+	 * Mechanism to take and optional key and data in a new
+	 * Mechanism parameter structure.  Which flavor is used (old
+	 * CK_MECHANISM_TYPE or the new parameter) is determined by
+	 * the mechanism parameter lengths. Application which try to
+	 * use this new feature on old versions of NSS will get an
+	 * error (rather than invalid data).
+	 *
+	 * XXX: yes, it looks at params.len; ewwwww!
+	 */
 	size_t extra_size = (1/* protocol*/ + SPI.len + Ni_b.len + Nr_b.len);
 	uint8_t *extra = alloc_things(uint8_t, extra_size,
 				      "protocol | SPI | Ni_b | Nr_b");
@@ -222,7 +269,7 @@ static chunk_t section_5_keymat(const struct prf_desc *prf,
 
 	/*
 	 * If this fails to compile, a newer nss version is needed.
-	 * Alternatively compile with USE_NSS_PRF=false.
+	 * Alternatively compile with USE_NSS_KDF=false.
 	 * But then for FIPS, compiling with USE_FIPSCHECK is needed again.
 	 */
 	CK_NSS_IKE1_APP_B_PRF_DERIVE_PARAMS dparams = {
@@ -240,25 +287,16 @@ static chunk_t section_5_keymat(const struct prf_desc *prf,
 				       "section_5_keymat", CKM_EXTRACT_KEY_FROM_KEY,
 				       CKA_ENCRYPT,
 				       /*key-size*/required_keymat,
-				       /*flags*/CKF_DECRYPT|CKF_ENCRYPT, HERE);
-	chunk_t keymat = chunk_from_symkey("section 5 keymat", key);
+				       /*flags*/CKF_DECRYPT|CKF_ENCRYPT,
+				       HERE, logger);
+	chunk_t keymat = chunk_from_symkey("section 5 keymat", key, logger);
 	release_symkey("section 5 keymat", "keymat", &key);
 	pfree(extra);
 	return keymat;
-#else
-	DBG_log("using MAC ops for %s", __func__);
-	return ike_alg_prf_ikev1_mac_ops.section_5_keymat(prf, SKEYID_d, g_xy,
-							  protocol, SPI, Ni_b, Nr_b,
-							  required_keymat);
-#endif
 }
 
 const struct prf_ikev1_ops ike_alg_prf_ikev1_nss_ops = {
-#ifdef USE_NSS_PRF
 	.backend = "NSS",
-#else
-	.backend = "NSS+native",
-#endif
 	.signature_skeyid = signature_skeyid,
 	.pre_shared_key_skeyid = pre_shared_key_skeyid,
 	.skeyid_d = skeyid_d,

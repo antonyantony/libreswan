@@ -17,6 +17,7 @@
  */
 
 #include <time.h>	/* for clock_*() + clockid_t */
+#include <errno.h>
 
 #include "constants.h"	/* for memeq() which is clearly not a constant */
 #include "lswlog.h"	/* for libreswan_exit_log_errno() */
@@ -48,9 +49,16 @@ monotime_t mononow(void)
 {
 	struct timespec t;
 	int e = clock_gettime(monotime_clockid(), &t);
-	if (e != 0) {
-		libreswan_exit_log_errno(e, "clock_gettime(%d,...) in mononow() failed",
-					 monotime_clockid());
+	if (e < 0) {
+		/*
+		 * This code assumes clock_gettime() always succeeds -
+		 * if it were expected to fail then there'd either be
+		 * a logger and/or a way to return the failure to the
+		 * caller.
+		 */
+		int err = errno;
+		PASSERT_FAIL("clock_gettime(%d,...) in mononow() failed. "PRI_ERRNO,
+			     monotime_clockid(), pri_errno(err));
 	}
 	/* OK */
 	return (monotime_t) {
@@ -75,12 +83,17 @@ intmax_t monosecs(monotime_t m)
 	return m.mt.tv_sec;
 }
 
-monotime_t monotimesum(monotime_t t, deltatime_t d)
+monotime_t monotime_add(monotime_t t, deltatime_t d)
 {
-	intmax_t d_ms = deltamillisecs(d);
-	struct timeval dt = { d_ms / 1000, d_ms % 1000 };
 	monotime_t s = MONOTIME_EPOCH;
-	timeradd(&t.mt, &dt, &s.mt);
+	timeradd(&t.mt, &d.dt, &s.mt);
+	return s;
+}
+
+monotime_t monotime_sub(monotime_t t, deltatime_t d)
+{
+	monotime_t s = MONOTIME_EPOCH;
+	timersub(&t.mt, &d.dt, &s.mt);
 	return s;
 }
 
@@ -89,20 +102,25 @@ bool monobefore(monotime_t a, monotime_t b)
 	return timercmp(&a.mt, &b.mt, <);
 }
 
+bool monotime_eq(monotime_t a, monotime_t b)
+{
+	return timercmp(&a.mt, &b.mt, ==);
+}
+
 deltatime_t monotimediff(monotime_t a, monotime_t b)
 {
 	return deltatime_timevals_diff(a.mt, b.mt);
 }
 
-size_t jam_monotime(jambuf_t *buf, monotime_t m)
+size_t jam_monotime(struct jambuf *buf, monotime_t m)
 {
 	/* convert it to time-since-epoch and log that */
-	return lswlog_deltatime(buf, monotimediff(m, monotime_epoch));
+	return jam_deltatime(buf, monotimediff(m, monotime_epoch));
 }
 
 const char *str_monotime(monotime_t m, monotime_buf *buf)
 {
-	jambuf_t jambuf = ARRAY_AS_JAMBUF(buf->buf);
+	struct jambuf jambuf = ARRAY_AS_JAMBUF(buf->buf);
 	jam_monotime(&jambuf, m);
 	return buf->buf;
 }

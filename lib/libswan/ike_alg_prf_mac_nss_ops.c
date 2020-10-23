@@ -32,6 +32,7 @@ struct prf_context {
 	const char *name;
 	const struct prf_desc *desc;
 	PK11Context *context;
+	struct logger *logger;
 };
 
 /*
@@ -40,7 +41,8 @@ struct prf_context {
 
 static struct prf_context *init(const struct prf_desc *prf_desc,
 				const char *name,
-				const char *key_name, PK11SymKey *key)
+				const char *key_name, PK11SymKey *key,
+				struct logger *logger)
 
 {
 	passert(prf_desc->nss.mechanism > 0);
@@ -52,41 +54,40 @@ static struct prf_context *init(const struct prf_desc *prf_desc,
 							  CKA_SIGN,
 							  key, &ignore);
 	if (context == NULL) {
-		LSWLOG(buf) {
-			lswlogf(buf, "NSS: %s create %s context from key %s(%p) failed",
-				name, prf_desc->common.name,
-				key_name, key);
-			lswlog_nss_error(buf);
-		}
+		pexpect_nss_error(logger, HERE,
+				  "%s create %s context from key %s(%p) failed ",
+				  name, prf_desc->common.fqn,
+				  key_name, key);
 		return NULL;
 	}
 	DBGF(DBG_CRYPT, "%s prf: created %s context %p from %s-key@%p",
-	     name, prf_desc->common.name,
+	     name, prf_desc->common.fqn,
 	     context, key_name, key);
 
 	SECStatus rc = PK11_DigestBegin(context);
 	if (rc) {
-		libreswan_log("NSS: %s digest begin failed for %s (%x)\n",
-			      name, prf_desc->common.name, rc);
+		pexpect_nss_error(logger, HERE, "%s digest begin failed for %s (%x)\n",
+				  name, prf_desc->common.fqn, rc);
 		PK11_DestroyContext(context, PR_TRUE);
 		return NULL;
 	}
 	DBGF(DBG_CRYPT, "%s prf: begin %s with context %p from %s-key@%p",
-	     name, prf_desc->common.name,
+	     name, prf_desc->common.fqn,
 	     context, key_name, key);
 
-	struct prf_context *prf = alloc_thing(struct prf_context, name);
-	*prf = (struct prf_context) {
+	struct prf_context prf = {
 		.name = name,
 		.desc = prf_desc,
 		.context = context,
+		.logger = logger,
 	};
-	return prf;
+	return clone_thing(prf, name);
 }
 
 static struct prf_context *init_symkey(const struct prf_desc *prf_desc,
 				       const char *name,
-				       const char *key_name, PK11SymKey *key)
+				       const char *key_name, PK11SymKey *key,
+				       struct logger *logger)
 {
 	/*
 	 * Need a key of the correct type.
@@ -95,9 +96,8 @@ static struct prf_context *init_symkey(const struct prf_desc *prf_desc,
 	 */
 	PK11SymKey *clone = prf_key_from_symkey_bytes("clone", prf_desc,
 						      0, sizeof_symkey(key),
-						      key, HERE);
-	struct prf_context *prf = init(prf_desc, name,
-				       key_name, clone);
+						      key, HERE, logger);
+	struct prf_context *prf = init(prf_desc, name, key_name, clone, logger);
 	release_symkey(name, "clone", &clone);
 	return prf;
 }
@@ -105,7 +105,8 @@ static struct prf_context *init_symkey(const struct prf_desc *prf_desc,
 static struct prf_context *init_bytes(const struct prf_desc *prf_desc,
 				      const char *name,
 				      const char *key_name,
-				      const uint8_t *key, size_t sizeof_key)
+				      const uint8_t *key, size_t sizeof_key,
+				      struct logger *logger)
 {
 	/*
 	 * Need a key of the correct type.
@@ -113,9 +114,8 @@ static struct prf_context *init_bytes(const struct prf_desc *prf_desc,
 	 * This key has both the mechanism and flags set.
 	 */
 	PK11SymKey *clone = prf_key_from_bytes(key_name, prf_desc,
-					       key, sizeof_key, HERE);
-	struct prf_context *prf = init(prf_desc, name,
-				       key_name, clone);
+					       key, sizeof_key, HERE, logger);
+	struct prf_context *prf = init(prf_desc, name, key_name, clone, logger);
 	release_symkey(name, "clone", &clone);
 	return prf ;
 }
@@ -136,9 +136,10 @@ static void digest_symkey(struct prf_context *prf,
 	SECStatus rc = PK11_DigestKey(prf->context, symkey);
 	fprintf(stderr, "symkey update %x\n", rc);
 #endif
-	chunk_t chunk = chunk_from_symkey("nss hmac digest hack", symkey);
+	chunk_t chunk = chunk_from_symkey("nss hmac digest hack", symkey,
+					  prf->logger);
 	SECStatus rc = PK11_DigestOp(prf->context, chunk.ptr, chunk.len);
-	freeanychunk(chunk);
+	free_chunk_content(&chunk);
 	passert(rc == SECSuccess);
 }
 
@@ -172,16 +173,17 @@ static PK11SymKey *final_symkey(struct prf_context **prf)
 	size_t sizeof_bytes = (*prf)->desc->prf_output_size;
 	uint8_t *bytes = alloc_things(uint8_t, sizeof_bytes, "bytes");
 	final(*prf, bytes, sizeof_bytes);
-	PK11SymKey *final = symkey_from_bytes("final", bytes, sizeof_bytes);
+	PK11SymKey *final = symkey_from_bytes("final", bytes, sizeof_bytes,
+					      (*prf)->logger);
 	pfree(bytes);
 	pfree(*prf); *prf = NULL;
 	return final;
 }
 
-static void nss_prf_check(const struct prf_desc *prf)
+static void nss_prf_check(const struct prf_desc *prf, struct logger *logger)
 {
 	const struct ike_alg *alg = &prf->common;
-	pexpect_ike_alg(alg, prf->nss.mechanism > 0);
+	pexpect_ike_alg(logger, alg, prf->nss.mechanism > 0);
 }
 
 const struct prf_mac_ops ike_alg_prf_mac_nss_ops = {

@@ -1,4 +1,4 @@
-# Libreswan master makefile
+# Libreswan top level Makefile
 #
 # Copyright (C) 1998-2002  Henry Spencer.
 # Copyright (C) 2003-2004  Xelerance Corporation
@@ -25,18 +25,21 @@ LIBRESWANSRCDIR?=$(shell pwd)
 include ${LIBRESWANSRCDIR}/Makefile.inc
 
 MAIN_RPM_VERSION = $(shell make showversion | sed "s/-.*//")
-MAIN_RPM_PREVER = $(shell make showversion | sed -e  "s/^.[^-]*-\([^-]*\)-\(.*\)/rc\1_\2/" -e "s/-/_/")
+MAIN_RPM_PREVER = $(shell make showversion | sed -e  "s/^.[^-]*-\([^-]*\)-\(.*\)/rc\1_\2/" -e "s/-/_/g")
 MAIN_RPM_PREFIX  = libreswan-$(MAIN_RPM_VERSION)$(MAIN_RPM_PREVER)
 MAIN_RPM_RHEL_PKG = $(shell rpm -qf /etc/redhat-release)
 MAIN_RPM_RHEL_VERSION = $(shell echo $(MAIN_RPM_RHEL_PKG) | sed "s/.*-release-\(.\).*/\1/")
 MAIN_RPM_SPECFILE = $(shell if [ -f /etc/fedora-release ]; then echo packaging/fedora/libreswan.spec; elif [ -n "$(MAIN_RPM_RHEL_VERSION)" ]; then echo packaging/rhel/$(MAIN_RPM_RHEL_VERSION)/libreswan.spec; else echo "unknown distro, cannot find spec file to use in packaging directory"; fi)
-
+RHEL_LIKE= $(shell cat /etc/os-release | grep ID_LIKE | sed -e "s/ID_LIKE=//" -e 's/"//g' -e "s/ .*//")
+RHEL_MAJOR= $(shell cat /etc/os-release |grep VERSION_ID | sed -e 's/.*"\([0-9]*\)"/\1/' -e 's/VERSION_ID=//')
 SRCDIR?=$(shell pwd)/
 
 # dummy default rule
-def help:
+def: all
+
+help:
 	@echo
-	@echo "To build and install on a recent Linux kernel that has NETKEY:"
+	@echo "To build and install on a recent Linux kernel:"
 	@echo
 	@echo "   make all && sudo make install"
 	@echo
@@ -45,42 +48,31 @@ def help:
 	@echo "   make base && sudo make install-base"
 	@echo
 	@echo "See the files INSTALL and README for more general information,"
-	@echo "and details on how to build / install on KLIPS and other systems"
 	@echo
 	@echo "To build debian packages: make deb"
-	@echo "To build fedora/rhel/centos rpms, see packaging/"
+	@echo "To build fedora/rhel/centos rpms: make rpm"
 	@echo
 	@false
 
 .PHONY: def help
 
-PATCHES=linux
-# where KLIPS goes in the kernel
-# note, some of the patches know the last part of this path
-KERNELKLIPS=$(KERNELSRC)/net/ipsec
-KERNELCRYPTODES=$(KERNELSRC)/crypto/ciphers/des
-KERNELLIBFREESWAN=$(KERNELSRC)/lib/libfreeswan
-KERNELLIBZLIB=$(KERNELSRC)/lib/zlib
-KERNELINCLUDE=$(KERNELSRC)/include
-
-MAKEUTILS=packaging/utils
 ERRCHECK=${MAKEUTILS}/errcheck
 KVUTIL=${MAKEUTILS}/kernelversion
 KVSHORTUTIL=${MAKEUTILS}/kernelversion-short
 
 SUBDIRS?=lib programs initsystems testing
 
-TAGSFILES=$(wildcard include/*.h lib/lib*/*.[ch] programs/*/*.[ch] linux/include/*.h linux/include/libreswan/*.h linux/net/ipsec/*.[ch])
+TAGSFILES = $(wildcard include/*.h include/*/*.h lib/lib*/*.[ch] programs/*/*.[ch] testing/check/*/*.[ch])
 
-tags:	$(TAGSFILES)
-	@LC_ALL=C ctags $(CTAGSFLAGS) ${TAGSFILES}
+tags: $(TAGSFILES)
+	LC_ALL=C ctags $(CTAGSFLAGS) ${TAGSFILES}
 
 cscope:
-	@ls ${TAGSFILES} > cscope.files
-	@cscope -b
+	ls ${TAGSFILES} > cscope.files
+	cscope -b
 
-TAGS:	$(TAGSFILES)
-	@LC_ALL=C etags $(ETAGSFLAGS) ${TAGSFILES}
+TAGS: $(TAGSFILES)
+	LC_ALL=C etags $(ETAGSFLAGS) ${TAGSFILES}
 
 .PHONY: dummy
 dummy:
@@ -98,10 +90,6 @@ endif
 
 include ${LIBRESWANSRCDIR}/mk/subdirs.mk
 
-# kernel details
-# what variant of our patches should we use, and where is it
-KERNELREL=$(shell ${KVSHORTUTIL} ${KERNELSRC}/Makefile)
-
 # directories visited by all recursion
 
 # programs
@@ -113,7 +101,7 @@ OBJDIRTOP=${ABSOBJDIR}
 .PHONY: local-clean-base
 local-clean-base:
 	$(foreach file,$(RPMTMPDIR) $(RPMDEST) out.*build out.*install, \
-		rm -rf $(file) ; )	# but leave out.kpatch
+		rm -rf $(file) ; )
 
 # Delete absolutely everything.
 #
@@ -121,21 +109,28 @@ local-clean-base:
 # $(OBJDIR), "distclean" does not depend on it.  If it did, "make
 # distclean" would have the quirky behaviour of first creating
 # $(OBJDIR) only to then delete it.
+
 .PHONY: distclean
 distclean: clean-kvm-keys
 	rm -f $(RPMTMPDIR) $(RPMDEST) out.*
 	rm -rf testing/pluto/*/OUTPUT*
 	rm -rf OBJ.* $(OBJDIR)
 	rm -rf BACKUP
-
-
-# set up for build
-buildready:
-	rm -f dtrmakefile cvs.datemark
-	# obsolete cd doc ; $(MAKE) -s
+	rm -f tags TAGS cscope
+	rm -f cscope.files
 
 rpm:
-	# would be nice if we could support ~/.rpmmacros here
+	@if [ -d .git ]; then \
+		echo "For git trees, please run: make git-rpm" ; \
+	fi
+	@if [ ! -d .git -a -n "$(RHEL_LIKE)" ]; then \
+		rpmbuild -ba packaging/rhel/$(RHEL_MAJOR)/libreswan.spec ; \
+	fi
+	@if [ ! -d .git -a -f /etc/fedora-release ]; then \
+		rpmbuild -ba packaging/fedora/libreswan.spec ; \
+	fi
+
+git-rpm:
 	@echo building rpm for libreswan testing
 	mkdir -p ~/rpmbuild/SPECS/
 	sed  -e "s/^Version:.*/Version: $(MAIN_RPM_VERSION)/g" \
@@ -188,7 +183,11 @@ showobjdir:
 .PHONY: deb-prepare
 DEBIPSECBASEVERSION=$(shell make -s showdebversion)
 deb-prepare:
-	cp -r packaging/debian .
+	if [ -f /etc/devuan_version ]; then \
+		cp -r packaging/devuan debian; \
+	else \
+		cp -r packaging/debian .; \
+	fi
 	cat debian/changelog
 	grep "IPSECBASEVERSION" debian/changelog && \
 		sed -i "s/@IPSECBASEVERSION@/$(DEBIPSECBASEVERSION)/g" debian/changelog || \
@@ -205,7 +204,11 @@ release:
 	packaging/utils/makerelease
 
 local-install:
-	@if test -z "$(DESTDIR)" -a -x /usr/sbin/selinuxenabled -a $(PUBDIR) != "$(DESTDIR)/usr/sbin" ; then \
+	@if test ! -d $(NSSDIR) ; then \
+		mkdir -p $(NSSDIR) ; \
+		chmod 0700 $(NSSDIR) ; \
+	fi
+	@if test -z "$(DESTDIR)" -a -x /usr/sbin/selinuxenabled -a $(SBINDIR) != "$(DESTDIR)/usr/sbin" ; then \
 	if /usr/sbin/selinuxenabled ; then  \
 		echo -e "\n************************** WARNING ***********************************" ; \
 		echo "SElinux is present on this system and the prefix path is not /usr." ; \
@@ -220,6 +223,7 @@ local-install:
 		echo -e "**********************************************************************\n" ; \
 	fi \
 	fi
+ifeq ($(USE_XAUTHPAM),true)
 	@if test ! -f $(DESTDIR)/etc/pam.d/pluto ; then \
 		mkdir -p $(DESTDIR)/etc/pam.d/ ; \
 		$(INSTALL) $(INSTCONFFLAGS) pam.d/pluto $(DESTDIR)/etc/pam.d/pluto ; \
@@ -229,6 +233,7 @@ local-install:
 		echo "was already present.  You may wish to update it yourself if desired." ; \
 		echo -e "**********************************************************************\n" ; \
 	fi
+endif
 
 # Test only target (run by swan-install) that generates FIPS .*.hmac
 # file for pluto that will be verified by fipscheck.
@@ -249,6 +254,3 @@ endif
 include ${LIBRESWANSRCDIR}/mk/docker-targets.mk
 include ${LIBRESWANSRCDIR}/mk/kvm-targets.mk
 include ${LIBRESWANSRCDIR}/mk/web-targets.mk
-ifeq ($(USE_KLIPS),true)
-include ${LIBRESWANSRCDIR}/mk/kernel.mk
-endif

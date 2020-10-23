@@ -30,7 +30,6 @@
 
 #include "sysdep.h"
 #include "constants.h"
-#include "lswlog.h"
 
 #include "defs.h"
 #include "id.h"
@@ -83,13 +82,12 @@ void ikev2_derive_child_keys(struct child_sa *child)
 
 	ipi->keymat_len = integ_key_size + encrypt_key_size + encrypt_salt_size;
 
-	DBG(DBG_CONTROL,
-	    DBG_log("integ=%s: .key_size=%zu encrypt=%s: .key_size=%zu .salt_size=%zu keymat_len=%" PRIu16,
-		    integ != NULL ? integ->common.name : "N/A",
-		    integ_key_size,
-		    encrypt != NULL ? encrypt->common.name : "N/A",
-		    encrypt_key_size, encrypt_salt_size,
-		    ipi->keymat_len));
+	dbg("integ=%s: .key_size=%zu encrypt=%s: .key_size=%zu .salt_size=%zu keymat_len=%" PRIu16,
+	    integ != NULL ? integ->common.fqn : "N/A",
+	    integ_key_size,
+	    encrypt != NULL ? encrypt->common.fqn : "N/A",
+	    encrypt_key_size, encrypt_salt_size,
+	    ipi->keymat_len);
 
 	/*
 	 *
@@ -112,10 +110,8 @@ void ikev2_derive_child_keys(struct child_sa *child)
 	 */
 	PK11SymKey *shared = NULL;
 	if (st->st_pfs_group != NULL) {
-		DBG(DBG_CRYPT, DBG_log("#%lu %s add g^ir to child key %p",
-					st->st_serialno,
-					st->st_state->name,
-					st->st_shared_nss));
+		DBGF(DBG_CRYPT, "#%lu %s add g^ir to child key %p",
+		     st->st_serialno, st->st_state->name, st->st_shared_nss);
 		shared = st->st_shared_nss;
 	}
 
@@ -124,37 +120,42 @@ void ikev2_derive_child_keys(struct child_sa *child)
 						   shared,
 						   st->st_ni,
 						   st->st_nr,
-						   ipi->keymat_len * 2);
-	PK11SymKey *ikey = key_from_symkey_bytes(keymat, 0, ipi->keymat_len, HERE);
-	ikeymat = chunk_from_symkey("initiator to responder keys", ikey);
+						   ipi->keymat_len * 2,
+						   st->st_logger);
+	PK11SymKey *ikey = key_from_symkey_bytes(keymat, 0, ipi->keymat_len,
+						 HERE, st->st_logger);
+	ikeymat = chunk_from_symkey("initiator to responder keys", ikey,
+				    st->st_logger);
 	release_symkey(__func__, "ikey", &ikey);
 
 	PK11SymKey *rkey = key_from_symkey_bytes(keymat, ipi->keymat_len,
-						 ipi->keymat_len, HERE);
-	rkeymat = chunk_from_symkey("responder to initiator keys:", rkey);
+						 ipi->keymat_len,
+						 HERE, st->st_logger);
+	rkeymat = chunk_from_symkey("responder to initiator keys:", rkey,
+				    st->st_logger);
 	release_symkey(__func__, "rkey", &rkey);
 
 	release_symkey(__func__, "keymat", &keymat);
 
 	/*
 	 * The initiator stores outgoing initiator-to-responder keymat
-	 * in PEER, and incomming responder-to-initiator keymat in
+	 * in PEER, and incoming responder-to-initiator keymat in
 	 * OUR.
 	 */
 	switch (child->sa.st_sa_role) {
 	case SA_RESPONDER:
-		DBG(DBG_PRIVATE, {
+		if (DBGP(DBG_PRIVATE) || DBGP(DBG_CRYPT)) {
 			    DBG_dump_hunk("our  keymat", ikeymat);
 			    DBG_dump_hunk("peer keymat", rkeymat);
-		    });
+		}
 		ipi->our_keymat = ikeymat.ptr;
 		ipi->peer_keymat = rkeymat.ptr;
 		break;
 	case SA_INITIATOR:
-		DBG(DBG_PRIVATE, {
-			    DBG_dump_hunk("our  keymat", rkeymat);
-			    DBG_dump_hunk("peer keymat", ikeymat);
-		    });
+		if (DBGP(DBG_PRIVATE) || DBGP(DBG_CRYPT)) {
+			DBG_dump_hunk("our  keymat", rkeymat);
+			DBG_dump_hunk("peer keymat", ikeymat);
+		}
 		ipi->peer_keymat = ikeymat.ptr;
 		ipi->our_keymat = rkeymat.ptr;
 		break;

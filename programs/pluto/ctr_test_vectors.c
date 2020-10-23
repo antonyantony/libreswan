@@ -16,17 +16,18 @@
 #include <stdlib.h>
 #include "constants.h"
 #include "lswalloc.h"
-#include "lswlog.h"
 
 #include "ike_alg.h"
 #include "test_buffer.h"
 #include "ike_alg_test_ctr.h"
 #include "ike_alg_encrypt_ops.h"	/* XXX: oops */
 
-#include "nss.h"
 #include "lswfips.h"
 #include "pk11pub.h"
 #include "crypt_symkey.h"
+
+#include "defs.h"		/* for so_serial_t */
+#include "log.h"
 
 /*
  * Ref: https://tools.ietf.org/html/rfc3686 Test Vectors
@@ -157,7 +158,8 @@ static bool test_ctr_op(const struct encrypt_desc *encrypt_desc,
 			PK11SymKey *sym_key,
 			const char *encoded_cb, const char *output_cb,
 			const char *input_name, const char *input,
-			const char *output_name, const char *output)
+			const char *output_name, const char *output,
+			struct logger *logger)
 {
 	const char *op = encrypt ? "encrypt" : "decrypt";
 
@@ -169,59 +171,65 @@ static bool test_ctr_op(const struct encrypt_desc *encrypt_desc,
 
 	/* do_crypt modifies the data and IV in place.  */
 	encrypt_desc->encrypt_ops->do_crypt(encrypt_desc, tmp.ptr, tmp.len,
-					    sym_key, cb.ptr, encrypt);
+					    sym_key, cb.ptr, encrypt, logger);
 	if (!verify_hunk(op, expected_output, tmp)) {
-		DBG(DBG_CRYPT, DBG_log("test_ctr_op: %s: %s: output does not match", description, op));
+		DBGF(DBG_CRYPT, "test_ctr_op: %s: %s: output does not match",
+		     description, op);
 		ok = FALSE;
 	}
 	if (!verify_hunk("counter-block", expected_cb, cb)) {
-		DBG(DBG_CRYPT, DBG_log("test_ctr_op: %s: %s: counter-block does not match", description, op));
+		DBGF(DBG_CRYPT, "test_ctr_op: %s: %s: counter-block does not match",
+		     description, op);
 		ok = FALSE;
 	}
 
-	freeanychunk(cb);
-	freeanychunk(expected_cb);
-	freeanychunk(tmp);
-	freeanychunk(expected_output);
+	free_chunk_content(&cb);
+	free_chunk_content(&expected_cb);
+	free_chunk_content(&tmp);
+	free_chunk_content(&expected_output);
 
 	return ok;
 }
 
 static bool test_ctr_vector(const struct encrypt_desc *encrypt_desc,
-			    const struct ctr_test_vector *test)
+			    const struct ctr_test_vector *test,
+			    struct logger *logger)
 {
-	libreswan_log("  %s", test->description);
 	bool ok = TRUE;
 
-	PK11SymKey *sym_key = decode_to_key(encrypt_desc, test->key);
+	PK11SymKey *sym_key = decode_to_key(encrypt_desc, test->key, logger);
 	if (!test_ctr_op(encrypt_desc, test->description, 1, sym_key,
 			 test->cb, test->output_cb,
 			 "Plaintext", test->plaintext,
-			 "Ciphertext", test->ciphertext)) {
+			 "Ciphertext", test->ciphertext,
+			 logger)) {
 		ok = FALSE;
 	}
 	if (!test_ctr_op(encrypt_desc, test->description, 0, sym_key,
 			 test->cb, test->output_cb,
 			 "Ciphertext", test->ciphertext,
-			 "Plaintext", test->plaintext)) {
+			 "Plaintext", test->plaintext,
+			 logger)) {
 		ok = FALSE;
 	}
 
 	/* Clean up.  */
 	release_symkey(__func__, "sym_key", &sym_key);
 
-	DBG(DBG_CRYPT, DBG_log("test_ctr_vector: %s %s",
-			       test->description, ok ? "passed" : "failed"));
+	DBGF(DBG_CRYPT, "test_ctr_vector: %s %s",
+	     test->description, ok ? "passed" : "failed");
 	return ok;
 }
 
 bool test_ctr_vectors(const struct encrypt_desc *desc,
-		      const struct ctr_test_vector *tests)
+		      const struct ctr_test_vector *tests,
+		      struct logger *logger)
 {
 	bool ok = TRUE;
 	const struct ctr_test_vector *test;
 	for (test = tests; test->description != NULL; test++) {
-		if (!test_ctr_vector(desc, test)) {
+		log_message(RC_LOG, logger, "  %s", test->description);
+		if (!test_ctr_vector(desc, test, logger)) {
 			ok = FALSE;
 		}
 	}

@@ -3,7 +3,7 @@
  * Copyright (C) 2012-2017 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2012 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 1998-2002,2015  D. Hugh Redelmeier.
- * Copyright (C) 2016-2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2016-2020 Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2017 Vukasin Karadzic <vukasin.karadzic@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -19,61 +19,115 @@
 
 #include "jambuf.h"
 #include "ip_subnet.h"
-#include "libreswan/passert.h"
+#include "passert.h"
 #include "lswlog.h"	/* for pexpect() */
 #include "ip_info.h"
 
-const ip_subnet subnet_invalid; /* all zeros */
+const ip_subnet unset_subnet; /* all zeros */
 
-static ip_subnet subnet3(const ip_address *address, int maskbits, int port)
+static ip_subnet subnet2(const ip_address *address, int maskbits)
 {
-	ip_endpoint e = endpoint(address, port);
 	ip_subnet s = {
-		.addr = e,
+		.addr = strip_endpoint(address, HERE),
 		.maskbits = maskbits,
+		.is_subnet = true,
 	};
+	psubnet(&s);
 	return s;
 }
-
-#ifdef SUBNET_TYPE
-static ip_subnet subnet4(const ip_address *lo_address, const ip_address *hi_address,
-			 int lo_hport, int hi_hport)
-{
-	ip_subnet s = {
-		.lo_address = *lo_address,
-		.hi_address = *hi_address,
-		.lo_port = lo_port,
-		.hi_port = hi_port,
-	};
-}
-#endif
 
 ip_subnet subnet_from_address(const ip_address *address)
 {
 	const struct ip_info *afi = address_type(address);
 	if (!pexpect(afi != NULL)) {
-		return subnet_invalid;
+		return unset_subnet;
 	}
-	return subnet3(address, afi->mask_cnt, 0);
+	return subnet2(address, afi->mask_cnt);
 }
 
-ip_subnet subnet_from_endpoint(const ip_endpoint *endpoint)
+err_t address_mask_to_subnet(const ip_address *address,
+			     const ip_address *mask,
+			     ip_subnet *subnet)
 {
-	const struct ip_info *afi = endpoint_type(endpoint);
-	if (!pexpect(afi != NULL)) {
-		return subnet_invalid;
+	*subnet = unset_subnet;
+	const struct ip_info *afi = address_type(address);
+	if (afi == NULL) {
+		return "invalid address type";
 	}
-	ip_address address = endpoint_address(endpoint);
-	int hport = endpoint_hport(endpoint);
-	pexpect(hport != 0);
-	return subnet3(&address, afi->mask_cnt, hport);
+	if (address_type(mask) != afi) {
+		return "invalid mask type";
+	}
+	int maskbits =  masktocount(mask);
+	if (maskbits < 0) {
+		return "invalid mask";
+	}
+	ip_address prefix = address_blit(*address, &keep_bits, &clear_bits, maskbits);
+	*subnet = subnet2(&prefix, maskbits);
+	return NULL;
+}
+
+err_t text_cidr_to_subnet(shunk_t cidr, const struct ip_info *afi, ip_subnet *subnet)
+{
+	err_t err;
+
+	/* split CIDR into ADDRESS/MASK */
+	shunk_t mask = cidr;
+	shunk_t address = shunk_token(&mask, NULL, "/");
+	/* mask could be empty/null */
+
+	/* parse ADDRESS */
+	ip_address subnet_address;
+	err = numeric_to_address(address, afi/*possibly NULL */,
+				 &subnet_address);
+	if (err != NULL) {
+		return err;
+	}
+	/* Fix AFI, now that it is known */
+	afi = address_type(&subnet_address);
+	passert(afi != NULL);
+
+	/* parse mask; required */
+	if (mask.ptr == NULL) {
+		return "missing '/MASK'";
+	}
+	if (mask.len == 0) {
+		return "empty '/MASK'";
+	}
+	uintmax_t maskbits = afi->mask_cnt;
+	/* don't use bound - error is confusing */
+	err = shunk_to_uint(mask, NULL, 0, &maskbits, 0);
+	if (err != NULL) {
+		/* not a number */
+		return err;
+	}
+	if (maskbits > (uintmax_t)afi->mask_cnt) {
+		return "'/MASK' too big";
+	}
+
+	/* combine */
+	*subnet = subnet2(&subnet_address, maskbits);
+	return NULL;
 }
 
 ip_address subnet_prefix(const ip_subnet *src)
 {
-	return subnet_blit(src,
-			   /*routing-prefix*/&keep_bits,
-			   /*host-id*/&clear_bits);
+	return address_blit(strip_endpoint(&src->addr, HERE),
+			    /*routing-prefix*/&keep_bits,
+			    /*host-id*/&clear_bits,
+			    src->maskbits);
+}
+
+ip_address subnet_host(const ip_subnet *src)
+{
+	return address_blit(strip_endpoint(&src->addr, HERE),
+			    /*routing-prefix*/&clear_bits,
+			    /*host-id*/&keep_bits,
+			    src->maskbits);
+}
+
+ip_address subnet_address(const ip_subnet *src)
+{
+	return strip_endpoint(&src->addr, HERE);
 }
 
 const struct ip_info *subnet_type(const ip_subnet *src)
@@ -81,45 +135,16 @@ const struct ip_info *subnet_type(const ip_subnet *src)
 	return endpoint_type(&src->addr);
 }
 
+#ifndef SUBNET_TYPE
 int subnet_hport(const ip_subnet *s)
 {
-#ifdef SUBNET_TYPE
-	const struct ip_info *afi = subnet_type(s);
-	if (afi == NULL) {
-		/* not asserting, who knows what nonsense a user can generate */
-		libreswan_log("%s has unspecified type", __func__);
-		return -1;
-	}
-	return s->hport;
-#else
 	return endpoint_hport(&s->addr);
-#endif
 }
-
-int subnet_nport(const ip_subnet *s)
-{
-#ifdef SUBNET_TYPE
-	const struct ip_info *afi = subnet_type(s);
-	if (afi == NULL) {
-		/* not asserting, who knows what nonsense a user can generate */
-		libreswan_log("%s has unspecified type", __func__);
-		return -1;
-	}
-	return htons(s->hport);
-#else
-	return endpoint_nport(&s->addr);
 #endif
-}
 
-ip_subnet set_subnet_hport(const ip_subnet *subnet, int hport)
+bool subnet_is_unset(const ip_subnet *s)
 {
-	ip_subnet s = *subnet;
-#ifdef SUBNET_TYPE
-	s.port = hport;
-#else
-	s.addr = set_endpoint_hport(&subnet->addr, hport);
-#endif
-	return s;
+	return subnet_type(s) == NULL;
 }
 
 bool subnet_is_specified(const ip_subnet *s)
@@ -130,91 +155,52 @@ bool subnet_is_specified(const ip_subnet *s)
 bool subnet_contains_all_addresses(const ip_subnet *s)
 {
 	const struct ip_info *afi = subnet_type(s);
-	if (!pexpect(afi != NULL) ||
-	    s->maskbits != 0) {
+	if (afi == NULL) {
+		return false;
+	}
+	if (s->addr.hport != 0) {
+		return false;
+	}
+	if (s->maskbits != 0) {
 		return false;
 	}
 	ip_address network = subnet_prefix(s);
-	return (address_is_any(&network)
-		&& subnet_hport(s) == 0);
+	return address_eq_any(&network);
 }
 
 bool subnet_contains_no_addresses(const ip_subnet *s)
 {
 	const struct ip_info *afi = subnet_type(s);
-	if (!pexpect(afi != NULL) ||
-	    s->maskbits != afi->mask_cnt) {
+	if (afi == NULL) {
 		return false;
 	}
+	if (s->maskbits != afi->mask_cnt) {
+		return false;
+	}
+	if (s->addr.hport != 0) {
+		return false; /* weird one */
+	}
 	ip_address network = subnet_prefix(s);
-	return (address_is_any(&network)
-		&& subnet_hport(s) == 0);
+	return address_eq_any(&network);
 }
 
-/*
- * mashup() notes:
- * - mashup operates on network-order IP addresses
- */
-
-struct ip_blit {
-	uint8_t and;
-	uint8_t or;
-};
-
-const struct ip_blit clear_bits = { .and = 0x00, .or = 0x00, };
-const struct ip_blit set_bits = { .and = 0x00/*don't care*/, .or = 0xff, };
-const struct ip_blit keep_bits = { .and = 0xff, .or = 0x00, };
-
-ip_address subnet_blit(const ip_subnet *src,
-			  const struct ip_blit *prefix,
-			  const struct ip_blit *host)
+bool subnet_contains_one_address(const ip_subnet *s)
 {
-	/* strip port; copy type */
-	ip_address mask = endpoint_address(&src->addr);
-	chunk_t raw = address_as_chunk(&mask);
-
-	if (!pexpect((size_t)src->maskbits <= raw.len * 8)) {
-		return address_invalid;	/* "can't happen" */
+	/* Unlike subnetishost() this rejects 0.0.0.0/32. */
+	const struct ip_info *afi = subnet_type(s);
+	if (afi == NULL) {
+		return false;
 	}
-
-	uint8_t *p = raw.ptr; /* cast void* */
-
-	/* the cross over byte */
-	size_t xbyte = src->maskbits / BITS_PER_BYTE;
-	unsigned xbit = src->maskbits % BITS_PER_BYTE;
-
-	/* leading bytes: & PREFIX->AND | PREFIX->OR */
-	unsigned b = 0;
-	for (; b < xbyte; b++) {
-		p[b] &= prefix->and;
-		p[b] |= prefix->or;
+	if (s->addr.hport != 0) {
+		return false;
 	}
-
-	/*
-	 * cross over: & {PREFIX,HOST}_AND | {PREFIX,HOST}_OR
-	 *
-	 * tricky logic:
-	 * - b == xbyte
-	 * - if xbyte == raw.len we must not access p[xbyte]
-	 * - if xbyte == raw.len, xbit will be 0
-	 * - if xbit == 0, the loop for trailing bytes will
-	 *   perform the required operation slightly more efficiently
-	 * So we guard this step with xbit != 0 instead of b < raw.len
-	 */
-	if (xbit != 0) {
-		uint8_t hmask = 0xFF >> xbit;
-		p[b] &= (prefix->and & ~hmask) | (host->and & hmask);
-		p[b] |= (prefix->or & ~hmask) | (host->or & hmask);
-		b++;
+	if (s->maskbits != afi->mask_cnt) {
+		return false;
 	}
-
-	/* trailing bytes: & HOST->AND | HOST->OR */
-	for (; b < raw.len; b++) {
-		p[b] &= host->and;
-		p[b] |= host->or;
-	}
-
-	return mask;
+	/* ignore port */
+	ip_address network = subnet_prefix(s);
+	/* address_is_set(&network) implied as afi non-NULL */
+	return !address_eq_any(&network); /* i.e., non-zero */
 }
 
 /*
@@ -225,35 +211,36 @@ ip_address subnet_blit(const ip_subnet *src,
 
 ip_address subnet_mask(const ip_subnet *src)
 {
-	return subnet_blit(src, /*prefix*/ &set_bits, /*host*/ &clear_bits);
+	return address_blit(endpoint_address(&src->addr),
+			    /*network-prefix*/ &set_bits,
+			    /*host-id*/ &clear_bits,
+			    src->maskbits);
 }
 
-void jam_subnet(jambuf_t *buf, const ip_subnet *subnet)
+size_t jam_subnet(struct jambuf *buf, const ip_subnet *subnet)
 {
-	jam_address(buf, &subnet->addr); /* sensitive? */
-	jam(buf, "/%u", subnet->maskbits);
+	size_t s = 0;
+	s += jam_address(buf, &subnet->addr); /* sensitive? */
+	s += jam(buf, "/%u", subnet->maskbits);
+	return s;
 }
 
 const char *str_subnet(const ip_subnet *subnet, subnet_buf *out)
 {
-	jambuf_t buf = ARRAY_AS_JAMBUF(out->buf);
+	struct jambuf buf = ARRAY_AS_JAMBUF(out->buf);
 	jam_subnet(&buf, subnet);
 	return out->buf;
 }
 
-void jam_subnet_port(jambuf_t *buf, const ip_subnet *subnet)
+void pexpect_subnet(const ip_subnet *s, const char *t, where_t where)
 {
-	jam_address(buf, &subnet->addr); /* sensitive? */
-	jam(buf, "/%u", subnet->maskbits);
-	int port = subnet_hport(subnet);
-	if (port >= 0) {
-		jam(buf, ":%d", port);
+	if (s != NULL && s->addr.version != 0) {
+		if (s->is_subnet == false ||
+		    s->is_selector == true) {
+			address_buf b;
+			dbg("EXPECTATION FAILED: %s is not a subnet; "PRI_SUBNET" "PRI_WHERE,
+			    t, pri_subnet(s, &b),
+			    pri_where(where));
+		}
 	}
-}
-
-const char *str_subnet_port(const ip_subnet *subnet, subnet_buf *out)
-{
-	jambuf_t buf = ARRAY_AS_JAMBUF(out->buf);
-	jam_subnet_port(&buf, subnet);
-	return out->buf;
 }

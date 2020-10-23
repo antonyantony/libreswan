@@ -9,17 +9,17 @@
 %{!?_rundir:%global _rundir %{_localstatedir}/run}
 # Libreswan config options
 %global libreswan_config \\\
+    FINALINITDDIR=%{_initrddir} \\\
     FINALLIBEXECDIR=%{_libexecdir}/ipsec \\\
     FINALMANDIR=%{_mandir} \\\
+    FINALNSSDIR=%{_sysconfdir}/ipsec.d \\\
     FINALRUNDIR=%{_rundir}/pluto \\\
     FIPSPRODUCTCHECK=%{_sysconfdir}/system-fips \\\
-    INC_RCDEFAULT=%{_initrddir} \\\
-    INC_USRLOCAL=%{_prefix} \\\
     INITSYSTEM=sysvinit \\\
+    PREFIX=%{_prefix} \\\
     PYTHON_BINARY=%{__python} \\\
     USE_DNSSEC=%{USE_DNSSEC} \\\
     USE_FIPSCHECK=true \\\
-    USE_KLIPS=false \\\
     USE_LABELED_IPSEC=true \\\
     USE_LDAP=true \\\
     USE_LIBCAP_NG=true \\\
@@ -27,15 +27,18 @@
     USE_LINUX_AUDIT=true \\\
     USE_NM=true \\\
     USE_NSS_IPSEC_PROFILE=false \\\
+    USE_NSS_KDF=false \\\
+    USE_OLD_SELINUX=true \\\
     USE_SECCOMP=false \\\
     USE_XAUTHPAM=true \\\
+    USE_XFRM_INTERFACE_IFLA_HEADER=true \\\
 %{nil}
 
 #global prever rc1
 
 Name: libreswan
 Summary: Internet Key Exchange (IKEv1 and IKEv2) implementation for IPsec
-Version: 3.32
+Version: 4.0
 Release: %{?prever:0.}1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Url: https://libreswan.org/
@@ -45,6 +48,7 @@ Source10: https://download.libreswan.org/cavs/ikev1_dsa.fax.bz2
 Source11: https://download.libreswan.org/cavs/ikev1_psk.fax.bz2
 Source12: https://download.libreswan.org/cavs/ikev2.fax.bz2
 %endif
+BuildRequires: gcc make
 BuildRequires: audit-libs-devel
 BuildRequires: bison
 BuildRequires: curl-devel
@@ -59,7 +63,7 @@ BuildRequires: nss-tools
 BuildRequires: openldap-devel
 BuildRequires: pam-devel
 BuildRequires: pkgconfig
-BuildRequires: pkgconfig net-tools
+BuildRequires: net-tools
 BuildRequires: redhat-rpm-config
 BuildRequires: xmlto
 %if 0%{with_efence}
@@ -115,7 +119,7 @@ make %{?_smp_mflags} \
 %if 0%{with_efence}
     USE_EFENCE=true \
 %endif
-    WERROR_CFLAGS="-Werror -Wno-missing-field-initializers" \
+    WERROR_CFLAGS="-Werror -Wno-missing-field-initializers -Wno-error=address" \
     USERLINK="%{?__global_ldflags}" \
     %{libreswan_config} \
     programs
@@ -139,8 +143,6 @@ rm -rf %{buildroot}/usr/share/doc/libreswan
 rm -rf %{buildroot}%{_libexecdir}/ipsec/*check
 
 install -d -m 0755 %{buildroot}%{_rundir}/pluto
-# used when setting --perpeerlog without --perpeerlogbase
-install -d -m 0700 %{buildroot}%{_localstatedir}/log/pluto/peer
 install -d %{buildroot}%{_sbindir}
 # replace with rhel[56] specific version
 install -m 0755 initsystems/sysvinit/init.rhel \
@@ -201,8 +203,6 @@ fi
 %attr(0700,root,root) %dir %{_sysconfdir}/ipsec.d
 %attr(0700,root,root) %dir %{_sysconfdir}/ipsec.d/policies
 %attr(0644,root,root) %config(noreplace) %{_sysconfdir}/ipsec.d/policies/*
-%attr(0700,root,root) %dir %{_localstatedir}/log/pluto
-%attr(0700,root,root) %dir %{_localstatedir}/log/pluto/peer
 %attr(0755,root,root) %dir %{_rundir}/pluto
 %attr(0644,root,root) %config(noreplace) %{_sysconfdir}/pam.d/pluto
 %{_sbindir}/ipsec
@@ -216,5 +216,5 @@ fi
 %{_sysconfdir}/prelink.conf.d/libreswan-fips.conf
 
 %changelog
-* Mon Mar 30 2020 Team Libreswan <team@libreswan.org> - 3.32-1
+* Wed Oct 14 2020 Team Libreswan <team@libreswan.org> - 4.0-1
 - Automated build from release tar ball

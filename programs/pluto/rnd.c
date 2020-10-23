@@ -19,15 +19,16 @@
  *
  */
 
-#include "rnd.h"
 #include <pk11pub.h>
-#include "defs.h"
+
+#include "rnd.h"
 #include "lswnss.h"
-#include "lswlog.h"
 #include "ike_spi.h"		/* for refresh_ike_spi_secret() */
 #include "ikev2_cookie.h"	/* for refresh_v2_cookie_secret() */
 
+#include "defs.h"
 #include "server.h"
+#include "log.h"
 
 /* A true random number generator (we hope)
  *
@@ -70,10 +71,9 @@ void get_rnd_bytes(void *buffer, size_t length)
 {
 	SECStatus rv = PK11_GenerateRandom(buffer, length);
 	if (rv != SECSuccess) {
-		LSWLOG_PASSERT(buf) {
-			lswlogs(buf, "NSS RNG failed");
-			lswlog_nss_error(buf);
-		}
+		/* XXX: hack */
+		struct logger logger = GLOBAL_LOGGER(null_fd);
+		passert_nss_error(&logger, HERE, "RNG failed");
 	}
 }
 
@@ -82,7 +82,7 @@ void fill_rnd_chunk(chunk_t chunk)
 	get_rnd_bytes(chunk.ptr, chunk.len);
 }
 
-static void refresh_secrets(void)
+static void refresh_secrets(struct fd *unused_whackfd UNUSED)
 {
 	/*
 	 * Generate the secret value for responder cookies, and
@@ -96,5 +96,5 @@ void init_secret(void)
 {
 	enable_periodic_timer(EVENT_REINIT_SECRET, refresh_secrets,
 			      deltatime(EVENT_REINIT_SECRET_DELAY));
-	refresh_secrets();
+	refresh_secrets(null_fd);
 }

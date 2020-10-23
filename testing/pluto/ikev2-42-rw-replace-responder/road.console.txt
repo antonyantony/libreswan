@@ -7,7 +7,7 @@ road #
  /testing/pluto/bin/wait-until-pluto-started
 road #
  ipsec auto --add road-east-x509-ipv4
-002 added connection description "road-east-x509-ipv4"
+002 added IKEv2 connection "road-east-x509-ipv4"
 road #
  echo "initdone"
 initdone
@@ -21,15 +21,15 @@ PING 192.1.2.23 (192.1.2.23) 56(84) bytes of data.
 rtt min/avg/max/mdev = 0.XXX/0.XXX/0.XXX/0.XXX ms
 road #
  ipsec auto --up road-east-x509-ipv4
-1v2 "road-east-x509-ipv4"[1] 192.1.2.23 #1: initiating IKEv2 IKE SA
-1v2 "road-east-x509-ipv4"[1] 192.1.2.23 #1: STATE_PARENT_I1: sent v2I1, expected v2R1
-1v2 "road-east-x509-ipv4"[1] 192.1.2.23 #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
-002 "road-east-x509-ipv4"[1] 192.1.2.23 #2: certificate verified OK: E=user-east@testing.libreswan.org,CN=east.testing.libreswan.org,OU=Test Department,O=Libreswan,L=Toronto,ST=Ontario,C=CA
+1v2 "road-east-x509-ipv4"[1] 192.1.2.23 #1: initiating IKEv2 connection
+1v2 "road-east-x509-ipv4"[1] 192.1.2.23 #1: sent IKE_SA_INIT request
+1v2 "road-east-x509-ipv4"[1] 192.1.2.23 #1: sent IKE_AUTH request {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
+002 "road-east-x509-ipv4"[1] 192.1.2.23 #1: certificate verified OK: E=user-east@testing.libreswan.org,CN=east.testing.libreswan.org,OU=Test Department,O=Libreswan,L=Toronto,ST=Ontario,C=CA
 002 "road-east-x509-ipv4"[1] 192.1.2.23 #2: IKEv2 mode peer ID is ID_DER_ASN1_DN: 'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=east.testing.libreswan.org, E=user-east@testing.libreswan.org'
-003 "road-east-x509-ipv4"[1] 192.1.2.23 #2: Authenticated using RSA with IKEv2_AUTH_HASH_SHA2_512
+003 "road-east-x509-ipv4"[1] 192.1.2.23 #1: authenticated using RSA with SHA2_512
 002 "road-east-x509-ipv4"[1] 192.1.2.23 #2: received INTERNAL_IP4_ADDRESS 192.0.2.100
 002 "road-east-x509-ipv4"[1] 192.1.2.23 #2: negotiated connection [192.0.2.100-192.0.2.100:0-65535 0] -> [0.0.0.0-255.255.255.255:0-65535 0]
-004 "road-east-x509-ipv4"[1] 192.1.2.23 #2: STATE_V2_IPSEC_I: IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256-NONE NATOA=none NATD=none DPD=passive}
+004 "road-east-x509-ipv4"[1] 192.1.2.23 #2: IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256-NONE NATOA=none NATD=none DPD=passive}
 road #
  ping -q -n -c 4 -I 192.0.2.100 192.1.2.23
 PING 192.1.2.23 (192.1.2.23) from 192.0.2.100 : 56(84) bytes of data.
@@ -38,12 +38,12 @@ PING 192.1.2.23 (192.1.2.23) from 192.0.2.100 : 56(84) bytes of data.
 rtt min/avg/max/mdev = 0.XXX/0.XXX/0.XXX/0.XXX ms
 road #
  ipsec status
-000 using kernel interface: netkey
-000 interface lo/lo 127.0.0.1:4500
-000 interface lo/lo 127.0.0.1:500
-000 interface eth0/eth0 192.1.3.209:4500
-000 interface eth0/eth0 192.1.3.209:500
+000 using kernel interface: xfrm
 000  
+000 interface lo UDP 127.0.0.1:4500
+000 interface lo UDP 127.0.0.1:500
+000 interface eth0 UDP 192.1.3.209:4500
+000 interface eth0 UDP 192.1.3.209:500
 000  
 000 fips mode=disabled;
 000 SElinux=XXXXX
@@ -52,12 +52,10 @@ road #
 000 config setup options:
 000  
 000 configdir=/etc, configfile=/etc/ipsec.conf, secrets=/etc/ipsec.secrets, ipsecdir=/etc/ipsec.d
-000 nssdir=/etc/ipsec.d, dumpdir=/var/tmp, statsbin=unset
-000 dnssec-rootkey-file=/var/lib/unbound/root.key, dnssec-trusted=<unset>
 000 sbindir=PATH/sbin, libexecdir=PATH/libexec/ipsec
-000 nhelpers=-1, uniqueids=yes, dnssec-enable=yes, perpeerlog=no, logappend=no, logip=yes, shuntlifetime=900s, xfrmlifetime=30s
-000 ddos-cookies-threshold=50000, ddos-max-halfopen=25000, ddos-mode=auto
-000 ikeport=500, ikebuf=0, msg_errqueue=yes, strictcrlpolicy=no, crlcheckinterval=0, listen=<any>, nflog-all=0
+000 nhelpers=-1, uniqueids=yes, dnssec-enable=yes, logappend=no, logip=yes, shuntlifetime=900s, xfrmlifetime=30s
+000 ddos-cookies-threshold=25000, ddos-max-halfopen=50000, ddos-mode=auto
+000 ikebuf=0, msg_errqueue=yes, crl-strict=no, crlcheckinterval=0, listen=<any>, nflog-all=0
 000 ocsp-enable=no, ocsp-strict=no, ocsp-timeout=2, ocsp-uri=<unset>
 000 ocsp-trust-name=<unset>
 000 ocsp-cache-size=1000, ocsp-cache-min-age=3600, ocsp-cache-max-age=86400, ocsp-method=get
@@ -83,8 +81,6 @@ road #
 000 algorithm ESP encrypt: name=CHACHA20_POLY1305, keysizemin=256, keysizemax=256
 000 algorithm ESP encrypt: name=NULL, keysizemin=0, keysizemax=0
 000 algorithm ESP encrypt: name=NULL_AUTH_AES_GMAC, keysizemin=128, keysizemax=256
-000 algorithm ESP encrypt: name=SERPENT_CBC, keysizemin=128, keysizemax=256
-000 algorithm ESP encrypt: name=TWOFISH_CBC, keysizemin=128, keysizemax=256
 000 algorithm AH/ESP auth: name=AES_CMAC_96, key-length=128
 000 algorithm AH/ESP auth: name=AES_XCBC_96, key-length=128
 000 algorithm AH/ESP auth: name=HMAC_MD5_96, key-length=128
@@ -104,9 +100,6 @@ road #
 000 algorithm IKE encrypt: v1id=-1, v1name=n/a, v2id=18, v2name=AES_GCM_A, blocksize=16, keydeflen=128
 000 algorithm IKE encrypt: v1id=13, v1name=OAKLEY_AES_CTR, v2id=13, v2name=AES_CTR, blocksize=16, keydeflen=128
 000 algorithm IKE encrypt: v1id=7, v1name=OAKLEY_AES_CBC, v2id=12, v2name=AES_CBC, blocksize=16, keydeflen=128
-000 algorithm IKE encrypt: v1id=65004, v1name=OAKLEY_SERPENT_CBC, v2id=65004, v2name=SERPENT_CBC, blocksize=16, keydeflen=128
-000 algorithm IKE encrypt: v1id=65005, v1name=OAKLEY_TWOFISH_CBC, v2id=65005, v2name=TWOFISH_CBC, blocksize=16, keydeflen=128
-000 algorithm IKE encrypt: v1id=65289, v1name=OAKLEY_TWOFISH_CBC_SSH, v2id=65289, v2name=TWOFISH_CBC_SSH, blocksize=16, keydeflen=128
 000 algorithm IKE encrypt: v1id=-1, v1name=n/a, v2id=28, v2name=CHACHA20_POLY1305, blocksize=16, keydeflen=256
 000 algorithm IKE PRF: name=HMAC_MD5, hashlen=16
 000 algorithm IKE PRF: name=HMAC_SHA1, hashlen=20
@@ -130,39 +123,39 @@ road #
 000 Connection list:
 000  
 000 "road-east-x509-ipv4": 0.0.0.0/0===192.1.3.209[C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=road.testing.libreswan.org, E=user-road@testing.libreswan.org,+MC+S=C]---192.1.3.254...192.1.2.23<192.1.2.23>[C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=east.testing.libreswan.org, E=user-east@testing.libreswan.org]===0.0.0.0/0; unrouted; eroute owner: #0
-000 "road-east-x509-ipv4":     oriented; my_ip=unset; their_ip=unset; mycert=road; hiscert=east; my_updown=ipsec _updown;
+000 "road-east-x509-ipv4":     oriented; my_ip=unset; their_ip=unset; mycert=road; peercert=east; my_updown=ipsec _updown;
 000 "road-east-x509-ipv4":   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "road-east-x509-ipv4":   our auth:rsasig, their auth:rsasig
 000 "road-east-x509-ipv4":   modecfg info: us:client, them:none, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:unset;
 000 "road-east-x509-ipv4":   policy_label:unset;
 000 "road-east-x509-ipv4":   CAs: 'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=Libreswan test CA for mainca, E=testing@libreswan.org'...'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=Libreswan test CA for mainca, E=testing@libreswan.org'
 000 "road-east-x509-ipv4":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
-000 "road-east-x509-ipv4":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
+000 "road-east-x509-ipv4":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "road-east-x509-ipv4":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
-000 "road-east-x509-ipv4":   policy: RSASIG+ECDSA+ENCRYPT+TUNNEL+PFS+DONT_REKEY+IKEV2_ALLOW+IKEV2_ALLOW_NARROWING+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO+RSASIG_v1_5;
+000 "road-east-x509-ipv4":   policy: RSASIG+ECDSA+ENCRYPT+TUNNEL+PFS+DONT_REKEY+IKEV2_ALLOW+IKEV2_ALLOW_NARROWING+IKE_FRAG_ALLOW+ESN_NO+RSASIG_v1_5;
 000 "road-east-x509-ipv4":   v2-auth-hash-policy: SHA2_256+SHA2_384+SHA2_512;
 000 "road-east-x509-ipv4":   conn_prio: 0,0; interface: eth0; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "road-east-x509-ipv4":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
 000 "road-east-x509-ipv4":   our idtype: ID_DER_ASN1_DN; our id=C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=road.testing.libreswan.org, E=user-road@testing.libreswan.org; their idtype: ID_DER_ASN1_DN; their id=C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=east.testing.libreswan.org, E=user-east@testing.libreswan.org
 000 "road-east-x509-ipv4":   dpd: action:hold; delay:0; timeout:0; nat-t: encaps:auto; nat_keepalive:yes; ikev1_natt:both
-000 "road-east-x509-ipv4":   newest ISAKMP SA: #0; newest IPsec SA: #0;
+000 "road-east-x509-ipv4":   newest ISAKMP SA: #0; newest IPsec SA: #0; conn serial: $1;
 000 "road-east-x509-ipv4"[1]: 192.0.2.100/32===192.1.3.209[C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=road.testing.libreswan.org, E=user-road@testing.libreswan.org,+MC+S=C]---192.1.3.254...192.1.2.23<192.1.2.23>[C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=east.testing.libreswan.org, E=user-east@testing.libreswan.org]===0.0.0.0/0; erouted; eroute owner: #2
-000 "road-east-x509-ipv4"[1]:     oriented; my_ip=192.0.2.100; their_ip=unset; mycert=road; hiscert=east; my_updown=ipsec _updown;
+000 "road-east-x509-ipv4"[1]:     oriented; my_ip=192.0.2.100; their_ip=unset; mycert=road; peercert=east; my_updown=ipsec _updown;
 000 "road-east-x509-ipv4"[1]:   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "road-east-x509-ipv4"[1]:   our auth:rsasig, their auth:rsasig
 000 "road-east-x509-ipv4"[1]:   modecfg info: us:client, them:none, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:unset;
 000 "road-east-x509-ipv4"[1]:   policy_label:unset;
 000 "road-east-x509-ipv4"[1]:   CAs: 'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=Libreswan test CA for mainca, E=testing@libreswan.org'...'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=Libreswan test CA for mainca, E=testing@libreswan.org'
 000 "road-east-x509-ipv4"[1]:   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
-000 "road-east-x509-ipv4"[1]:   retransmit-interval: 9999ms; retransmit-timeout: 99s;
+000 "road-east-x509-ipv4"[1]:   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "road-east-x509-ipv4"[1]:   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
-000 "road-east-x509-ipv4"[1]:   policy: RSASIG+ECDSA+ENCRYPT+TUNNEL+PFS+DONT_REKEY+UP+IKEV2_ALLOW+IKEV2_ALLOW_NARROWING+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO+RSASIG_v1_5;
+000 "road-east-x509-ipv4"[1]:   policy: RSASIG+ECDSA+ENCRYPT+TUNNEL+PFS+DONT_REKEY+UP+IKEV2_ALLOW+IKEV2_ALLOW_NARROWING+IKE_FRAG_ALLOW+ESN_NO+RSASIG_v1_5;
 000 "road-east-x509-ipv4"[1]:   v2-auth-hash-policy: SHA2_256+SHA2_384+SHA2_512;
 000 "road-east-x509-ipv4"[1]:   conn_prio: 0,0; interface: eth0; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "road-east-x509-ipv4"[1]:   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
 000 "road-east-x509-ipv4"[1]:   our idtype: ID_DER_ASN1_DN; our id=C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=road.testing.libreswan.org, E=user-road@testing.libreswan.org; their idtype: ID_DER_ASN1_DN; their id=C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=east.testing.libreswan.org, E=user-east@testing.libreswan.org
 000 "road-east-x509-ipv4"[1]:   dpd: action:hold; delay:0; timeout:0; nat-t: encaps:auto; nat_keepalive:yes; ikev1_natt:both
-000 "road-east-x509-ipv4"[1]:   newest ISAKMP SA: #1; newest IPsec SA: #2;
+000 "road-east-x509-ipv4"[1]:   newest ISAKMP SA: #1; newest IPsec SA: #2; conn serial: $2, instantiated from: $1;
 000 "road-east-x509-ipv4"[1]:   IKEv2 algorithm newest: AES_GCM_16_256-HMAC_SHA2_512-MODP2048
 000 "road-east-x509-ipv4"[1]:   ESP algorithm newest: AES_GCM_16_256-NONE; pfsgroup=<Phase1>
 000  
@@ -172,9 +165,9 @@ road #
 000 IKE SAs: total(1), half-open(0), open(0), authenticated(1), anonymous(0)
 000 IPsec SAs: total(1), authenticated(1), anonymous(0)
 000  
-000 #1: "road-east-x509-ipv4"[1] 192.1.2.23:500 STATE_PARENT_I3 (PARENT SA established); EVENT_SA_EXPIRE in XXs; newest ISAKMP; idle;
-000 #2: "road-east-x509-ipv4"[1] 192.1.2.23:500 STATE_V2_IPSEC_I (IPsec SA established); EVENT_SA_EXPIRE in XXs; newest IPSEC; eroute owner; isakmp#1; idle;
-000 #2: "road-east-x509-ipv4"[1] 192.1.2.23 esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.3.209 tun.0@192.1.2.23 tun.0@192.1.3.209 ref=0 refhim=0 Traffic: ESPin=336B ESPout=336B! ESPmax=0B 
+000 #1: "road-east-x509-ipv4"[1] 192.1.2.23:500 STATE_V2_ESTABLISHED_IKE_SA (established IKE SA); EVENT_SA_EXPIRE in XXs; newest ISAKMP; idle;
+000 #2: "road-east-x509-ipv4"[1] 192.1.2.23:500 STATE_V2_ESTABLISHED_CHILD_SA (IPsec SA established); EVENT_SA_EXPIRE in XXs; newest IPSEC; eroute owner; isakmp#1; idle;
+000 #2: "road-east-x509-ipv4"[1] 192.1.2.23 esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.3.209 tun.0@192.1.2.23 tun.0@192.1.3.209 Traffic: ESPin=336B ESPout=336B! ESPmax=0B 
 000  
 000 Bare Shunt list:
 000  
@@ -191,21 +184,21 @@ rtt min/avg/max/mdev = 0.XXX/0.XXX/0.XXX/0.XXX ms
 road #
  grep -E  'EVENT_SA_EXPIRE|EVENT_SA_REPLACE' OUTPUT/road.pluto.log | grep -e '#[0-9]' | grep -v pe@
 | inserting event EVENT_SA_REPLACE, timeout in 120 seconds for #1
-| state #1 requesting EVENT_SA_REPLACE to be deleted
+| state #1 deleting .st_event EVENT_SA_REPLACE
 | inserting event EVENT_SA_EXPIRE, timeout in 3600 seconds for #1
 | inserting event EVENT_SA_EXPIRE, timeout in 28800 seconds for #2
 | inserting event EVENT_SA_EXPIRE, timeout in 3600 seconds for #3
-| state #3 requesting EVENT_SA_EXPIRE to be deleted
+| state #3 deleting .st_event EVENT_SA_EXPIRE
 | inserting event EVENT_SA_EXPIRE, timeout in 3600 seconds for #3
-| state #1 requesting EVENT_SA_EXPIRE to be deleted
+| state #1 deleting .st_event EVENT_SA_EXPIRE
 road #
  ipsec status
-000 using kernel interface: netkey
-000 interface lo/lo 127.0.0.1:4500
-000 interface lo/lo 127.0.0.1:500
-000 interface eth0/eth0 192.1.3.209:4500
-000 interface eth0/eth0 192.1.3.209:500
+000 using kernel interface: xfrm
 000  
+000 interface lo UDP 127.0.0.1:4500
+000 interface lo UDP 127.0.0.1:500
+000 interface eth0 UDP 192.1.3.209:4500
+000 interface eth0 UDP 192.1.3.209:500
 000  
 000 fips mode=disabled;
 000 SElinux=XXXXX
@@ -214,12 +207,10 @@ road #
 000 config setup options:
 000  
 000 configdir=/etc, configfile=/etc/ipsec.conf, secrets=/etc/ipsec.secrets, ipsecdir=/etc/ipsec.d
-000 nssdir=/etc/ipsec.d, dumpdir=/var/tmp, statsbin=unset
-000 dnssec-rootkey-file=/var/lib/unbound/root.key, dnssec-trusted=<unset>
 000 sbindir=PATH/sbin, libexecdir=PATH/libexec/ipsec
-000 nhelpers=-1, uniqueids=yes, dnssec-enable=yes, perpeerlog=no, logappend=no, logip=yes, shuntlifetime=900s, xfrmlifetime=30s
-000 ddos-cookies-threshold=50000, ddos-max-halfopen=25000, ddos-mode=auto
-000 ikeport=500, ikebuf=0, msg_errqueue=yes, strictcrlpolicy=no, crlcheckinterval=0, listen=<any>, nflog-all=0
+000 nhelpers=-1, uniqueids=yes, dnssec-enable=yes, logappend=no, logip=yes, shuntlifetime=900s, xfrmlifetime=30s
+000 ddos-cookies-threshold=25000, ddos-max-halfopen=50000, ddos-mode=auto
+000 ikebuf=0, msg_errqueue=yes, crl-strict=no, crlcheckinterval=0, listen=<any>, nflog-all=0
 000 ocsp-enable=no, ocsp-strict=no, ocsp-timeout=2, ocsp-uri=<unset>
 000 ocsp-trust-name=<unset>
 000 ocsp-cache-size=1000, ocsp-cache-min-age=3600, ocsp-cache-max-age=86400, ocsp-method=get
@@ -245,8 +236,6 @@ road #
 000 algorithm ESP encrypt: name=CHACHA20_POLY1305, keysizemin=256, keysizemax=256
 000 algorithm ESP encrypt: name=NULL, keysizemin=0, keysizemax=0
 000 algorithm ESP encrypt: name=NULL_AUTH_AES_GMAC, keysizemin=128, keysizemax=256
-000 algorithm ESP encrypt: name=SERPENT_CBC, keysizemin=128, keysizemax=256
-000 algorithm ESP encrypt: name=TWOFISH_CBC, keysizemin=128, keysizemax=256
 000 algorithm AH/ESP auth: name=AES_CMAC_96, key-length=128
 000 algorithm AH/ESP auth: name=AES_XCBC_96, key-length=128
 000 algorithm AH/ESP auth: name=HMAC_MD5_96, key-length=128
@@ -266,9 +255,6 @@ road #
 000 algorithm IKE encrypt: v1id=-1, v1name=n/a, v2id=18, v2name=AES_GCM_A, blocksize=16, keydeflen=128
 000 algorithm IKE encrypt: v1id=13, v1name=OAKLEY_AES_CTR, v2id=13, v2name=AES_CTR, blocksize=16, keydeflen=128
 000 algorithm IKE encrypt: v1id=7, v1name=OAKLEY_AES_CBC, v2id=12, v2name=AES_CBC, blocksize=16, keydeflen=128
-000 algorithm IKE encrypt: v1id=65004, v1name=OAKLEY_SERPENT_CBC, v2id=65004, v2name=SERPENT_CBC, blocksize=16, keydeflen=128
-000 algorithm IKE encrypt: v1id=65005, v1name=OAKLEY_TWOFISH_CBC, v2id=65005, v2name=TWOFISH_CBC, blocksize=16, keydeflen=128
-000 algorithm IKE encrypt: v1id=65289, v1name=OAKLEY_TWOFISH_CBC_SSH, v2id=65289, v2name=TWOFISH_CBC_SSH, blocksize=16, keydeflen=128
 000 algorithm IKE encrypt: v1id=-1, v1name=n/a, v2id=28, v2name=CHACHA20_POLY1305, blocksize=16, keydeflen=256
 000 algorithm IKE PRF: name=HMAC_MD5, hashlen=16
 000 algorithm IKE PRF: name=HMAC_SHA1, hashlen=20
@@ -292,39 +278,39 @@ road #
 000 Connection list:
 000  
 000 "road-east-x509-ipv4": 0.0.0.0/0===192.1.3.209[C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=road.testing.libreswan.org, E=user-road@testing.libreswan.org,+MC+S=C]---192.1.3.254...192.1.2.23<192.1.2.23>[C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=east.testing.libreswan.org, E=user-east@testing.libreswan.org]===0.0.0.0/0; unrouted; eroute owner: #0
-000 "road-east-x509-ipv4":     oriented; my_ip=unset; their_ip=unset; mycert=road; hiscert=east; my_updown=ipsec _updown;
+000 "road-east-x509-ipv4":     oriented; my_ip=unset; their_ip=unset; mycert=road; peercert=east; my_updown=ipsec _updown;
 000 "road-east-x509-ipv4":   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "road-east-x509-ipv4":   our auth:rsasig, their auth:rsasig
 000 "road-east-x509-ipv4":   modecfg info: us:client, them:none, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:unset;
 000 "road-east-x509-ipv4":   policy_label:unset;
 000 "road-east-x509-ipv4":   CAs: 'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=Libreswan test CA for mainca, E=testing@libreswan.org'...'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=Libreswan test CA for mainca, E=testing@libreswan.org'
 000 "road-east-x509-ipv4":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
-000 "road-east-x509-ipv4":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
+000 "road-east-x509-ipv4":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "road-east-x509-ipv4":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
-000 "road-east-x509-ipv4":   policy: RSASIG+ECDSA+ENCRYPT+TUNNEL+PFS+DONT_REKEY+IKEV2_ALLOW+IKEV2_ALLOW_NARROWING+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO+RSASIG_v1_5;
+000 "road-east-x509-ipv4":   policy: RSASIG+ECDSA+ENCRYPT+TUNNEL+PFS+DONT_REKEY+IKEV2_ALLOW+IKEV2_ALLOW_NARROWING+IKE_FRAG_ALLOW+ESN_NO+RSASIG_v1_5;
 000 "road-east-x509-ipv4":   v2-auth-hash-policy: SHA2_256+SHA2_384+SHA2_512;
 000 "road-east-x509-ipv4":   conn_prio: 0,0; interface: eth0; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "road-east-x509-ipv4":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
 000 "road-east-x509-ipv4":   our idtype: ID_DER_ASN1_DN; our id=C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=road.testing.libreswan.org, E=user-road@testing.libreswan.org; their idtype: ID_DER_ASN1_DN; their id=C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=east.testing.libreswan.org, E=user-east@testing.libreswan.org
 000 "road-east-x509-ipv4":   dpd: action:hold; delay:0; timeout:0; nat-t: encaps:auto; nat_keepalive:yes; ikev1_natt:both
-000 "road-east-x509-ipv4":   newest ISAKMP SA: #0; newest IPsec SA: #0;
+000 "road-east-x509-ipv4":   newest ISAKMP SA: #0; newest IPsec SA: #0; conn serial: $1;
 000 "road-east-x509-ipv4"[1]: 192.0.2.100/32===192.1.3.209[C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=road.testing.libreswan.org, E=user-road@testing.libreswan.org,+MC+S=C]---192.1.3.254...192.1.2.23<192.1.2.23>[C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=east.testing.libreswan.org, E=user-east@testing.libreswan.org]===0.0.0.0/0; erouted; eroute owner: #2
-000 "road-east-x509-ipv4"[1]:     oriented; my_ip=192.0.2.100; their_ip=unset; mycert=road; hiscert=east; my_updown=ipsec _updown;
+000 "road-east-x509-ipv4"[1]:     oriented; my_ip=192.0.2.100; their_ip=unset; mycert=road; peercert=east; my_updown=ipsec _updown;
 000 "road-east-x509-ipv4"[1]:   xauth us:none, xauth them:none,  my_username=[any]; their_username=[any]
 000 "road-east-x509-ipv4"[1]:   our auth:rsasig, their auth:rsasig
 000 "road-east-x509-ipv4"[1]:   modecfg info: us:client, them:none, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:unset;
 000 "road-east-x509-ipv4"[1]:   policy_label:unset;
 000 "road-east-x509-ipv4"[1]:   CAs: 'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=Libreswan test CA for mainca, E=testing@libreswan.org'...'C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=Libreswan test CA for mainca, E=testing@libreswan.org'
 000 "road-east-x509-ipv4"[1]:   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
-000 "road-east-x509-ipv4"[1]:   retransmit-interval: 9999ms; retransmit-timeout: 99s;
+000 "road-east-x509-ipv4"[1]:   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "road-east-x509-ipv4"[1]:   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
-000 "road-east-x509-ipv4"[1]:   policy: RSASIG+ECDSA+ENCRYPT+TUNNEL+PFS+DONT_REKEY+UP+IKEV2_ALLOW+IKEV2_ALLOW_NARROWING+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO+RSASIG_v1_5;
+000 "road-east-x509-ipv4"[1]:   policy: RSASIG+ECDSA+ENCRYPT+TUNNEL+PFS+DONT_REKEY+UP+IKEV2_ALLOW+IKEV2_ALLOW_NARROWING+IKE_FRAG_ALLOW+ESN_NO+RSASIG_v1_5;
 000 "road-east-x509-ipv4"[1]:   v2-auth-hash-policy: SHA2_256+SHA2_384+SHA2_512;
 000 "road-east-x509-ipv4"[1]:   conn_prio: 0,0; interface: eth0; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "road-east-x509-ipv4"[1]:   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
 000 "road-east-x509-ipv4"[1]:   our idtype: ID_DER_ASN1_DN; our id=C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=road.testing.libreswan.org, E=user-road@testing.libreswan.org; their idtype: ID_DER_ASN1_DN; their id=C=CA, ST=Ontario, L=Toronto, O=Libreswan, OU=Test Department, CN=east.testing.libreswan.org, E=user-east@testing.libreswan.org
 000 "road-east-x509-ipv4"[1]:   dpd: action:hold; delay:0; timeout:0; nat-t: encaps:auto; nat_keepalive:yes; ikev1_natt:both
-000 "road-east-x509-ipv4"[1]:   newest ISAKMP SA: #3; newest IPsec SA: #2;
+000 "road-east-x509-ipv4"[1]:   newest ISAKMP SA: #3; newest IPsec SA: #2; conn serial: $2, instantiated from: $1;
 000 "road-east-x509-ipv4"[1]:   IKEv2 algorithm newest: AES_GCM_16_256-HMAC_SHA2_512-MODP2048
 000 "road-east-x509-ipv4"[1]:   ESP algorithm newest: AES_GCM_16_256-NONE; pfsgroup=<Phase1>
 000  
@@ -334,9 +320,9 @@ road #
 000 IKE SAs: total(1), half-open(0), open(0), authenticated(1), anonymous(0)
 000 IPsec SAs: total(1), authenticated(1), anonymous(0)
 000  
-000 #2: "road-east-x509-ipv4"[1] 192.1.2.23:500 STATE_V2_IPSEC_I (IPsec SA established); EVENT_SA_EXPIRE in XXs; newest IPSEC; eroute owner; isakmp#3; idle;
-000 #2: "road-east-x509-ipv4"[1] 192.1.2.23 esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.3.209 tun.0@192.1.2.23 tun.0@192.1.3.209 ref=0 refhim=0 Traffic: ESPin=672B ESPout=672B! ESPmax=0B 
-000 #3: "road-east-x509-ipv4"[1] 192.1.2.23:500 STATE_PARENT_R2 (received v2I2, PARENT SA established); EVENT_SA_EXPIRE in XXs; newest ISAKMP; idle;
+000 #2: "road-east-x509-ipv4"[1] 192.1.2.23:500 STATE_V2_ESTABLISHED_CHILD_SA (IPsec SA established); EVENT_SA_EXPIRE in XXs; newest IPSEC; eroute owner; isakmp#3; idle;
+000 #2: "road-east-x509-ipv4"[1] 192.1.2.23 esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.3.209 tun.0@192.1.2.23 tun.0@192.1.3.209 Traffic: ESPin=672B ESPout=672B! ESPmax=0B 
+000 #3: "road-east-x509-ipv4"[1] 192.1.2.23:500 STATE_V2_ESTABLISHED_IKE_SA (established IKE SA); EVENT_SA_EXPIRE in XXs; newest ISAKMP; idle;
 000  
 000 Bare Shunt list:
 000  

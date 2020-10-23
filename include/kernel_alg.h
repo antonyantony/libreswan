@@ -51,8 +51,6 @@
  *
  */
 
-#include "libreswan/pfkeyv2.h"
-
 struct ike_alg; /* forward declaration */
 
 struct alg_info;	/* forward declaration */

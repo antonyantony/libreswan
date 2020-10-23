@@ -36,52 +36,57 @@
 #include "lswtool.h"
 #include "lswlog.h"
 
-bool log_to_stderr = TRUE;	/* should log go to stderr? */
+bool log_to_stderr = true;	/* should log go to stderr? */
 
 const char *progname;
 
-static const char *prog_suffix = "";
+static size_t jam_progname_prefix(struct jambuf *buf, const void *object UNUSED)
+{
+	const char *progname = object;
+	if (progname != NULL) {
+		return jam(buf, "%s: ", progname);
+	}
+	return 0;
+}
 
-void tool_init_log(const char *name)
+static bool suppress_progname_log(const void *object UNUSED)
+{
+	return false;
+}
+
+const struct logger_object_vec progname_object_vec = {
+	.name = "tool",
+	.jam_object_prefix = jam_progname_prefix,
+	.suppress_object_log = suppress_progname_log,
+};
+
+static struct logger progname_logger = {
+	.object_vec = &progname_object_vec,
+	.object = NULL, /* progname */
+};
+
+struct logger *tool_init_log(const char *name)
 {
 	const char *last_slash = strrchr(name, '/');
+	progname_logger.object = progname = last_slash == NULL ? name : last_slash + 1;
 
-	progname = last_slash == NULL ? name : last_slash + 1;
-	prog_suffix = ": ";
-
-	if (log_to_stderr)
-		setbuf(stderr, NULL);
-}
-
-/* <prefix><PROGNAME>: <message>. Errno N: <errmess> */
-
-void lswlog_errno_prefix(struct lswlog *buf, const char *prefix)
-{
-	lswlogs(buf, prefix);
-	lswlogs(buf, progname);
-	lswlogs(buf, prog_suffix);
-}
-
-void lswlog_errno_suffix(struct lswlog *buf, int e)
-{
-	lswlogs(buf, ".");
-	jam(buf, " "PRI_ERRNO, pri_errno(e));
 	if (log_to_stderr) {
-		lswlog_to_file_stream(buf, stderr);
+		setbuf(stderr, NULL);
 	}
+	return &progname_logger;
 }
 
-void lswlog_log_prefix(struct lswlog *buf)
+void jam_cur_prefix(struct jambuf *buf)
 {
-	lswlogf(buf, "%s%s", progname, prog_suffix);
+	jam_logger_prefix(buf, &progname_logger);
 }
 
-void log_jambuf(lset_t rc_flags, struct fd *unused_object_fd UNUSED, jambuf_t *buf)
+void jambuf_to_logger(struct jambuf *buf, const struct logger *logger UNUSED, lset_t rc_flags)
 {
-	enum stream only = rc_flags & ~RC_MASK;
+	enum stream only = rc_flags & STREAM_MASK;
 	switch (only) {
 	case DEBUG_STREAM:
-		fprintf(stderr, "%s%s\n", DEBUG_PREFIX, buf->array);
+		jambuf_to_debug_stream(buf);
 		break;
 	case ALL_STREAMS:
 	case LOG_STREAM:
@@ -93,7 +98,7 @@ void log_jambuf(lset_t rc_flags, struct fd *unused_object_fd UNUSED, jambuf_t *b
 		fprintf(stderr, "%s\n", buf->array);
 		break;
 	case ERROR_STREAM:
-		fprintf(stderr, "%s\n", buf->array);
+		jambuf_to_error_stream(buf);
 		break;
 	case NO_STREAM:
 		/*
@@ -107,14 +112,12 @@ void log_jambuf(lset_t rc_flags, struct fd *unused_object_fd UNUSED, jambuf_t *b
 	}
 }
 
-void lswlog_to_error_stream(struct lswlog *buf)
+void jambuf_to_debug_stream(struct jambuf *buf)
 {
-	fprintf(stderr, "%s\n", buf->array);
+	fprintf(stderr, "%s%s\n", DEBUG_PREFIX, buf->array);
 }
 
-void lswlog_to_default_streams(struct lswlog *buf, enum rc_type rc UNUSED)
+void jambuf_to_error_stream(struct jambuf *buf)
 {
-	if (log_to_stderr) {
-		fprintf(stderr, "%s\n", buf->array);
-	}
+	fprintf(stderr, "%s\n", buf->array);
 }

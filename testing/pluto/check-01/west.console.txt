@@ -18,8 +18,10 @@ west #
 west #
  # $ git diff
 west #
- ipsec enumcheck | cmp ../../check/enum/OUTPUT.enumcheck.txt - || echo "Does the file OUTPUT.enumcheck.txt need updating?"
+ ipsec enumcheck > OUTPUT/enumcheck.out || echo "Enum check barfed"
 enumcheck: leak detective found no leaks
+west #
+ cmp ../../check/enum/OUTPUT.enumcheck.txt OUTPUT/enumcheck.out || echo "Does the file OUTPUT.enumcheck.txt need updating? See description.txt"
 west #
  # other checks
 west #
@@ -27,9 +29,11 @@ west #
 west #
  ipsec timecheck > /dev/null || echo failed
 west #
- ipsec shunkcheck > /dev/null || echo failed
+ ipsec hunkcheck > /dev/null || echo failed
 west #
  ipsec dncheck > /dev/null || echo failed
+west #
+ ipsec keyidcheck > /dev/null || echo failed
 west #
  # Need to disable DNS tests
 west #

@@ -8,13 +8,12 @@ east #
  ipsec whack --impair ke-payload:empty
 east #
  ipsec auto --add westnet-eastnet-ipv4-psk-ikev2
-002 added connection description "westnet-eastnet-ipv4-psk-ikev2"
+002 added IKEv2 connection "westnet-eastnet-ipv4-psk-ikev2"
 east #
  echo "initdone"
 initdone
 east #
- grep -e v2N_INVALID_KE_PAYLOAD -e v2N_INVALID_SYNTAX /tmp/pluto.log
-|    Notify Message Type: v2N_INVALID_SYNTAX (0x7)
+ grep -e v2N_INVALID_KE_PAYLOAD -e v2N_INVALID_SYNTAX /tmp/pluto.log | grep -v -e '^|'
 east #
  ../bin/check-for-core.sh
 east #

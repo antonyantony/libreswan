@@ -47,14 +47,6 @@
 #include "ike_alg_dh.h"
 #include "ike_alg_dh_ops.h"
 
-/*==========================================================
-*
-*       IKE algo list handling
-*
-*       - registration
-des*       - lookup
-*=========================================================*/
-
 #define FOR_EACH_IKE_ALGP(TYPE,A)					\
 	for (const struct ike_alg **(A) = (TYPE)->algorithms->start;	\
 	     (A) < (TYPE)->algorithms->end;				\
@@ -84,7 +76,7 @@ struct ike_alg_type {
 	const char *Name; /* capitalized */
 	struct algorithm_table *algorithms;
 	enum_names *const enum_names[IKE_ALG_KEY_ROOF];
-	void (*desc_check)(const struct ike_alg*);
+	void (*desc_check)(const struct ike_alg*, struct logger *logger);
 	bool (*desc_is_ike)(const struct ike_alg*);
 };
 
@@ -159,7 +151,7 @@ const struct ike_alg *ike_alg_byname(const struct ike_alg_type *type,
 	for (const struct ike_alg **alg = next_alg(type, NULL);
 	     alg != NULL; alg = next_alg(type, alg)) {
 		FOR_EACH_IKE_ALG_NAME(*alg, alg_name) {
-			if (shunk_caseeq(alg_name, name)) {
+			if (hunk_caseeq(alg_name, name)) {
 				return *alg;
 			}
 		}
@@ -219,19 +211,17 @@ static const struct ike_alg *lookup_by_id(const struct ike_alg_type *type,
 	FOR_EACH_IKE_ALGP(type, algp) {
 		const struct ike_alg *alg = *algp;
 		if (alg->id[key] == id) {
-			DBG(debug,
-			    const char *name = enum_short_name(type->enum_names[key], id);
-			    DBG_log("%s ike_alg_lookup_by_id id: %s=%u, found %s\n",
-				    type->name,
-				    name ? name : "???",
-				    id, alg->fqn));
+			const char *name = enum_short_name(type->enum_names[key], id);
+			DBGF(debug, "%s ike_alg_lookup_by_id id: %s=%u, found %s\n",
+			     type->name,
+			     name ? name : "???",
+			     id, alg->fqn);
 			return alg;
 		}
  	}
-	DBG(debug,
-	    const char *name = enum_short_name(type->enum_names[key], id);
-	    DBG_log("%s ike_alg_lookup_by_id id: %s=%u, not found\n",
-		    type->name, name ? name : "???", id));
+	const char *name = enum_short_name(type->enum_names[key], id);
+	DBGF(debug, "%s ike_alg_lookup_by_id id: %s=%u, not found\n",
+	     type->name, name ? name : "???", id);
 	return NULL;
 }
 
@@ -337,14 +327,14 @@ static bool ike_alg_in_table(const struct ike_alg *alg)
 	return false;
 }
 
-static void pexpect_ike_alg_base_in_table(where_t where,
+static void pexpect_ike_alg_base_in_table(struct logger *logger, where_t where,
 					  const struct ike_alg *alg,
 					  const struct ike_alg *base_alg)
 {
 	if (!ike_alg_in_table(base_alg)) {
-		log_pexpect(where,
-			    PRI_IKE_ALG" base "PRI_IKE_ALG" missing from algorithm table",
-			    pri_ike_alg(alg), pri_ike_alg(base_alg));
+		pexpect_fail(logger, where,
+			     PRI_IKE_ALG" base "PRI_IKE_ALG" missing from algorithm table",
+			     pri_ike_alg(alg), pri_ike_alg(base_alg));
 	}
 }
 
@@ -355,25 +345,25 @@ static void pexpect_ike_alg_base_in_table(where_t where,
 static bool ike_alg_has_name(const struct ike_alg *alg, shunk_t name)
 {
 	FOR_EACH_IKE_ALG_NAME(alg, alg_name) {
-		if (shunk_caseeq(alg_name, name)) {
+		if (hunk_caseeq(alg_name, name)) {
 			return true;
 		}
 	}
 	return false;
 }
 
-static bool pexpect_ike_alg_has_name(where_t where,
+static bool pexpect_ike_alg_has_name(struct logger *logger, where_t where,
 				     const struct ike_alg *alg,
 				     const char *name,
 				     const char *description)
 {
 	if (name == NULL) {
-		log_pexpect(where, PRI_IKE_ALG" %s name is NULL",
-			    pri_ike_alg(alg), description);
+		pexpect_fail(logger, where, PRI_IKE_ALG" %s name is NULL",
+			     pri_ike_alg(alg), description);
 		return false;
 	} else if (!ike_alg_has_name(alg, shunk1(name))) {
-		log_pexpect(where, PRI_IKE_ALG" missing %s name %s",
-			    pri_ike_alg(alg), description, name);
+		pexpect_fail(logger, where, PRI_IKE_ALG" missing %s name %s",
+			     pri_ike_alg(alg), description, name);
 		return false;
 	}
 	return true;
@@ -385,16 +375,16 @@ static bool pexpect_ike_alg_has_name(where_t where,
  * For instance, a PRF implemented using a HASH must have all the
  * shorter HASH names in the PRF name table.
  */
-static void pexpect_ike_alg_has_base_names(where_t where,
+static void pexpect_ike_alg_has_base_names(struct logger *logger, where_t where,
 					   const struct ike_alg *alg,
 					   const struct ike_alg *base_alg)
 {
 	FOR_EACH_IKE_ALG_NAME(base_alg, alg_name) {
 		if (!ike_alg_has_name(alg, alg_name)) {
-			log_pexpect(where,
-				    PRI_IKE_ALG" missing name "PRI_SHUNK" in base "PRI_IKE_ALG,
-				    pri_ike_alg(alg), pri_shunk(alg_name),
-				    pri_ike_alg(base_alg));
+			pexpect_fail(logger, where,
+				     PRI_IKE_ALG" missing name "PRI_SHUNK" in base "PRI_IKE_ALG,
+				     pri_ike_alg(alg), pri_shunk(alg_name),
+				     pri_ike_alg(base_alg));
 		}
 	}
 }
@@ -417,20 +407,20 @@ static const struct hash_desc *hash_descriptors[] = {
 #endif
 };
 
-static void hash_desc_check(const struct ike_alg *alg)
+static void hash_desc_check(const struct ike_alg *alg, struct logger *logger)
 {
 	const struct hash_desc *hash = hash_desc(alg);
-	pexpect_ike_alg(alg, hash->hash_digest_size > 0);
+	pexpect_ike_alg(logger, alg, hash->hash_digest_size > 0);
 	struct crypt_mac mac;
-	pexpect_ike_alg(alg, hash->hash_digest_size <= sizeof(mac.ptr/*an array*/));
-	pexpect_ike_alg(alg, hash->hash_block_size > 0);
+	pexpect_ike_alg(logger, alg, hash->hash_digest_size <= sizeof(mac.ptr/*an array*/));
+	pexpect_ike_alg(logger, alg, hash->hash_block_size > 0);
 	if (hash->hash_ops != NULL) {
-		pexpect_ike_alg(alg, hash->hash_ops->backend != NULL);
-		pexpect_ike_alg(alg, hash->hash_ops->check != NULL);
-		pexpect_ike_alg(alg, hash->hash_ops->digest_symkey != NULL);
-		pexpect_ike_alg(alg, hash->hash_ops->digest_bytes != NULL);
-		pexpect_ike_alg(alg, hash->hash_ops->final_bytes != NULL);
-		hash->hash_ops->check(hash);
+		pexpect_ike_alg(logger, alg, hash->hash_ops->backend != NULL);
+		pexpect_ike_alg(logger, alg, hash->hash_ops->check != NULL);
+		pexpect_ike_alg(logger, alg, hash->hash_ops->digest_symkey != NULL);
+		pexpect_ike_alg(logger, alg, hash->hash_ops->digest_bytes != NULL);
+		pexpect_ike_alg(logger, alg, hash->hash_ops->final_bytes != NULL);
+		hash->hash_ops->check(hash, logger);
 	}
 }
 
@@ -448,6 +438,7 @@ const struct ike_alg_type ike_alg_hash = {
 	.algorithms = &hash_algorithms,
 	.enum_names = {
 		[IKEv1_OAKLEY_ID] = &oakley_hash_names,
+		[IKEv2_ALG_ID] = &ikev2_hash_algorithm_names,
 	},
 	.desc_check = hash_desc_check,
 	.desc_is_ike = hash_desc_is_ike,
@@ -477,63 +468,63 @@ static const struct prf_desc *prf_descriptors[] = {
 #endif
 };
 
-static void prf_desc_check(const struct ike_alg *alg)
+static void prf_desc_check(const struct ike_alg *alg, struct logger *logger)
 {
 	const struct prf_desc *prf = prf_desc(alg);
-	pexpect_ike_alg(alg, prf->prf_key_size > 0);
-	pexpect_ike_alg(alg, prf->prf_output_size > 0);
+	pexpect_ike_alg(logger, alg, prf->prf_key_size > 0);
+	pexpect_ike_alg(logger, alg, prf->prf_output_size > 0);
 	struct crypt_mac mac;
-	pexpect_ike_alg(alg, prf->prf_output_size <= sizeof(mac.ptr/*an array*/));
-	pexpect_ike_alg_has_name(HERE, alg, prf->prf_ike_audit_name, ".prf_ike_audit_name");
+	pexpect_ike_alg(logger, alg, prf->prf_output_size <= sizeof(mac.ptr/*an array*/));
+	pexpect_ike_alg_has_name(logger, HERE, alg, prf->prf_ike_audit_name, ".prf_ike_audit_name");
 	/* all or none */
-	pexpect_ike_alg(alg, (prf->prf_mac_ops != NULL) == (prf->prf_ikev1_ops != NULL));
-	pexpect_ike_alg(alg, (prf->prf_mac_ops != NULL) == (prf->prf_ikev2_ops != NULL));
+	pexpect_ike_alg(logger, alg, (prf->prf_mac_ops != NULL) == (prf->prf_ikev1_ops != NULL));
+	pexpect_ike_alg(logger, alg, (prf->prf_mac_ops != NULL) == (prf->prf_ikev2_ops != NULL));
 
 	if (prf->prf_mac_ops != NULL) {
-		pexpect_ike_alg(alg, prf->prf_mac_ops->backend != NULL);
-		pexpect_ike_alg(alg, prf->prf_mac_ops->check != NULL);
-		pexpect_ike_alg(alg, prf->prf_mac_ops->init_symkey != NULL);
-		pexpect_ike_alg(alg, prf->prf_mac_ops->init_bytes != NULL);
-		pexpect_ike_alg(alg, prf->prf_mac_ops->digest_symkey != NULL);
-		pexpect_ike_alg(alg, prf->prf_mac_ops->digest_bytes != NULL);
-		pexpect_ike_alg(alg, prf->prf_mac_ops->final_symkey != NULL);
-		pexpect_ike_alg(alg, prf->prf_mac_ops->final_bytes != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_mac_ops->backend != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_mac_ops->check != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_mac_ops->init_symkey != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_mac_ops->init_bytes != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_mac_ops->digest_symkey != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_mac_ops->digest_bytes != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_mac_ops->final_symkey != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_mac_ops->final_bytes != NULL);
 		/*
 		 * IKEv1 IKE algorithms must have a hasher - used for
 		 * things like computing IV.
 		 */
-		pexpect_ike_alg(alg, prf->common.id[IKEv1_OAKLEY_ID] < 0 ||
+		pexpect_ike_alg(logger, alg, prf->common.id[IKEv1_OAKLEY_ID] < 0 ||
 				     prf->hasher != NULL);
-		prf->prf_mac_ops->check(prf);
+		prf->prf_mac_ops->check(prf, logger);
 	}
 
 	if (prf->prf_ikev1_ops != NULL) {
-		pexpect_ike_alg(alg, prf->prf_ikev1_ops->backend != NULL);
-		pexpect_ike_alg(alg, prf->prf_ikev1_ops->signature_skeyid != NULL);
-		pexpect_ike_alg(alg, prf->prf_ikev1_ops->pre_shared_key_skeyid != NULL);
-		pexpect_ike_alg(alg, prf->prf_ikev1_ops->skeyid_d != NULL);
-		pexpect_ike_alg(alg, prf->prf_ikev1_ops->skeyid_a != NULL);
-		pexpect_ike_alg(alg, prf->prf_ikev1_ops->skeyid_e != NULL);
-		pexpect_ike_alg(alg, prf->prf_ikev1_ops->appendix_b_keymat_e != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_ikev1_ops->backend != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_ikev1_ops->signature_skeyid != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_ikev1_ops->pre_shared_key_skeyid != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_ikev1_ops->skeyid_d != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_ikev1_ops->skeyid_a != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_ikev1_ops->skeyid_e != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_ikev1_ops->appendix_b_keymat_e != NULL);
 	}
 
 	if (prf->prf_ikev2_ops != NULL) {
-		pexpect_ike_alg(alg, prf->prf_ikev2_ops->backend != NULL);
-		pexpect_ike_alg(alg, prf->prf_ikev2_ops->prfplus != NULL);
-		pexpect_ike_alg(alg, prf->prf_ikev2_ops->ike_sa_skeyseed != NULL);
-		pexpect_ike_alg(alg, prf->prf_ikev2_ops->ike_sa_rekey_skeyseed != NULL);
-		pexpect_ike_alg(alg, prf->prf_ikev2_ops->ike_sa_keymat != NULL);
-		pexpect_ike_alg(alg, prf->prf_ikev2_ops->child_sa_keymat != NULL);
-		pexpect_ike_alg(alg, prf->prf_ikev2_ops->psk_auth != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_ikev2_ops->backend != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_ikev2_ops->prfplus != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_ikev2_ops->ike_sa_skeyseed != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_ikev2_ops->ike_sa_rekey_skeyseed != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_ikev2_ops->ike_sa_keymat != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_ikev2_ops->child_sa_keymat != NULL);
+		pexpect_ike_alg(logger, alg, prf->prf_ikev2_ops->psk_auth != NULL);
 	}
 
 	if (prf->hasher != NULL) {
 		/*
 		 * Check for dangling pointer.
 		 */
-		pexpect_ike_alg_base_in_table(HERE, &prf->common, &prf->hasher->common);
-		pexpect_ike_alg(alg, prf->prf_output_size == prf->hasher->hash_digest_size);
-		pexpect_ike_alg_has_base_names(HERE, &prf->common, &prf->hasher->common);
+		pexpect_ike_alg_base_in_table(logger, HERE, &prf->common, &prf->hasher->common);
+		pexpect_ike_alg(logger, alg, prf->prf_output_size == prf->hasher->hash_digest_size);
+		pexpect_ike_alg_has_base_names(logger, HERE, &prf->common, &prf->hasher->common);
 	}
 }
 
@@ -579,34 +570,31 @@ static const struct integ_desc *integ_descriptors[] = {
 	&ike_alg_integ_aes_xcbc,
 	&ike_alg_integ_aes_cmac,
 #endif
-#ifdef USE_RIPEMD
-	&ike_alg_integ_hmac_ripemd_160_96,
-#endif
 	&ike_alg_integ_none,
 };
 
-static void integ_desc_check(const struct ike_alg *alg)
+static void integ_desc_check(const struct ike_alg *alg, struct logger *logger)
 {
 	const struct integ_desc *integ = integ_desc(alg);
-	pexpect_ike_alg(alg, integ->integ_keymat_size > 0);
-	pexpect_ike_alg(alg, integ->integ_output_size > 0);
+	pexpect_ike_alg(logger, alg, integ->integ_keymat_size > 0);
+	pexpect_ike_alg(logger, alg, integ->integ_output_size > 0);
 	struct crypt_mac mac;
-	pexpect_ike_alg(alg, integ->integ_output_size <= sizeof(mac.ptr/*an array*/));
-	pexpect_ike_alg_has_name(HERE, alg, integ->integ_tcpdump_name, ".integ_tcpdump_name");
-	pexpect_ike_alg_has_name(HERE, alg, integ->integ_ike_audit_name, ".integ_ike_audit_name");
-	pexpect_ike_alg_has_name(HERE, alg, integ->integ_kernel_audit_name, ".integ_kernel_audit_name");
+	pexpect_ike_alg(logger, alg, integ->integ_output_size <= sizeof(mac.ptr/*an array*/));
+	pexpect_ike_alg_has_name(logger, HERE, alg, integ->integ_tcpdump_name, ".integ_tcpdump_name");
+	pexpect_ike_alg_has_name(logger, HERE, alg, integ->integ_ike_audit_name, ".integ_ike_audit_name");
+	pexpect_ike_alg_has_name(logger, HERE, alg, integ->integ_kernel_audit_name, ".integ_kernel_audit_name");
 	if (integ->common.id[IKEv1_ESP_ID] >= 0) {
 		struct esb_buf esb;
-		pexpect_ike_alg_streq(alg, integ->integ_kernel_audit_name,
+		pexpect_ike_alg_streq(logger, alg, integ->integ_kernel_audit_name,
 				      enum_show_shortb(&auth_alg_names,
 						       integ->common.id[IKEv1_ESP_ID],
 						       &esb));
 	}
 	if (integ->prf != NULL) {
-		pexpect_ike_alg(alg, integ->integ_keymat_size == integ->prf->prf_key_size);
-		pexpect_ike_alg(alg, integ->integ_output_size <= integ->prf->prf_output_size);
-		pexpect_ike_alg(alg, prf_desc_is_ike(&integ->prf->common));
-		pexpect_ike_alg_has_base_names(HERE, &integ->common, &integ->prf->common);
+		pexpect_ike_alg(logger, alg, integ->integ_keymat_size == integ->prf->prf_key_size);
+		pexpect_ike_alg(logger, alg, integ->integ_output_size <= integ->prf->prf_output_size);
+		pexpect_ike_alg(logger, alg, prf_desc_is_ike(&integ->prf->common));
+		pexpect_ike_alg_has_base_names(logger, HERE, &integ->common, &integ->prf->common);
 	}
 }
 
@@ -656,16 +644,6 @@ static const struct encrypt_desc *encrypt_descriptors[] = {
 	&ike_alg_encrypt_aes_ctr,
 	&ike_alg_encrypt_aes_cbc,
 #endif
-#ifdef USE_SERPENT
-	&ike_alg_encrypt_serpent_cbc,
-#endif
-#ifdef USE_TWOFISH
-	&ike_alg_encrypt_twofish_cbc,
-	&ike_alg_encrypt_twofish_ssh,
-#endif
-#ifdef USE_CAST
-	&ike_alg_encrypt_cast_cbc,
-#endif
 	&ike_alg_encrypt_null_integ_aes_gmac,
 	&ike_alg_encrypt_null,
 #ifdef USE_CHACHA
@@ -708,7 +686,7 @@ unsigned encrypt_min_key_bit_length(const struct encrypt_desc *encrypt)
 	return smallest;
 }
 
-static void encrypt_desc_check(const struct ike_alg *alg)
+static void encrypt_desc_check(const struct ike_alg *alg, struct logger *logger)
 {
 	const struct encrypt_desc *encrypt = encrypt_desc(alg);
 	/*
@@ -717,16 +695,16 @@ static void encrypt_desc_check(const struct ike_alg *alg)
 	 * AES_GCM_8.
 	 */
 	if (encrypt == &ike_alg_encrypt_aes_gcm_8) {
-		pexpect_ike_alg_streq(alg, encrypt->encrypt_tcpdump_name, "aes_gcm");
-		pexpect_ike_alg_streq(alg, encrypt->encrypt_ike_audit_name, "aes_gcm");
+		pexpect_ike_alg_streq(logger, alg, encrypt->encrypt_tcpdump_name, "aes_gcm");
+		pexpect_ike_alg_streq(logger, alg, encrypt->encrypt_ike_audit_name, "aes_gcm");
 	} else {
-		pexpect_ike_alg_has_name(HERE, alg, encrypt->encrypt_tcpdump_name, ".encrypt_tcpdump_name");
-		pexpect_ike_alg_has_name(HERE, alg, encrypt->encrypt_ike_audit_name, ".encrypt_ike_audit_name");
+		pexpect_ike_alg_has_name(logger, HERE, alg, encrypt->encrypt_tcpdump_name, ".encrypt_tcpdump_name");
+		pexpect_ike_alg_has_name(logger, HERE, alg, encrypt->encrypt_ike_audit_name, ".encrypt_ike_audit_name");
 	}
-	pexpect_ike_alg_has_name(HERE, alg, encrypt->encrypt_kernel_audit_name, ".encrypt_kernel_audit_name");
+	pexpect_ike_alg_has_name(logger, HERE, alg, encrypt->encrypt_kernel_audit_name, ".encrypt_kernel_audit_name");
 	if (encrypt->common.id[IKEv1_ESP_ID] >= 0) {
 		struct esb_buf esb;
-		pexpect_ike_alg_streq(alg, encrypt->encrypt_kernel_audit_name,
+		pexpect_ike_alg_streq(logger, alg, encrypt->encrypt_kernel_audit_name,
 				      enum_show_shortb(&esp_transformid_names,
 						       encrypt->common.id[IKEv1_ESP_ID],
 						       &esb));
@@ -736,9 +714,9 @@ static void encrypt_desc_check(const struct ike_alg *alg)
 	 * Only implemented one way, if at all.
 	 */
 	if (encrypt->encrypt_ops != NULL) {
-		pexpect_ike_alg(alg, encrypt->encrypt_ops->backend != NULL);
-		pexpect_ike_alg(alg, encrypt->encrypt_ops->check != NULL);
-		pexpect_ike_alg(alg, ((encrypt->encrypt_ops->do_crypt == NULL)
+		pexpect_ike_alg(logger, alg, encrypt->encrypt_ops->backend != NULL);
+		pexpect_ike_alg(logger, alg, encrypt->encrypt_ops->check != NULL);
+		pexpect_ike_alg(logger, alg, ((encrypt->encrypt_ops->do_crypt == NULL)
 				      != (encrypt->encrypt_ops->do_aead == NULL)));
 	}
 
@@ -747,8 +725,8 @@ static void encrypt_desc_check(const struct ike_alg *alg)
 	 * Converse for non-AEAD implementation.
 	 */
 	if (encrypt->encrypt_ops != NULL) {
-		pexpect_ike_alg(alg, encrypt->encrypt_ops->do_aead == NULL || encrypt->aead_tag_size > 0);
-		pexpect_ike_alg(alg, encrypt->encrypt_ops->do_crypt == NULL || encrypt->aead_tag_size == 0);
+		pexpect_ike_alg(logger, alg, encrypt->encrypt_ops->do_aead == NULL || encrypt->aead_tag_size > 0);
+		pexpect_ike_alg(logger, alg, encrypt->encrypt_ops->do_crypt == NULL || encrypt->aead_tag_size == 0);
 	}
 
 	/*
@@ -758,28 +736,28 @@ static void encrypt_desc_check(const struct ike_alg *alg)
 	 * KEYDEFLEN.
 	 */
 	if (encrypt == &ike_alg_encrypt_null) {
-		pexpect_ike_alg(alg, encrypt->keydeflen == 0);
-		pexpect_ike_alg(alg, encrypt->common.id[IKEv1_ESP_ID] == ESP_NULL);
-		pexpect_ike_alg(alg, encrypt->common.id[IKEv2_ALG_ID] == IKEv2_ENCR_NULL);
-		pexpect_ike_alg(alg, encrypt->enc_blocksize == 1);
-		pexpect_ike_alg(alg, encrypt->wire_iv_size == 0);
-		pexpect_ike_alg(alg, encrypt->key_bit_lengths[0] == 0);
+		pexpect_ike_alg(logger, alg, encrypt->keydeflen == 0);
+		pexpect_ike_alg(logger, alg, encrypt->common.id[IKEv1_ESP_ID] == ESP_NULL);
+		pexpect_ike_alg(logger, alg, encrypt->common.id[IKEv2_ALG_ID] == IKEv2_ENCR_NULL);
+		pexpect_ike_alg(logger, alg, encrypt->enc_blocksize == 1);
+		pexpect_ike_alg(logger, alg, encrypt->wire_iv_size == 0);
+		pexpect_ike_alg(logger, alg, encrypt->key_bit_lengths[0] == 0);
 	} else {
-		pexpect_ike_alg(alg, encrypt->keydeflen > 0);
-		pexpect_ike_alg(alg, encrypt->key_bit_lengths[0] > 0);
+		pexpect_ike_alg(logger, alg, encrypt->keydeflen > 0);
+		pexpect_ike_alg(logger, alg, encrypt->key_bit_lengths[0] > 0);
 	}
 	/* Key lengths are in descending order and 0 terminated. */
 	{
 		const unsigned *keylenp = encrypt->key_bit_lengths;
 		unsigned last_key_len = *keylenp;
 		keylenp++;
-		pexpect_ike_alg(alg, encrypt->key_bit_lengths[elemsof(encrypt->key_bit_lengths) - 1] == 0);
+		pexpect_ike_alg(logger, alg, encrypt->key_bit_lengths[elemsof(encrypt->key_bit_lengths) - 1] == 0);
 		for (; *keylenp != 0; keylenp++) {
-			pexpect_ike_alg(alg, last_key_len > *keylenp);
+			pexpect_ike_alg(logger, alg, last_key_len > *keylenp);
 		}
 	}
 	/* * The default (even when 0) is always valid. */
-	pexpect_ike_alg(alg, encrypt_has_key_bit_length(encrypt, encrypt->keydeflen));
+	pexpect_ike_alg(logger, alg, encrypt_has_key_bit_length(encrypt, encrypt->keydeflen));
 }
 
 static bool encrypt_desc_is_ike(const struct ike_alg *alg)
@@ -835,24 +813,24 @@ static const struct dh_desc *dh_descriptors[] = {
 #endif
 };
 
-static void dh_desc_check(const struct ike_alg *alg)
+static void dh_desc_check(const struct ike_alg *alg, struct logger *logger)
 {
 	const struct dh_desc *dh = dh_desc(alg);
-	pexpect_ike_alg(alg, dh->group > 0);
-	pexpect_ike_alg(alg, dh->bytes > 0);
-	pexpect_ike_alg(alg, dh->common.id[IKEv2_ALG_ID] == dh->group);
-	pexpect_ike_alg(alg, dh->common.id[IKEv1_OAKLEY_ID] == dh->group);
+	pexpect_ike_alg(logger, alg, dh->group > 0);
+	pexpect_ike_alg(logger, alg, dh->bytes > 0);
+	pexpect_ike_alg(logger, alg, dh->common.id[IKEv2_ALG_ID] == dh->group);
+	pexpect_ike_alg(logger, alg, dh->common.id[IKEv1_OAKLEY_ID] == dh->group);
 	/* always implemented */
-	pexpect_ike_alg(alg, dh->dh_ops != NULL);
+	pexpect_ike_alg(logger, alg, dh->dh_ops != NULL);
 	if (dh->dh_ops != NULL) {
-		pexpect_ike_alg(alg, dh->dh_ops->backend != NULL);
-		pexpect_ike_alg(alg, dh->dh_ops->check != NULL);
-		pexpect_ike_alg(alg, dh->dh_ops->calc_secret != NULL);
-		pexpect_ike_alg(alg, dh->dh_ops->calc_shared != NULL);
+		pexpect_ike_alg(logger, alg, dh->dh_ops->backend != NULL);
+		pexpect_ike_alg(logger, alg, dh->dh_ops->check != NULL);
+		pexpect_ike_alg(logger, alg, dh->dh_ops->calc_secret != NULL);
+		pexpect_ike_alg(logger, alg, dh->dh_ops->calc_shared != NULL);
 		/* more? */
-		dh->dh_ops->check(dh);
+		dh->dh_ops->check(dh, logger);
 		/* IKEv1 supports MODP groups but not ECC. */
-		pexpect_ike_alg(alg, (dh->dh_ops == &ike_alg_dh_nss_modp_ops
+		pexpect_ike_alg(logger, alg, (dh->dh_ops == &ike_alg_dh_nss_modp_ops
 				      ? dh->common.id[IKEv1_ESP_ID] == dh->group
 				      : dh->dh_ops == &ike_alg_dh_nss_ecp_ops
 				      ? dh->common.id[IKEv1_ESP_ID] < 0
@@ -886,21 +864,21 @@ const struct ike_alg_type ike_alg_dh = {
  */
 static void check_enum_name(const char *what,
 			    const struct ike_alg *alg,
-			    int id, enum_names *enum_names)
+			    int id, enum_names *enum_names,
+			    struct logger *logger)
 {
 	if (id >= 0) {
 		if (enum_names == NULL) {
-			PASSERT_FAIL("%s %s %s has no enum names",
+			passert_fail(logger, HERE, "%s %s %s has no enum names",
 				     alg->algo_type->name,
 				     alg->fqn, what);
 		}
 		const char *enum_name = enum_short_name(enum_names, id);
-		DBG(DBG_CRYPT,
-		    DBG_log("%s id: %d enum name: %s",
-			    what, id, enum_name));
-		pexpect_ike_alg_has_name(HERE, alg, enum_name, "enum table name");
+		DBGF(DBG_CRYPT, "%s id: %d enum name: %s",
+		     what, id, enum_name);
+		pexpect_ike_alg_has_name(logger, HERE, alg, enum_name, "enum table name");
 	} else {
-		DBG(DBG_CRYPT, DBG_log("%s id: %d enum name: N/A", what, id));
+		DBGF(DBG_CRYPT, "%s id: %d enum name: N/A", what, id);
 	}
 }
 
@@ -908,7 +886,8 @@ static void check_enum_name(const char *what,
  * Verify an algorithm table, pruning anything that isn't supported.
  */
 
-static void check_algorithm_table(const struct ike_alg_type *type)
+static void check_algorithm_table(const struct ike_alg_type *type,
+				  struct logger *logger)
 {
 	/*
 	 * Sanity check the raw algorithm table.
@@ -919,7 +898,7 @@ static void check_algorithm_table(const struct ike_alg_type *type)
 	passert(type->Name != NULL);
 	passert(strcasecmp(type->name, type->Name) == 0);
 
-	DBG(DBG_CRYPT, DBG_log("%s algorithm assertion checks", type->name));
+	DBGF(DBG_CRYPT, "%s algorithm assertion checks", type->name);
 	FOR_EACH_IKE_ALGP(type, algp) {
 		const struct ike_alg *alg = *algp;
 
@@ -931,10 +910,13 @@ static void check_algorithm_table(const struct ike_alg_type *type)
 
 		/*
 		 * Check the FQN first; and require upper case.  If
-		 * this one fails abort as things are really broken.
+		 * this one fails abort as everything else relies on a
+		 * usable .fqn.
 		 */
-		passert(pexpect_ike_alg_has_name(HERE, alg, alg->fqn, ".fqn"));
-		pexpect_ike_alg(alg, (strlen(alg->fqn) ==
+		if (!pexpect_ike_alg_has_name(logger, HERE, alg, alg->fqn, ".fqn")) {
+			continue;
+		}
+		pexpect_ike_alg(logger, alg, (strlen(alg->fqn) ==
 				      strspn(alg->fqn, "ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789")));
 
 		/*
@@ -943,7 +925,7 @@ static void check_algorithm_table(const struct ike_alg_type *type)
 		 * Requiring this is easier than trying to ensure that
 		 * changes to NAME don't break NAMES.
 		 */
-		pexpect_ike_alg_has_name(HERE, alg, alg->name, ".name");
+		pexpect_ike_alg_has_name(logger, HERE, alg, alg->fqn, ".name");
 
 		/*
 		 * Don't allow 0 as an algorithm ID.
@@ -954,7 +936,7 @@ static void check_algorithm_table(const struct ike_alg_type *type)
 		    alg != &ike_alg_dh_none.common) {
 			for (enum ike_alg_key key = IKE_ALG_KEY_FLOOR;
 			     key < IKE_ALG_KEY_ROOF; key++) {
-				pexpect_ike_alg(alg, alg->id[key] != 0);
+				pexpect_ike_alg(logger, alg, alg->id[key] != 0);
 			}
 		}
 
@@ -965,12 +947,12 @@ static void check_algorithm_table(const struct ike_alg_type *type)
 		 */
 		if (alg != &ike_alg_integ_none.common &&
 		    alg != &ike_alg_dh_none.common) {
-			pexpect_ike_alg(alg, alg->id[IKEv1_OAKLEY_ID] != 0);
-			pexpect_ike_alg(alg, alg->id[IKEv1_ESP_ID] != 0);
-			pexpect_ike_alg(alg, alg->id[IKEv2_ALG_ID] != 0);
+			pexpect_ike_alg(logger, alg, alg->id[IKEv1_OAKLEY_ID] != 0);
+			pexpect_ike_alg(logger, alg, alg->id[IKEv1_ESP_ID] != 0);
+			pexpect_ike_alg(logger, alg, alg->id[IKEv2_ALG_ID] != 0);
 			for (enum ike_alg_key key = IKE_ALG_KEY_FLOOR;
 			     key < IKE_ALG_KEY_ROOF; key++) {
-				pexpect_ike_alg(alg, alg->id[key] != 0);
+				pexpect_ike_alg(logger, alg, alg->id[key] != 0);
 			}
 		}
 
@@ -990,10 +972,11 @@ static void check_algorithm_table(const struct ike_alg_type *type)
 				at_least_one_valid_id = TRUE;
 				check_enum_name(ike_alg_key_name(key),
 						alg, id,
-						type->enum_names[key]);
+						type->enum_names[key],
+						logger);
 			}
 		}
-		pexpect_ike_alg(alg, at_least_one_valid_id);
+		pexpect_ike_alg(logger, alg, at_least_one_valid_id);
 
 		/*
 		 * Algorithm can't appear twice.
@@ -1009,9 +992,8 @@ static void check_algorithm_table(const struct ike_alg_type *type)
 		for (enum ike_alg_key key = IKE_ALG_KEY_FLOOR;
 		     key < IKE_ALG_KEY_ROOF; key++) {
 			int id = alg->id[key];
-			pexpect_ike_alg(alg,
-				id < 0 ||
-				lookup_by_id(&scratch, key, id, LEMPTY) == NULL);
+			pexpect_ike_alg(logger, alg,
+					id < 0 || lookup_by_id(&scratch, key, id, LEMPTY) == NULL);
 		}
 
 		/*
@@ -1021,46 +1003,80 @@ static void check_algorithm_table(const struct ike_alg_type *type)
 		 */
 		if (alg != &ike_alg_integ_none.common &&
 		    alg != &ike_alg_dh_none.common) {
-			pexpect_ike_alg(alg, type->desc_check != NULL);
-			type->desc_check(alg);
+			pexpect_ike_alg(logger, alg, type->desc_check != NULL);
+			type->desc_check(alg, logger);
 		}
-	}
-
-	/*
-	 * Log the final list as a pretty table.
-	 *
-	 * If FIPS, scream about.  This way grepping for FIPS shows up
-	 * more information.
-	 */
-	libreswan_log("%s%s algorithms:",
-		      libreswan_fipsmode() ? "FIPS " : "",
-		      type->Name);
-	FOR_EACH_IKE_ALGP(type, algp) {
-		libreswan_log_ike_alg("  ", *algp);
 	}
 }
 
-static void lswlog_ike_alg_details(struct lswlog *buf, const struct ike_alg *alg)
+static const char *backend_name(const struct ike_alg *alg)
+{
+	if (alg->algo_type == &ike_alg_hash) {
+		const struct hash_desc *hash = hash_desc(alg);
+		if (hash->hash_ops != NULL) {
+			return hash->hash_ops->backend;
+		}
+	} else if (alg->algo_type == &ike_alg_prf) {
+		const struct prf_desc *prf = prf_desc(alg);
+		if (prf->prf_mac_ops != NULL) {
+			return prf->prf_mac_ops->backend;
+		}
+	} else if (alg->algo_type == &ike_alg_integ) {
+		const struct integ_desc *integ = integ_desc(alg);
+		if (integ->prf != NULL &&
+		    integ->prf->prf_mac_ops != NULL) {
+			return integ->prf->prf_mac_ops->backend;
+		}
+	} else if (alg->algo_type == &ike_alg_encrypt) {
+		const struct encrypt_desc *encrypt = encrypt_desc(alg);
+		if (encrypt->encrypt_ops != NULL) {
+			return encrypt->encrypt_ops->backend;
+		}
+	} else if (alg->algo_type == &ike_alg_dh) {
+		const struct dh_desc *dh = dh_desc(alg);
+		if (dh->dh_ops != NULL) {
+			return dh->dh_ops->backend;
+		}
+	} else {
+		bad_case(0);
+	}
+	return NULL;
+}
+
+static void jam_ike_alg_details(struct jambuf *buf, size_t name_width,
+				size_t backend_width, const struct ike_alg *alg)
 {
 	/*
-	 * TYPE NAME:
+	 * NAME [{256,192,*128}]:
 	 */
-	{
-		/*
-		 * Guess a suitable column width by guessing what the longest
-		 * name is.  If the pexpect fails then someone has added an even
-		 * longer name!
-		 */
-#if defined(USE_SHA2)
-		size_t cw = strlen(ike_alg_integ_hmac_sha2_256_truncbug.common.fqn);
-#elif defined(USE_AES)
-		size_t cw = strlen(ike_alg_encrypt_null_integ_aes_gmac.common.fqn);
-#else
-		size_t cw = 20;	/* stab in dark */
-#endif
-		pexpect_ike_alg(alg, cw >= strlen(alg->fqn));
-		lswlogf(buf, "%-*s", (int) cw, alg->fqn);
+	name_width -= jam_string(buf, alg->fqn);
+	/*
+	 * Concatenate [key,...] or {key,...} with default
+	 * marked with '*'.
+	 */
+	if (alg->algo_type == IKE_ALG_ENCRYPT) {
+#define MAX_KEYSIZES (int)strlen("{256,192,*128}")
+		name_width -= MAX_KEYSIZES;
+		jam(buf, "%*s", (int) name_width, "");
+		const struct encrypt_desc *encr = encrypt_desc(alg);
+		int s = 0;
+		s += jam_string(buf, encr->keylen_omitted ? "[" : "{");
+		const char *sep = "";
+		for (const unsigned *keyp = encr->key_bit_lengths; *keyp; keyp++) {
+			s += jam_string(buf, sep);
+			if (*keyp == encr->keydeflen) {
+				s += jam(buf, "*");
+			}
+			s += jam(buf, "%d", *keyp);
+			sep = ",";
+		}
+		s += jam(buf, encr->keylen_omitted ? "]" : "}");
+		jam(buf, "%*s", MAX_KEYSIZES - s, "");
+	} else {
+		jam(buf, "%*s", (int) name_width, "");
 	}
+	jam_string(buf, " ");
+
 	/*
 	 * IKEv1: IKE ESP AH  IKEv2: IKE ESP AH
 	 */
@@ -1096,59 +1112,46 @@ static void lswlog_ike_alg_details(struct lswlog *buf, const struct ike_alg *alg
 	} else {
 		bad_case(0);
 	}
-	lswlogs(buf, "  IKEv1:");
-	lswlogs(buf, (v1_ike
-		      ? " IKE"
-		      : "    "));
-	lswlogs(buf, (v1_esp
-		      ? " ESP"
-		      : "    "));
-	lswlogs(buf, (v1_ah
-		      ? " AH"
-		      : "   "));
-	lswlogs(buf, "  IKEv2:");
-	lswlogs(buf, (v2_ike
-		      ? " IKE"
-		      : "    "));
-	lswlogs(buf, (v2_esp
-		      ? " ESP"
-		      : "    "));
-	lswlogs(buf, (v2_ah
-		      ? " AH"
-		      : "   "));
-	lswlogs(buf, (alg->fips
-		      ? "  FIPS"
-		      : "      "));
+	jam_string(buf, "IKEv1:");
+	jam_string(buf, (v1_ike
+			 ? " IKE"
+			 : "    "));
+	jam_string(buf, (v1_esp
+			 ? " ESP"
+			 : "    "));
+	jam_string(buf, (v1_ah
+			 ? " AH"
+			 : "   "));
+	jam_string(buf, "  IKEv2:");
+	jam_string(buf, (v2_ike
+			 ? " IKE"
+			 : "    "));
+	jam_string(buf, (v2_esp
+			 ? " ESP"
+			 : "    "));
+	jam_string(buf, (v2_ah
+			 ? " AH"
+			 : "   "));
+	jam_string(buf, (alg->fips
+			 ? "  FIPS"
+			 : "      "));
 
 	/*
-	 * Concatenate [key,...] or {key,...} with default
-	 * marked with '*'.
+	 * Concatenate:   XXX backend
 	 */
-	if (alg->algo_type == IKE_ALG_ENCRYPT) {
-		const struct encrypt_desc *encr = encrypt_desc(alg);
-		lswlogs(buf, encr->keylen_omitted ? "  [" : "  {");
-		const char *sep = "";
-		for (const unsigned *keyp = encr->key_bit_lengths; *keyp; keyp++) {
-			lswlogs(buf, sep);
-			if (*keyp == encr->keydeflen) {
-				lswlogs(buf, "*");
-			}
-			lswlogf(buf, "%d", *keyp);
-			sep = ",";
-		}
-		lswlogs(buf, encr->keylen_omitted ? "]" : "}");
-		/* did fit */
+	if (backend_width > 0) {
+		const char *b = backend_name(alg);
+		jam(buf, " %-*s", (int) backend_width, b != NULL ? b : "");
 	}
 
 	/*
 	 * Concatenate:   alias ...
 	 */
 	{
-		const char *sep = "  ";
-
+		const char *sep = " ";
 		FOR_EACH_IKE_ALG_NAME(alg, alg_name) {
 			/* filter out NAME */
-			if (!shunk_strcaseeq(alg_name, alg->fqn)) {
+			if (!hunk_strcaseeq(alg_name, alg->fqn)) {
 				jam(buf, "%s"PRI_SHUNK, sep, pri_shunk(alg_name));
 				sep = ", ";
 			}
@@ -1156,11 +1159,45 @@ static void lswlog_ike_alg_details(struct lswlog *buf, const struct ike_alg *alg
 	}
 }
 
-void libreswan_log_ike_alg(const char *prefix, const struct ike_alg *alg)
+static void log_ike_algs(struct logger *logger)
 {
-	LSWLOG(buf) {
-		lswlogs(buf, prefix);
-		lswlog_ike_alg_details(buf, alg);
+	/*
+	 * Find a suitable column width by looking for the longest
+	 * name.
+	 */
+	size_t name_width = 0;
+	size_t backend_width = 0;
+	FOR_EACH_IKE_ALG_TYPEP(typep) {
+		const struct ike_alg_type *type = *typep;
+		FOR_EACH_IKE_ALGP(type, algp) {
+			size_t s = strlen((*algp)->fqn);
+			if ((*algp)->algo_type == IKE_ALG_ENCRYPT) {
+				s += MAX_KEYSIZES + 1;
+			}
+			name_width = max(s, name_width);
+			const char *b = backend_name(*algp);
+			if (b != NULL) {
+				size_t s = strlen(b);
+				backend_width = max(s, backend_width);
+			}
+		}
+	}
+
+	/*
+	 * When in FIPS mode sprinkle "FIPS" through out the output.
+	 * This way grepping for FIPS shows up more information.
+	 */
+	FOR_EACH_IKE_ALG_TYPEP(typep) {
+		const struct ike_alg_type *type = *typep;
+		log_message(RC_LOG, logger, "%s%s algorithms:",
+			    libreswan_fipsmode() ? "FIPS " : "",
+			    type->Name);
+		FOR_EACH_IKE_ALGP(type, algp) {
+			LOG_JAMBUF(RC_LOG, logger, buf) {
+				jam_string(buf, "  ");
+				jam_ike_alg_details(buf, name_width, backend_width, *algp);
+			}
+		}
 	}
 }
 
@@ -1169,7 +1206,7 @@ void libreswan_log_ike_alg(const char *prefix, const struct ike_alg *alg)
  *
  * This prevents checks being performed on algorithms that are.
  */
-static void strip_nonfips(const struct ike_alg_type *type)
+static void strip_nonfips(const struct ike_alg_type *type, struct logger *logger)
 {
 	const struct ike_alg **end = type->algorithms->start;
 	FOR_EACH_IKE_ALGP(type, algp) {
@@ -1178,8 +1215,9 @@ static void strip_nonfips(const struct ike_alg_type *type)
 		 * Check FIPS before trying to run any tests.
 		 */
 		if (!alg->fips) {
-			libreswan_log("%s algorithm %s disabled; not FIPS compliant",
-				      type->Name, alg->fqn);
+			log_message(RC_LOG, logger,
+				    "%s algorithm %s disabled; not FIPS compliant",
+				    type->Name, alg->fqn);
 			continue;
 		}
 		*end++ = alg;
@@ -1187,7 +1225,7 @@ static void strip_nonfips(const struct ike_alg_type *type)
 	type->algorithms->end = end;
 }
 
-void init_ike_alg(void)
+void init_ike_alg(struct logger *logger)
 {
 	bool fips = libreswan_fipsmode();
 
@@ -1198,7 +1236,7 @@ void init_ike_alg(void)
 	 */
 	if (fips) {
 		FOR_EACH_IKE_ALG_TYPEP(typep) {
-			strip_nonfips(*typep);
+			strip_nonfips(*typep, logger);
 		}
 	}
 
@@ -1206,6 +1244,11 @@ void init_ike_alg(void)
 	 * Now verify what is left.
 	 */
 	FOR_EACH_IKE_ALG_TYPEP(typep) {
-		check_algorithm_table(*typep);
+		check_algorithm_table(*typep, logger);
 	}
+
+	/*
+	 * Log the final lists as a pretty table.
+	 */
+	log_ike_algs(logger);
 }

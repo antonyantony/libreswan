@@ -23,8 +23,7 @@
  */
 
 /*
- * This is an internal interface between a master pluto process
- * and a cryptographic helper thread.
+ * This is an internal interface between the main and helper threads.
  *
  * The helper performs the heavy lifting of cryptographic functions
  * for pluto. It does this to avoid head-of-queue problems with aggressive
@@ -44,6 +43,7 @@
 
 struct state;
 struct msg_digest;
+struct logger;
 
 /*
  * Offload work to the crypto thread pool (or the event loop if there
@@ -55,11 +55,13 @@ struct msg_digest;
  * probably never will :-(
  */
 
-struct crypto_task;
+struct crypto_task; /*struct job*/
 
-typedef void crypto_compute_fn(struct crypto_task *task, int my_thread);
+typedef void crypto_compute_fn(struct logger *logger,
+			       struct crypto_task *task,
+			       int my_thread);
 typedef stf_status crypto_completed_cb(struct state *st,
-				       struct msg_digest **mdp,
+				       struct msg_digest *md,
 				       struct crypto_task **task);
 typedef void crypto_cancelled_cb(struct crypto_task **task);
 
@@ -70,10 +72,11 @@ struct crypto_handler {
 	crypto_cancelled_cb *cancelled_cb;
 };
 
-extern void submit_crypto(struct state *st,
-		   struct crypto_task *task,
-		   const struct crypto_handler *handler,
-		   const char *name);
+extern void submit_crypto(const struct logger *logger,
+			  struct state *st,
+			  struct crypto_task *task,
+			  const struct crypto_handler *handler,
+			  const char *name);
 
 /*
  * cryptographic helper operations.
@@ -86,8 +89,6 @@ enum pluto_crypto_requests {
 	pcr_compute_dh,		/* calculate (g^x)(g^y) for Phase 2 PFS */
 	pcr_compute_dh_v2,	/* perform IKEv2 SA calculation, create SKEYSEED */
 };
-
-typedef unsigned int pcr_req_id;
 
 /* wire_chunk: a chunk-like representation that is relocatable.
  *
@@ -163,7 +164,7 @@ extern void wire_clone_chunk(wire_arena_t *arena,
  * during the life of the chunk.
  */
 #define setchunk_from_wire(chunk, parent_ptr, wire) \
-	setchunk(chunk, wire_chunk_ptr(&(parent_ptr)->arena, (wire)), (wire)->len)
+	chunk = chunk2(wire_chunk_ptr(&(parent_ptr)->arena, (wire)), (wire)->len)
 
 /* end of wire_chunk definitions */
 
@@ -203,7 +204,7 @@ struct pcr_v1_dh {
 	const struct integ_desc *integ;
 	const struct prf_desc *prf;
 	const struct encrypt_desc *encrypter;
-	enum original_role role;
+	enum sa_role role;
 	size_t key_size; /* of encryptor, in bytes */
 	size_t salt_size; /* of IV salt, in bytes */
 	wire_chunk_t gi;
@@ -236,7 +237,7 @@ struct pcr_dh_v2 {
 	const struct integ_desc *integ;
 	const struct prf_desc *prf;
 	const struct encrypt_desc *encrypt;
-	enum original_role role;
+	enum sa_role role;
 	size_t key_size; /* of encryptor, in bytes */
 	size_t salt_size; /* of IV salt, in bytes */
 	wire_chunk_t gi;
@@ -318,7 +319,7 @@ struct pluto_crypto_req_cont;	/* forward reference */
  * See also the comments that prefix send_crypto_helper_request().
  */
 
-typedef void crypto_req_cont_func(struct state *st, struct msg_digest **mdp,
+typedef void crypto_req_cont_func(struct state *st, struct msg_digest *md,
 				  struct pluto_crypto_req *r);
 
 /* struct pluto_crypto_req_cont allocators */
@@ -328,8 +329,8 @@ struct state;
 extern struct pluto_crypto_req_cont *new_pcrc(crypto_req_cont_func fn,
 					      const char *name);
 
-extern void start_crypto_helpers(int nhelpers);
-extern void stop_crypto_helpers(void);
+extern void start_crypto_helpers(int nhelpers, struct logger *logger);
+extern void stop_crypto_helpers(struct logger *logger);
 
 extern void send_crypto_helper_request(struct state *st,
 				       struct pluto_crypto_req_cont *cn);
@@ -349,7 +350,7 @@ extern void request_nonce(const char *name,
 			  struct state *st,
 			  crypto_req_cont_func *callback);
 
-extern void calc_ke(struct pcr_kenonce *kn);
+extern void calc_ke(struct pcr_kenonce *kn, struct logger *logger);
 
 extern void calc_nonce(struct pcr_kenonce *kn);
 
@@ -363,22 +364,22 @@ extern void compute_dh_shared(struct state *st, const chunk_t g,
 			      const struct dh_desc *group);
 
 extern void start_dh_v1_secretiv(crypto_req_cont_func fn, const char *name,
-				 struct state *st, enum original_role role,
+				 struct state *st, enum sa_role role,
 				 const struct dh_desc *oakley_group2);
 
 extern bool finish_dh_secretiv(struct state *st,
 			       struct pluto_crypto_req *r);
 
 extern void start_dh_v1_secret(crypto_req_cont_func fn, const char *name,
-			       struct state *st, enum original_role role,
+			       struct state *st, enum sa_role role,
 			       const struct dh_desc *oakley_group2);
 
 extern void finish_dh_secret(struct state *st,
 			     struct pluto_crypto_req *r);
 
 /* internal */
-extern void calc_dh(struct pcr_v1_dh *dh);
-extern void calc_dh_iv(struct pcr_v1_dh *dh);
+extern void calc_dh(struct pcr_v1_dh *dh, struct logger *logger);
+extern void calc_dh_iv(struct pcr_v1_dh *dh, struct logger *logger);
 extern void cancelled_v1_dh(struct pcr_v1_dh *dh);
 
 /*
@@ -387,7 +388,7 @@ extern void cancelled_v1_dh(struct pcr_v1_dh *dh);
 
 extern void start_dh_v2(struct state *st,
 			const char *name,
-			enum original_role role,
+			enum sa_role role,
 			PK11SymKey *skey_d_old,
 			const struct prf_desc *old_prf,
 			const ike_spis_t *ike_spis,
@@ -397,7 +398,7 @@ extern bool finish_dh_v2(struct state *st,
 			 struct pluto_crypto_req *r, bool only_shared);
 
 /* internal */
-extern void calc_dh_v2(struct pluto_crypto_req *r);
+extern void calc_dh_v2(struct pluto_crypto_req *r, struct logger *logger);
 extern void cancelled_dh_v2(struct pcr_dh_v2 *dh);
 
 /*

@@ -7,6 +7,7 @@
  * Copyright (C) 2012 Philippe Vouters <Philippe.Vouters@laposte.net>
  * Copyright (C) 2013,2016 Antony Antony <antony@phenome.org>
  * Copyright (C) 2016,2018 Andrew Cagney
+ * Copyright (C) 2017 Mayank Totale <mtotale@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -33,6 +34,7 @@
 #include "impair.h"
 #include "ip_range.h"
 #include "ip_subnet.h"
+#include "ip_protoport.h"
 
 #ifndef DEFAULT_RUNDIR
 # define DEFAULT_RUNDIR "/run/pluto/"
@@ -63,19 +65,7 @@
  */
 
 #define WHACK_BASIC_MAGIC (((((('w' << 8) + 'h') << 8) + 'k') << 8) + 25)
-#define WHACK_MAGIC (((((('o' << 8) + 'h') << 8) + 'k') << 8) + 47)
-
-/*
- * Where, if any, is the pubkey coming from.
- *
- * This goes across the wire so re-ordering this means bumping whack's
- * version number.
- */
-enum whack_pubkey_type {
-	WHACK_PUBKEY_NONE = 0,	/* must be zero (to make it default) */
-	WHACK_PUBKEY_CERTIFICATE_NICKNAME,
-	WHACK_PUBKEY_CKAID,
-};
+#define WHACK_MAGIC (((((('o' << 8) + 'h') << 8) + 'k') << 8) + 48)
 
 /* struct whack_end is a lot like connection.h's struct end
  * It differs because it is going to be shipped down a socket
@@ -83,29 +73,35 @@ enum whack_pubkey_type {
  */
 struct whack_end {
 	char *id;	/* id string (if any) -- decoded by pluto */
-	char *pubkey;	/* PUBKEY_TYPE string (if any) -- decoded by pluto  */
 	char *ca;	/* distinguished name string (if any) -- parsed by pluto */
 	char *groups;	/* access control groups (if any) -- parsed by pluto */
+
+	/*
+	 * Where, if anywhere, is the public/private key coming from?
+	 * Pass everything over and let pluto decide what if anything
+	 * conflict.
+	 */
+	char *cert;
+	char *ckaid;
+	char *rsasigkey;
 
 	enum keyword_authby authby;
 
 	enum keyword_host host_type;
-	ip_address host_addr,
-		   host_nexthop,
-		   host_srcip;
-	ip_subnet  client,
-		   host_vtiip,
-		   ifaceip;
+	ip_address host_addr;
+	unsigned host_ikeport;
+	ip_address host_nexthop;
+	ip_address host_srcip;
+	ip_subnet host_vtiip;
+	ip_subnet ifaceip;
+
+	ip_subnet client;
+	ip_protoport protoport;
+
+	bool has_client;
 
 	bool key_from_DNS_on_demand;
-	enum whack_pubkey_type pubkey_type;
-	bool has_client;
-	bool has_client_wildcard;
-	bool has_port_wildcard;
 	char *updown;		/* string */
-	uint16_t host_port;	/* host order  (for IKE communications) */
-	uint16_t port;		/* host order */
-	uint8_t protocol;
 	char *virt;
 	ip_range pool_range;	/* store start of v4 addresspool */
 	bool xauth_server;	/* for XAUTH */
@@ -114,7 +110,6 @@ struct whack_end {
 	bool modecfg_server;	/* for MODECFG */
 	bool modecfg_client;
 	bool cat;		/* IPv4 Client Address Translation */
-	unsigned int tundev;
 	enum certpolicy sendcert;
 	bool send_ca;
 	enum ike_cert_type certtype;
@@ -140,6 +135,8 @@ struct whack_message {
 	bool whack_shunt_status;
 	bool whack_fips_status;
 	bool whack_brief_status;
+	bool whack_addresspool_status;
+	bool whack_show_states;
 	bool whack_seccomp_crashtest;
 
 	bool whack_shutdown;
@@ -157,10 +154,10 @@ struct whack_message {
 	bool whack_options;
 
 	lmod_t debugging;
-	lmod_t impairing;
 
 	/* what to impair and how */
-	struct whack_impair impairment;
+	struct whack_impair *impairments;
+	unsigned nr_impairments;
 
 	/* for WHACK_CONNECTION */
 
@@ -191,6 +188,12 @@ struct whack_message {
 
 	/* Force the use of NAT-T on a connection */
 	enum yna_options encaps;
+
+	/* Remote TCP port to use, 0 indicates no TCP */
+	int remote_tcpport;
+
+	/* Allow TCP as fallback, only do TCP or only do UDP */
+	enum tcp_options iketcp;
 
 	/* Option to allow per-conn setting of sending of NAT-T keepalives - default is enabled  */
 	bool nat_keepalive;
@@ -344,9 +347,7 @@ struct whack_message {
 	char *redirect_to;
 	char *accept_redirect_to;
 
-	bool active_redirect;
-	ip_address active_redirect_peer;
-	ip_address active_redirect_gw;
+	char *active_redirect_dests;
 
 	/* what metric to put on ipsec routes */
 	int metric;
@@ -359,40 +360,7 @@ struct whack_message {
 	char *string2;
 	char *string3;
 
-	/* space for strings (hope there is enough room):
-	 * Note that pointers don't travel on wire.
-	 *  1 connection name [name_len]
-	 *  2 left's name [left.host.name.len]
-	 *  3 left's cert
-	 *  4 left's ca
-	 *  5 left's groups
-	 *  6 left's updown
-	 *  7 left's virt
-	 *  8 right's name [left.host.name.len]
-	 *  9 right's cert
-	 * 10 right's ca
-	 * 11 right's groups
-	 * 12 right's updown
-	 * 13 right's virt
-	 * 14 keyid
-	 * 15 unused (was myid)
-	 * 16 ike
-	 * 17 esp
-	 * 18 left.xauth_username
-	 * 19 right.xauth_username
-	 * 20 connalias
-	 * 21 left.host_addr_name
-	 * 22 right.host_addr_name
-	 * 23 genstring1  - used with opt_set
-	 * 24 genstring2
-	 * 25 genstring3
-	 * 26 dnshostname
-	 * 27 policy_label if compiled with with LABELED_IPSEC
-	 * 28 remote_host
-	 * 29 redirect_to
-	 * 30 accept_redirect_to
-	 * plus keyval (limit: 8K bits + overhead), a chunk.
-	 */
+	/* space for strings (hope there is enough room) */
 	size_t str_size;
 	unsigned char string[4096];
 };
@@ -417,7 +385,8 @@ struct whack_message {
 #define REREAD_SECRETS	0x01		/* reread /etc/ipsec.secrets */
 #define REREAD_CRLS	0x02		/* obsoleted - just gives a warning */
 #define REREAD_FETCH	0x04		/* update CRL from distribution point(s) */
-#define REREAD_ALL	LRANGES(REREAD_SECRETS, REREAD_FETCH)	/* all reread options */
+#define REREAD_CERTS	0x08		/* update CERT(S) of connection(s) */
+#define REREAD_ALL	LRANGES(REREAD_SECRETS, REREAD_CERTS)	/* all reread options */
 
 struct whackpacker {
 	struct whack_message *msg;
@@ -427,7 +396,7 @@ struct whackpacker {
 };
 
 extern err_t pack_whack_msg(struct whackpacker *wp);
-extern err_t unpack_whack_msg(struct whackpacker *wp);
+extern bool unpack_whack_msg(struct whackpacker *wp, struct logger *logger);
 extern void clear_end(struct whack_end *e);
 
 extern size_t whack_get_secret(char *buf, size_t bufsize);

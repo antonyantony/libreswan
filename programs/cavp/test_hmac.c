@@ -41,7 +41,7 @@ static struct cavp_entry config[] = {
 #ifdef USE_SHA2
 static struct prf_desc ike_alg_prf_sha2_224 = {
 	.common = {
-		.name = "sha2_224",
+		.fqn = "SHA2_224",
 		.algo_type = IKE_ALG_PRF,
 		.fips = TRUE,
 	},
@@ -82,7 +82,7 @@ static void hmac_print_config(void)
 		fprintf(stderr, "HMAC length %lu not recognised\n", l);
 	} else {
 		fprintf(stderr, "HMAC %s with length %lu\n",
-			prf_alg->common.name, l);
+			prf_alg->common.fqn, l);
 	}
 }
 
@@ -101,7 +101,7 @@ static struct cavp_entry data[] = {
 	{ .key = NULL, },
 };
 
-static void hmac_run_test(void)
+static void hmac_run_test(struct logger *logger)
 {
 	print_number("Count", NULL, count);
 	print_number("Klen", NULL, key.len);
@@ -112,12 +112,13 @@ static void hmac_run_test(void)
 		return;
 	}
 	struct crypt_prf *prf = crypt_prf_init_hunk("run", prf_alg,
-						    "key", key);
+						    "key", key,
+						    logger);
 	crypt_prf_update_hunk(prf, "msg", msg);
 	chunk_t bytes = alloc_chunk(prf_alg->prf_output_size, "bytes");
 	crypt_prf_final_bytes(&prf, bytes.ptr, bytes.len);
 	print_chunk("Mac", NULL, bytes, tlen);
-	freeanychunk(bytes);
+	free_chunk_content(&bytes);
 }
 
 const struct cavp test_hmac = {

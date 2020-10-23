@@ -7,7 +7,7 @@ destination -I 192.0.1.254 192.0.2.254 is alive
 west #
  # ensure that clear text does not get through
 west #
- iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j LOGDROP
+ iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j DROP
 west #
  iptables -I INPUT -m policy --dir in --pol ipsec -j ACCEPT
 west #
@@ -22,17 +22,17 @@ west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
  ipsec auto --add westnet-eastnet-gcm
-002 added connection description "westnet-eastnet-gcm"
+002 added IKEv1 connection "westnet-eastnet-gcm"
 west #
  ipsec auto --status
-000 using kernel interface: netkey
-000 interface lo/lo 127.0.0.1:4500
-000 interface lo/lo 127.0.0.1:500
-000 interface eth0/eth0 192.0.1.254:4500
-000 interface eth0/eth0 192.0.1.254:500
-000 interface eth1/eth1 192.1.2.45:4500
-000 interface eth1/eth1 192.1.2.45:500
+000 using kernel interface: xfrm
 000  
+000 interface lo UDP 127.0.0.1:4500
+000 interface lo UDP 127.0.0.1:500
+000 interface eth0 UDP 192.0.1.254:4500
+000 interface eth0 UDP 192.0.1.254:500
+000 interface eth1 UDP 192.1.2.45:4500
+000 interface eth1 UDP 192.1.2.45:500
 000  
 000 fips mode=disabled;
 000 SElinux=XXXXX
@@ -41,12 +41,10 @@ west #
 000 config setup options:
 000  
 000 configdir=/etc, configfile=/etc/ipsec.conf, secrets=/etc/ipsec.secrets, ipsecdir=/etc/ipsec.d
-000 nssdir=/etc/ipsec.d, dumpdir=/var/tmp, statsbin=unset
-000 dnssec-rootkey-file=/var/lib/unbound/root.key, dnssec-trusted=<unset>
 000 sbindir=PATH/sbin, libexecdir=PATH/libexec/ipsec
-000 nhelpers=-1, uniqueids=yes, dnssec-enable=yes, perpeerlog=no, logappend=no, logip=yes, shuntlifetime=900s, xfrmlifetime=30s
-000 ddos-cookies-threshold=50000, ddos-max-halfopen=25000, ddos-mode=auto
-000 ikeport=500, ikebuf=0, msg_errqueue=yes, strictcrlpolicy=no, crlcheckinterval=0, listen=<any>, nflog-all=0
+000 nhelpers=-1, uniqueids=yes, dnssec-enable=yes, logappend=no, logip=yes, shuntlifetime=900s, xfrmlifetime=30s
+000 ddos-cookies-threshold=25000, ddos-max-halfopen=50000, ddos-mode=auto
+000 ikebuf=0, msg_errqueue=yes, crl-strict=no, crlcheckinterval=0, listen=<any>, nflog-all=0
 000 ocsp-enable=no, ocsp-strict=no, ocsp-timeout=2, ocsp-uri=<unset>
 000 ocsp-trust-name=<unset>
 000 ocsp-cache-size=1000, ocsp-cache-min-age=3600, ocsp-cache-max-age=86400, ocsp-method=get
@@ -72,8 +70,6 @@ west #
 000 algorithm ESP encrypt: name=CHACHA20_POLY1305, keysizemin=256, keysizemax=256
 000 algorithm ESP encrypt: name=NULL, keysizemin=0, keysizemax=0
 000 algorithm ESP encrypt: name=NULL_AUTH_AES_GMAC, keysizemin=128, keysizemax=256
-000 algorithm ESP encrypt: name=SERPENT_CBC, keysizemin=128, keysizemax=256
-000 algorithm ESP encrypt: name=TWOFISH_CBC, keysizemin=128, keysizemax=256
 000 algorithm AH/ESP auth: name=AES_CMAC_96, key-length=128
 000 algorithm AH/ESP auth: name=AES_XCBC_96, key-length=128
 000 algorithm AH/ESP auth: name=HMAC_MD5_96, key-length=128
@@ -93,9 +89,6 @@ west #
 000 algorithm IKE encrypt: v1id=-1, v1name=n/a, v2id=18, v2name=AES_GCM_A, blocksize=16, keydeflen=128
 000 algorithm IKE encrypt: v1id=13, v1name=OAKLEY_AES_CTR, v2id=13, v2name=AES_CTR, blocksize=16, keydeflen=128
 000 algorithm IKE encrypt: v1id=7, v1name=OAKLEY_AES_CBC, v2id=12, v2name=AES_CBC, blocksize=16, keydeflen=128
-000 algorithm IKE encrypt: v1id=65004, v1name=OAKLEY_SERPENT_CBC, v2id=65004, v2name=SERPENT_CBC, blocksize=16, keydeflen=128
-000 algorithm IKE encrypt: v1id=65005, v1name=OAKLEY_TWOFISH_CBC, v2id=65005, v2name=TWOFISH_CBC, blocksize=16, keydeflen=128
-000 algorithm IKE encrypt: v1id=65289, v1name=OAKLEY_TWOFISH_CBC_SSH, v2id=65289, v2name=TWOFISH_CBC_SSH, blocksize=16, keydeflen=128
 000 algorithm IKE encrypt: v1id=-1, v1name=n/a, v2id=28, v2name=CHACHA20_POLY1305, blocksize=16, keydeflen=256
 000 algorithm IKE PRF: name=HMAC_MD5, hashlen=16
 000 algorithm IKE PRF: name=HMAC_SHA1, hashlen=20
@@ -125,14 +118,14 @@ west #
 000 "westnet-eastnet-gcm":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, banner:unset, cat:unset;
 000 "westnet-eastnet-gcm":   policy_label:unset;
 000 "westnet-eastnet-gcm":   ike_life: 3600s; ipsec_life: 28800s; replay_window: 32; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
-000 "westnet-eastnet-gcm":   retransmit-interval: 9999ms; retransmit-timeout: 99s;
+000 "westnet-eastnet-gcm":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "westnet-eastnet-gcm":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
-000 "westnet-eastnet-gcm":   policy: RSASIG+ENCRYPT+TUNNEL+PFS+IKEV1_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO;
+000 "westnet-eastnet-gcm":   policy: RSASIG+ENCRYPT+TUNNEL+PFS+IKEV1_ALLOW+IKE_FRAG_ALLOW+ESN_NO;
 000 "westnet-eastnet-gcm":   conn_prio: 24,24; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
 000 "westnet-eastnet-gcm":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:auto;
 000 "westnet-eastnet-gcm":   our idtype: ID_FQDN; our id=@west; their idtype: ID_FQDN; their id=@east
 000 "westnet-eastnet-gcm":   dpd: action:hold; delay:0; timeout:0; nat-t: encaps:auto; nat_keepalive:yes; ikev1_natt:both
-000 "westnet-eastnet-gcm":   newest ISAKMP SA: #0; newest IPsec SA: #0;
+000 "westnet-eastnet-gcm":   newest ISAKMP SA: #0; newest IPsec SA: #0; conn serial: $1;
 000 "westnet-eastnet-gcm":   IKE algorithms: AES_CBC_256-HMAC_SHA2_256-MODP2048, AES_CBC_256-HMAC_SHA2_512-MODP2048, AES_CBC_256-HMAC_SHA1-MODP2048, AES_CBC_256-HMAC_SHA2_256-MODP1536, AES_CBC_256-HMAC_SHA2_512-MODP1536, AES_CBC_256-HMAC_SHA1-MODP1536
 000 "westnet-eastnet-gcm":   ESP algorithms: AES_GCM_16_192-NONE
 000  
@@ -151,26 +144,19 @@ west #
 initdone
 west #
  ipsec auto --up westnet-eastnet-gcm
-002 "westnet-eastnet-gcm" #1: initiating Main Mode
-1v1 "westnet-eastnet-gcm" #1: STATE_MAIN_I1: sent MI1, expecting MR1
-1v1 "westnet-eastnet-gcm" #1: STATE_MAIN_I2: sent MI2, expecting MR2
-1v1 "westnet-eastnet-gcm" #1: STATE_MAIN_I3: sent MI3, expecting MR3
+002 "westnet-eastnet-gcm" #1: initiating IKEv1 Main Mode connection
+1v1 "westnet-eastnet-gcm" #1: sent Main Mode request
+1v1 "westnet-eastnet-gcm" #1: sent Main Mode I2
+1v1 "westnet-eastnet-gcm" #1: sent Main Mode I3
 002 "westnet-eastnet-gcm" #1: Peer ID is ID_FQDN: '@east'
-003 "westnet-eastnet-gcm" #1: Authenticated using RSA with SHA-1
-004 "westnet-eastnet-gcm" #1: STATE_MAIN_I4: ISAKMP SA established {auth=RSA_SIG cipher=AES_CBC_256 integ=HMAC_SHA2_256 group=MODP2048}
-002 "westnet-eastnet-gcm" #2: initiating Quick Mode RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKEV1_ALLOW+SAREF_TRACK+IKE_FRAG_ALLOW+ESN_NO
-1v1 "westnet-eastnet-gcm" #2: STATE_QUICK_I1: sent QI1, expecting QR1
-004 "westnet-eastnet-gcm" #2: STATE_QUICK_I2: sent QI2, IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_GCM_16_192-NONE NATOA=none NATD=none DPD=passive}
+003 "westnet-eastnet-gcm" #1: authenticated using RSA with SHA-1
+004 "westnet-eastnet-gcm" #1: IKE SA established {auth=RSA_SIG cipher=AES_CBC_256 integ=HMAC_SHA2_256 group=MODP2048}
+002 "westnet-eastnet-gcm" #2: initiating Quick Mode RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKEV1_ALLOW+IKE_FRAG_ALLOW+ESN_NO
+1v1 "westnet-eastnet-gcm" #2: sent Quick Mode request
+004 "westnet-eastnet-gcm" #2: IPsec SA established tunnel mode {ESP=>0xESPESP <0xESPESP xfrm=AES_GCM_16_192-NONE NATOA=none NATD=none DPD=passive}
 west #
- ping -n -c 4 -I 192.0.1.254 192.0.2.254
-PING 192.0.2.254 (192.0.2.254) from 192.0.1.254 : 56(84) bytes of data.
-64 bytes from 192.0.2.254: icmp_seq=1 ttl=64 time=0.XXX ms
-64 bytes from 192.0.2.254: icmp_seq=2 ttl=64 time=0.XXX ms
-64 bytes from 192.0.2.254: icmp_seq=3 ttl=64 time=0.XXX ms
-64 bytes from 192.0.2.254: icmp_seq=4 ttl=64 time=0.XXX ms
---- 192.0.2.254 ping statistics ---
-4 packets transmitted, 4 received, 0% packet loss, time XXXX
-rtt min/avg/max/mdev = 0.XXX/0.XXX/0.XXX/0.XXX ms
+ ../../pluto/bin/ping-once.sh --up -I 192.0.1.254 192.0.2.254
+up
 west #
  ../../pluto/bin/ipsec-look.sh
 west NOW

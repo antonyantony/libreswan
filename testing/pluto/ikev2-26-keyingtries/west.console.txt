@@ -7,7 +7,7 @@ destination -I 192.0.1.254 192.0.2.254 is alive
 west #
  # ensure that clear text does not get through
 west #
- iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j LOGDROP
+ iptables -A INPUT -i eth1 -s 192.0.2.0/24 -j DROP
 west #
  iptables -I INPUT -m policy --dir in --pol ipsec -j ACCEPT
 west #
@@ -22,17 +22,17 @@ west #
  /testing/pluto/bin/wait-until-pluto-started
 west #
  ipsec auto --add westnet-eastnet-ipv4-psk-ikev2
-002 added connection description "westnet-eastnet-ipv4-psk-ikev2"
+002 added IKEv2 connection "westnet-eastnet-ipv4-psk-ikev2"
 west #
  echo "initdone"
 initdone
 west #
  # this should fail
 west #
- ipsec auto --up westnet-eastnet-ipv4-psk-ikev2
-1v2 "westnet-eastnet-ipv4-psk-ikev2" #1: initiating IKEv2 IKE SA
-1v2 "westnet-eastnet-ipv4-psk-ikev2" #1: STATE_PARENT_I1: sent v2I1, expected v2R1
-1v2 "westnet-eastnet-ipv4-psk-ikev2" #2: STATE_PARENT_I2: sent v2I2, expected v2R2 {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
+ ipsec auto --up westnet-eastnet-ipv4-psk-ikev2 #retransmits
+1v2 "westnet-eastnet-ipv4-psk-ikev2" #1: initiating IKEv2 connection
+1v2 "westnet-eastnet-ipv4-psk-ikev2" #1: sent IKE_SA_INIT request
+1v2 "westnet-eastnet-ipv4-psk-ikev2" #1: sent IKE_AUTH request {auth=IKEv2 cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 group=MODP2048}
 010 "westnet-eastnet-ipv4-psk-ikev2" #2: STATE_PARENT_I2: retransmission; will wait 0.5 seconds for response
 010 "westnet-eastnet-ipv4-psk-ikev2" #2: STATE_PARENT_I2: retransmission; will wait 1 seconds for response
 010 "westnet-eastnet-ipv4-psk-ikev2" #2: STATE_PARENT_I2: retransmission; will wait 2 seconds for response
@@ -48,15 +48,15 @@ west #
  # if no STATE_s show up, this test failed
 west #
  ipsec status |grep STATE_  || echo "test failed, all states went away"
-000 #3: "westnet-eastnet-ipv4-psk-ikev2":500 STATE_PARENT_I2 (sent v2I2, expected v2R2); EVENT_SA_REPLACE in XXs; idle;
-000 #4: "westnet-eastnet-ipv4-psk-ikev2":500 STATE_PARENT_I2 (sent v2I2, expected v2R2); EVENT_RETRANSMIT in -1s; idle;
+000 #3: "westnet-eastnet-ipv4-psk-ikev2":500 STATE_PARENT_I2 (sent IKE_AUTH request); EVENT_SA_REPLACE in XXs; idle;
+000 #4: "westnet-eastnet-ipv4-psk-ikev2":500 STATE_PARENT_I2 (sent IKE_AUTH request); EVENT_RETRANSMIT in XXs; idle;
 west #
  # only one pending CHILD SA event should show up
 west #
  ipsec status |egrep "STATE_|pending"
-000 #3: "westnet-eastnet-ipv4-psk-ikev2":500 STATE_PARENT_I2 (sent v2I2, expected v2R2); EVENT_SA_REPLACE in XXs; idle;
+000 #3: "westnet-eastnet-ipv4-psk-ikev2":500 STATE_PARENT_I2 (sent IKE_AUTH request); EVENT_SA_REPLACE in XXs; idle;
 000 #3: pending CHILD SA for "westnet-eastnet-ipv4-psk-ikev2"
-000 #4: "westnet-eastnet-ipv4-psk-ikev2":500 STATE_PARENT_I2 (sent v2I2, expected v2R2); EVENT_RETRANSMIT in -1s; idle;
+000 #4: "westnet-eastnet-ipv4-psk-ikev2":500 STATE_PARENT_I2 (sent IKE_AUTH request); EVENT_RETRANSMIT in XXs; idle;
 west #
  echo done
 done

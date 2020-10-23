@@ -21,7 +21,6 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include "lswlog.h"
 #include <sys/wait.h>		/* for WIFEXITED() et.al. */
 #include <cert.h>
 
@@ -38,7 +37,7 @@ static const char crl_name[] = "_import_crl";
 /*
  * Calls the _import_crl process to add a CRL to the NSS db.
  */
-int send_crl_to_import(u_char *der, size_t len, const char *url)
+int send_crl_to_import(uint8_t *der, size_t len, const char *url, struct logger *logger)
 {
 	CERTSignedCrl *crl = NULL;
 	CERTCertificate *cacert = NULL;
@@ -76,16 +75,16 @@ int send_crl_to_import(u_char *der, size_t len, const char *url)
 		*crl_path_space = '\0';
 		n = 0;
 # else
-		EXIT_LOG_ERRNO(errno,
-			       "readlink(\"/proc/self/exe\") failed for crl helper");
+		FATAL_ERRNO(errno, "readlink(\"/proc/self/exe\") failed for crl helper");
 # endif
 	}
 #else
 	arg[0] = clone_str("/usr/local/libexec/ipsec/_import_crl", "crl helper");
 #endif
 
-	if ((size_t)n > sizeof(crl_path_space) - sizeof(crl_name))
-		exit_log("path to %s is too long", crl_name);
+	if ((size_t)n > sizeof(crl_path_space) - sizeof(crl_name)) {
+		fatal(logger, "path to %s is too long", crl_name);
+	}
 
 	while (n > 0 && crl_path_space[n - 1] != '/')
 		n--;
@@ -119,19 +118,13 @@ int send_crl_to_import(u_char *der, size_t len, const char *url)
 
 	/* arena owned by crl */
 	if ((crl = CERT_DecodeDERCrl(arena, &crl_si, SEC_CRL_TYPE)) == NULL) {
-		LSWDBGP(DBG_X509, buf) {
-			lswlogs(buf, "NSS: decoding CRL using CERT_DecodeDERCrl() failed: ");
-			lswlog_nss_error(buf);
-		}
+		dbg_nss_error(logger, "decoding CRL using CERT_DecodeDERCrl() failed");
 		PORT_FreeArena(arena, FALSE);
 		goto end;
 	}
 
 	if ((cacert = CERT_FindCertByName(handle, &crl->crl.derName)) == NULL) {
-		LSWDBGP(DBG_X509, buf) {
-			lswlogs(buf, "NSS: finding cert by name using CERT_FindCertByName() failed: ");
-			lswlog_nss_error(buf);
-		}
+		dbg_nss_error(logger, "finding cert by name using CERT_FindCertByName() failed");
 		SEC_DestroyCrl(crl);
 		goto end;
 	}

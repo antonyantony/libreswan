@@ -43,10 +43,8 @@
 #include "rnd.h"
 #include "state.h"
 #include "pluto_crypt.h"
-#include "lswlog.h"
 #include "log.h"
 
-#include <nss.h>
 #include <nspr.h>
 #include <prerror.h>
 #include <pk11pub.h>
@@ -57,17 +55,18 @@
 #include "crypt_dh.h"
 
 /* MUST BE THREAD-SAFE */
-void calc_ke(struct pcr_kenonce *kn)
+void calc_ke(struct pcr_kenonce *kn, struct logger *logger)
 {
 	const struct dh_desc *group = kn->group;
 
-	kn->secret = calc_dh_secret(kn->group, &kn->gi);
+	kn->secret = calc_dh_secret(kn->group, &kn->gi, logger);
 
-	DBG(DBG_CRYPT,
-	    DBG_log("NSS: Local DH %s secret (pointer): %p",
-		    group->common.name, kn->secret);
-	    DBG_dump_hunk("NSS: Public DH wire value:",
-			   kn->gi));
+	if (DBGP(DBG_CRYPT)) {
+		DBG_log("NSS: Local DH %s secret (pointer): %p",
+			group->common.fqn, kn->secret);
+		DBG_dump_hunk("NSS: Public DH wire value:",
+			      kn->gi);
+	}
 }
 
 /* MUST BE THREAD-SAFE */
@@ -76,8 +75,9 @@ void calc_nonce(struct pcr_kenonce *kn)
 	kn->n = alloc_chunk(DEFAULT_NONCE_SIZE, "n");
 	get_rnd_bytes(kn->n.ptr, kn->n.len);
 
-	DBG(DBG_CRYPT,
-	    DBG_dump_hunk("Generated nonce:", kn->n));
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump_hunk("Generated nonce:", kn->n);
+	}
 }
 
 void cancelled_ke_and_nonce(struct pcr_kenonce *kn)
@@ -85,8 +85,8 @@ void cancelled_ke_and_nonce(struct pcr_kenonce *kn)
 	if (kn->secret != NULL) {
 		free_dh_secret(&kn->secret);
 	}
-	freeanychunk(kn->n);
-	freeanychunk(kn->gi);
+	free_chunk_content(&kn->n);
+	free_chunk_content(&kn->gi);
 }
 
 /* Note: not all cn's are the same subtype */

@@ -25,14 +25,16 @@
 
 #define TEST(TESTER, ALG, TESTS)					\
 	if (!ike_alg_is_valid(&(ALG).common)) {				\
-		libreswan_log("skipping tests for disabled %s algorithm", \
-			      (ALG).common.fqn);			\
+		log_message(RC_LOG, logger,				\
+			    "skipping tests for disabled %s algorithm", \
+			    (ALG).common.fqn);				\
 	} else {							\
-		libreswan_log("testing %s:", (ALG).common.fqn);		\
-		passert(TESTER(&ALG, TESTS));				\
+		log_message(RC_LOG, logger,				\
+			    "testing %s:", (ALG).common.fqn);		\
+		passert(TESTER(&ALG, TESTS, logger));				\
 	}
 
-void test_ike_alg(void)
+void test_ike_alg(struct logger *logger)
 {
 #ifdef USE_CAMELLIA
 	TEST(test_cbc_vectors, ike_alg_encrypt_camellia_cbc, camellia_cbc_tests);

@@ -594,6 +594,7 @@ static const char hexdig[] = "0123456789abcdef";
  */
 void init_vendorid(void)
 {
+	struct logger logger[1] = { GLOBAL_LOGGER(null_fd), };
 	struct vid_struct *vid;
 
 	for (vid = vid_tab; vid->id != VID_none; vid++) {
@@ -614,7 +615,8 @@ void init_vendorid(void)
 
 			/* TODO: This use must allowed even with USE_MD5=false */
 			struct crypt_hash *ctx = crypt_hash_init("vendor id",
-								 &ike_alg_hash_md5);
+								 &ike_alg_hash_md5,
+								 logger);
 			crypt_hash_digest_bytes(ctx, "data", d, strlen(vid->data));
 			crypt_hash_final_bytes(&ctx, vidm, MD5_DIGEST_SIZE);
 			vid->vid_len = MD5_DIGEST_SIZE;
@@ -627,7 +629,8 @@ void init_vendorid(void)
 			vid->vid = vidm;
 
 			struct crypt_hash *ctx = crypt_hash_init("vendor id",
-								 &ike_alg_hash_md5);
+								 &ike_alg_hash_md5,
+								 logger);
 			crypt_hash_digest_bytes(ctx, "data", vid->data, strlen(vid->data));
 			crypt_hash_final_bytes(&ctx, hash, MD5_DIGEST_SIZE);
 
@@ -692,8 +695,8 @@ static void vidlog(const char *vidstr, size_t len, struct vid_struct *vid, bool 
 			 vid->descr ? vid->descr : "");
 	}
 
-	DBG(DBG_CONTROL, DBG_log("%s Vendor ID payload [%s]",
-	       vid_useful ? "received" : "ignoring", vid_dump));
+	dbg("%s Vendor ID payload [%s]",
+	    vid_useful ? "received" : "ignoring", vid_dump);
 }
 
 /*
@@ -777,13 +780,10 @@ static void handle_known_vendorid_v1(struct msg_digest *md,
 		/* FALL THROUGH */
 	case VID_NATT_RFC:
 		if (md->quirks.qnat_traversal_vid < vid->id) {
-			DBG(DBG_NATT, DBG_log(" quirks.qnat_traversal_vid set to=%d [%s]",
-					      vid->id, vid->descr));
+			dbg(" quirks.qnat_traversal_vid set to=%d [%s]", vid->id, vid->descr);
 			md->quirks.qnat_traversal_vid = vid->id;
 		} else {
-			DBG(DBG_NATT,
-			    DBG_log("Ignoring older NAT-T Vendor ID payload [%s]",
-				    vid->descr));
+			dbg("Ignoring older NAT-T Vendor ID payload [%s]", vid->descr);
 			vid_useful = FALSE;
 		}
 		break;
@@ -914,7 +914,7 @@ void handle_vendorid(struct msg_digest *md, const char *vid, size_t len,
  * @param vid Int of VendorID to be sent (see vendor.h for the list)
  * @return bool True if successful
  */
-bool out_vid(uint8_t np, pb_stream *outs, unsigned int vid)
+bool out_vid(pb_stream *outs, unsigned int vid)
 {
 	struct vid_struct *pvid;
 
@@ -922,10 +922,9 @@ bool out_vid(uint8_t np, pb_stream *outs, unsigned int vid)
 	for (pvid = vid_tab; pvid->id != vid; pvid++)
 		passert(pvid->id != VID_none); /* we must find what we are trying to send */
 
-	DBG(DBG_EMITTING,
-	    DBG_log("out_vid(): sending [%s]", pvid->descr));
+	dbg("out_vid(): sending [%s]", pvid->descr);
 
-	return ikev1_out_generic_raw(np, &isakmp_vendor_id_desc, outs,
+	return ikev1_out_generic_raw(&isakmp_vendor_id_desc, outs,
 			       pvid->vid, pvid->vid_len, "V_ID");
 }
 
@@ -950,7 +949,7 @@ bool out_vid_set(pb_stream *outs, const struct connection *c)
 {
 	/* cusomizeable Vendor ID */
 	if (c->send_vendorid) {
-		if (!ikev1_out_generic_raw(ISAKMP_NEXT_VID, &isakmp_vendor_id_desc, outs,
+		if (!ikev1_out_generic_raw(&isakmp_vendor_id_desc, outs,
 					pluto_vendorid, strlen(pluto_vendorid), "Pluto Vendor ID")) {
 			return FALSE;
 		}
@@ -958,7 +957,7 @@ bool out_vid_set(pb_stream *outs, const struct connection *c)
 
 #define MAYBE_VID(q, vid) {  \
 	if (q) {  \
-		if (!out_vid(ISAKMP_NEXT_VID, outs, vid)) {  \
+		if (!out_vid(outs, vid)) {  \
 			return FALSE;  \
 		}  \
 	}  \
@@ -979,7 +978,7 @@ bool out_vid_set(pb_stream *outs, const struct connection *c)
 	 * we count on backpatching to fix our np.
 	 */
 
-	if (!out_vid(ISAKMP_NEXT_NONE, outs, VID_MISC_DPD)) {
+	if (!out_vid(outs, VID_MISC_DPD)) {
 		return FALSE;
 	}
 
@@ -998,7 +997,7 @@ bool vid_is_oppo(const char *vid, size_t len)
 		passert(pvid->id != VID_none); /* we must find VID_OPPORTUNISTIC */
 
 	if (pvid->vid_len == len && memeq(vid, pvid->vid, len)) {
-		DBG(DBG_CONTROL, DBG_log("VID_OPPORTUNISTIC received"));
+		dbg("VID_OPPORTUNISTIC received");
 		return TRUE;
 	} else {
 		return FALSE;

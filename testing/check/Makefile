@@ -16,8 +16,9 @@ SUBDIRS += enum
 SUBDIRS += ip
 SUBDIRS += jambuf
 SUBDIRS += time
-SUBDIRS += shunk
+SUBDIRS += hunk
 SUBDIRS += dn
+SUBDIRS += keyid
 
 ifndef top_srcdir
 include ../../mk/dirs.mk

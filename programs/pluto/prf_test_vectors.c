@@ -17,7 +17,6 @@
 
 #include "constants.h"
 #include "lswalloc.h"
-#include "lswlog.h"
 
 #include "ike_alg.h"
 #include "ike_alg_prf.h"
@@ -25,10 +24,12 @@
 #include "ike_alg_test_prf.h"
 
 #include "lswfips.h"
-#include "nss.h"
 #include "pk11pub.h"
 #include "crypt_prf.h"
 #include "crypt_symkey.h"
+
+#include "defs.h"		/* for so_serial_t */
+#include "log.h"
 
 /*
  * Ref: https://tools.ietf.org/html/rfc4435: Test Vectors
@@ -157,10 +158,9 @@ const struct prf_test_vector hmac_md5_prf_tests[] = {
 };
 
 static bool test_prf_vector(const struct prf_desc *prf,
-			    const struct prf_test_vector *test)
+			    const struct prf_test_vector *test,
+			    struct logger *logger)
 {
-	libreswan_log("  %s", test->description);
-
 	chunk_t chunk_key = decode_to_chunk(__func__, test->key);
 	passert(chunk_key.len == test->key_size);
 	chunk_t chunk_message = (test->message != NULL)
@@ -171,43 +171,51 @@ static bool test_prf_vector(const struct prf_desc *prf,
 
 	/* chunk interface */
 	struct crypt_prf *chunk_prf = crypt_prf_init_hunk("PRF chunk interface", prf,
-							  "key", chunk_key);
+							  "key", chunk_key,
+							  logger);
 	crypt_prf_update_hunk(chunk_prf, "message", chunk_message);
 	struct crypt_mac chunk_output = crypt_prf_final_mac(&chunk_prf, NULL);
-	DBG(DBG_CRYPT, DBG_dump_hunk("chunk output", chunk_output));
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump_hunk("chunk output", chunk_output);
+	}
 	bool ok = verify_hunk(test->description, prf_output, chunk_output);
 
 	/* symkey interface */
-	PK11SymKey *symkey_key = symkey_from_hunk("key symkey", chunk_key);
+	PK11SymKey *symkey_key = symkey_from_hunk("key symkey", chunk_key, logger);
 	struct crypt_prf *symkey_prf = crypt_prf_init_symkey("PRF symkey interface", prf,
-							     "key symkey", symkey_key);
+							     "key symkey", symkey_key,
+							     logger);
 	PK11SymKey *symkey_message = symkey_from_hunk("message symkey",
-						       chunk_message);
+						      chunk_message, logger);
 	crypt_prf_update_symkey(symkey_prf, "symkey message", symkey_message);
 	PK11SymKey *symkey_output = crypt_prf_final_symkey(&symkey_prf);
-	DBG(DBG_CRYPT, DBG_symkey("output", "symkey", symkey_output));
-	ok = verify_symkey(test->description, prf_output, symkey_output);
+	if (DBGP(DBG_CRYPT)) {
+		DBG_symkey(logger, "output", "symkey", symkey_output);
+	}
+	ok = verify_symkey(test->description, prf_output, symkey_output, logger);
 	DBGF(DBG_CRYPT, "%s: %s %s", __func__, test->description, ok ? "passed" : "failed");
 	release_symkey(__func__, "symkey", &symkey_output);
 
-	freeanychunk(chunk_message);
-	freeanychunk(chunk_key);
+	free_chunk_content(&chunk_message);
+	free_chunk_content(&chunk_key);
 
 	release_symkey(__func__, "message", &symkey_message);
 	release_symkey(__func__, "key", &symkey_key);
 	release_symkey(__func__, "output", &symkey_output);
 
-	freeanychunk(prf_output);
+	free_chunk_content(&prf_output);
 	return ok;
 }
 
 bool test_prf_vectors(const struct prf_desc *desc,
-		      const struct prf_test_vector *tests)
+		      const struct prf_test_vector *tests,
+		      struct logger *logger)
 {
 	bool ok = TRUE;
 	for (const struct prf_test_vector *test = tests;
 	     test->description != NULL; test++) {
-		if (!test_prf_vector(desc, test)) {
+		log_message(RC_LOG, logger, "  %s", test->description);
+		if (!test_prf_vector(desc, test, logger)) {
 			ok = FALSE;
 		}
 	}

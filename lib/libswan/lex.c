@@ -21,13 +21,12 @@
 #include <unistd.h>
 #include <errno.h>
 
-
 #include "sysdep.h"
 #include "constants.h"
 #include "lswlog.h"
 #include "lex.h"
-
-struct file_lex_position *flp = NULL;
+#include "lswlog.h"
+#include "lswalloc.h"
 
 /*
  * Open a file for lexical processing.
@@ -40,38 +39,44 @@ struct file_lex_position *flp = NULL;
  * @param bool optional
  * @return bool True if successful
  */
-bool lexopen(struct file_lex_position *new_flp, const char *name,
-	bool optional)
+bool lexopen(struct file_lex_position **flp, const char *name,
+	     bool optional, const struct file_lex_position *oflp)
 {
 	FILE *f = fopen(name, "r");
-
 	if (f == NULL) {
-		if (!optional || errno != ENOENT)
-			LOG_ERRNO(errno, "could not open \"%s\"", name);
-		return FALSE;
-	} else {
-		new_flp->previous = flp;
-		flp = new_flp;
-		flp->filename = name;
-		flp->fp = f;
-		flp->lino = 0;
-		flp->bdry = B_none;
-
-		flp->cur = flp->buffer;	/* nothing loaded yet */
-		flp->under = *flp->cur = '\0';
-
-		(void) shift();	/* prime tok */
-		return TRUE;
+		if (!optional || errno != ENOENT) {
+			log_errno(oflp->logger, errno, "could not open \"%s\"", name);
+		} else {
+			DBGF(DBG_TMI, "lex open: %s: "PRI_ERRNO, name, pri_errno(errno));
+		}
+		return false;
 	}
+
+	DBGF(DBG_TMI, "lex open: %s", name);
+	struct file_lex_position *new_flp = alloc_thing(struct file_lex_position, name);
+	new_flp->depth = oflp->depth + 1;
+	new_flp->filename = clone_str(name, "lexopen filename");
+	new_flp->fp = f;
+	new_flp->lino = 0;
+	new_flp->bdry = B_none;
+	new_flp->cur = new_flp->buffer;	/* nothing loaded yet */
+	new_flp->under = *new_flp->cur = '\0';
+	new_flp->logger = oflp->logger;
+	shift(new_flp);	/* prime tok */
+	*flp = new_flp;
+	return true;
 }
 
 /*
  * Close filehandle
  */
-void lexclose(void)
+void lexclose(struct file_lex_position **flp)
 {
-	fclose(flp->fp);
-	flp = flp->previous;
+	DBGF(DBG_TMI, "lex close:");
+	fclose((*flp)->fp);
+	pfreeany((*flp)->filename);
+	pfree(*flp);
+	*flp = NULL;
 }
 
 /*
@@ -88,9 +93,9 @@ void lexclose(void)
 /*
  * shift - load next token into tok
  *
- * @return bool True if successful
+ * @return bool True if successful (i.e., there is a token)
  */
-bool shift(void)
+bool shift(struct file_lex_position *flp)
 {
 	char *p = flp->cur;
 	char *sor = NULL;	/* start of record for any new lines */
@@ -112,18 +117,19 @@ bool shift(void)
 					flp->fp) == NULL) {
 				flp->bdry = B_file;
 				flp->tok = flp->cur = NULL;
-				return FALSE;
-			} else {
-				/* strip trailing whitespace, including \n */
-				for (p = flp->buffer + strlen(flp->buffer);
-					p > flp->buffer && isspace(p[-1]);
-					p--)
-					;
-				*p = '\0';
-
-				flp->lino++;
-				sor = p = flp->buffer;
+				DBGF(DBG_TMI, "lex shift: file(eof)");
+				return false; /* no token */
 			}
+
+			/* strip trailing whitespace, including \n */
+			for (p = flp->buffer + strlen(flp->buffer);
+			     p > flp->buffer && isspace(p[-1]);
+			     p--)
+				;
+			*p = '\0';
+
+			flp->lino++;
+			sor = p = flp->buffer;
 			break;	/* try again for a token */
 
 		case ' ':	/* whitespace */
@@ -142,9 +148,8 @@ bool shift(void)
 				flp->tok = p;
 				p = strchr(p + 1, *p);
 				if (p == NULL) {
-					loglog(RC_LOG_SERIOUS,
-						"\"%s\" line %d: unterminated string",
-						flp->filename, flp->lino);
+					log_message(RC_LOG_SERIOUS, flp->logger,
+						    "unterminated string");
 					p = flp->tok + strlen(flp->tok);
 				} else {
 					p++;	/* include delimiter in token */
@@ -157,7 +162,8 @@ bool shift(void)
 				flp->under = *p;
 				*p = '\0';
 				flp->cur = p;
-				return TRUE;
+				DBGF(DBG_TMI, "lex shift: '%s'", flp->tok);
+				return true; /* token */
 			}
 		/* FALL THROUGH */
 		default:
@@ -195,18 +201,23 @@ bool shift(void)
 				flp->under = *p;
 				*p = '\0';
 				flp->cur = p;
-				return TRUE;
+				DBGF(DBG_TMI, "lex shift: '%s'", flp->tok);
+				return true; /* token */
 			}
 
 			/*
-			 * we have a start-of-record:
+			 * we have an end-of-line aka start-of-record:
 			 * return it, deferring "real" token
+			 *
+			 * Caller will clear .bdry so shift() can read
+			 * the new line and return the next token.
 			 */
 			flp->bdry = B_record;
 			flp->tok = NULL;
 			flp->under = *p;
 			flp->cur = p;
-			return FALSE;
+			DBGF(DBG_TMI, "lex shift: record(new line)");
+			return false; /* no token */
 		}
 	}
 }
@@ -217,15 +228,20 @@ bool shift(void)
  * @param m string
  * @return bool True if everything is ok
  */
-bool flushline(const char *m)
+bool flushline(struct file_lex_position *flp, const char *message)
 {
 	if (flp->bdry != B_none) {
-		return TRUE;
-	} else {
-		if (m != NULL)
-			loglog(RC_LOG_SERIOUS, "\"%s\" line %d: %s",
-				flp->filename, flp->lino, m);
-		do {} while (shift());
-		return FALSE;
+		DBGF(DBG_TMI, "lex flushline: already on eof or record boundary");
+		return true;
 	}
+
+	/* discard tokens until boundary reached */
+	DBGF(DBG_TMI, "lex flushline: need to flush tokens");
+	if (message != NULL) {
+		log_message(RC_LOG_SERIOUS, flp->logger, "%s", message);
+	}
+	do {
+		DBGF(DBG_TMI, "lex flushline: discarding '%s'", flp->tok);
+	} while (shift(flp));
+	return false;
 }

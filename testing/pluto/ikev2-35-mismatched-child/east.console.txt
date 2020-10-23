@@ -6,7 +6,7 @@ east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
  ipsec auto --add westnet-eastnet-mismatch
-002 added connection description "westnet-eastnet-mismatch"
+002 added IKEv2 connection "westnet-eastnet-mismatch"
 east #
  echo "initdone"
 initdone
@@ -23,6 +23,7 @@ east #
 |    exchange type: ISAKMP_v2_IKE_AUTH (0x23)
 |    exchange type: ISAKMP_v2_IKE_AUTH (0x23)
 |    exchange type: ISAKMP_v2_IKE_AUTH (0x23)
+|    exchange type: ISAKMP_v2_INFORMATIONAL (0x25)
 east #
  ../bin/check-for-core.sh
 east #

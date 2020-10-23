@@ -29,65 +29,62 @@
 #include "x509.h"
 #include "certs.h"
 #include "err.h"
+#include "ckaid.h"
 
 struct connection;
 struct RSA_private_key;
 struct RSA_public_key;
-struct ECDSA_public_key;
-struct ECDSA_private_key;
 struct pubkey;
 struct pubkey_type;
 struct crypt_mac;
 struct packet_byte_stream;
-
-extern int sign_hash_RSA(const struct RSA_private_key *k, const u_char *hash_val,
-		      size_t hash_len, u_char *sig_val, size_t sig_len,
-		      enum notify_payload_hash_algorithms hash_algo);
-
-extern int sign_hash_ECDSA(const struct ECDSA_private_key *k, const u_char *hash_val,
-		      size_t hash_len, u_char *sig_val, size_t sig_len);
+struct private_key_stuff;
+struct hash_desc;
+struct show;
 
 extern err_t RSA_signature_verify_nss(const struct RSA_public_key *k,
 				      const struct crypt_mac *hash,
-				      const u_char *sig_val, size_t sig_len,
-				      enum notify_payload_hash_algorithms hash_algo);
+				      const uint8_t *sig_val, size_t sig_len,
+				      const struct hash_desc *hash_algo,
+				      struct logger *logger);
 
 
 const struct private_key_stuff *get_connection_private_key(const struct connection *c,
-							   const struct pubkey_type *type);
+							   const struct pubkey_type *type,
+							   struct logger *logger);
 
 extern bool has_private_key(cert_t cert);
-extern void list_public_keys(struct fd *whackfd, bool utc,
-			     bool check_pub_keys);
-extern void list_psks(struct fd *whackfd);
+extern void list_public_keys(struct show *s, bool utc, bool check_pub_keys);
+extern void list_psks(struct show *s);
 
-extern const chunk_t *get_psk(const struct connection *c);
-extern chunk_t *get_ppk(const struct connection *c, chunk_t **ppk_id);
+extern const chunk_t *get_connection_psk(const struct connection *c,
+					 struct logger *logger);
+extern chunk_t *get_connection_ppk(const struct connection *c,
+				   chunk_t **ppk_id, struct logger *logger);
 extern const chunk_t *get_ppk_by_id(const chunk_t *ppk_id);
 
-extern void load_preshared_secrets(void);
-extern void free_preshared_secrets(void);
-extern err_t load_nss_cert_secret(CERTCertificate *cert);
+extern void load_preshared_secrets(struct logger *logger);
+extern void free_preshared_secrets(struct logger *logger);
+err_t preload_private_key_by_cert(const struct cert *cert, bool *load_needed, struct logger *logger);
+err_t preload_private_key_by_ckaid(const ckaid_t *ckaid, bool *load_needed, struct logger *logger);
 
 extern struct secret *lsw_get_xauthsecret(char *xauthname);
 
 /* keys from ipsec.conf */
 extern struct pubkey_list *pluto_pubkeys;
 
-struct pubkey *get_pubkey_with_matching_ckaid(const char *ckaid);
+const struct pubkey *find_pubkey_by_ckaid(const char *ckaid);
 
 typedef err_t (try_signature_fn) (const struct crypt_mac *hash,
 				  const struct packet_byte_stream *sig_pbs,
 				  struct pubkey *kr,
 				  struct state *st,
-				  enum notify_payload_hash_algorithms hash_algo);
+				  const struct hash_desc *hash_algo);
 extern stf_status check_signature_gen(struct state *st,
 				      const struct crypt_mac *hash,
 				      const struct packet_byte_stream *sig_pbs,
-				      enum notify_payload_hash_algorithms hash_algo,
+				      const struct hash_desc *hash_algo,
 				      const struct pubkey_type *type,
 				      try_signature_fn *try_signature);
-
-enum PrivateKeyKind nss_cert_key_kind(CERTCertificate *cert);
 
 #endif /* _KEYS_H */

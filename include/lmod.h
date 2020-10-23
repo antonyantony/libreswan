@@ -18,6 +18,8 @@
 
 #include "lset.h"
 
+struct jambuf;
+
 /*
  * lmod_t is for modifying an lset_t.
  *
@@ -55,7 +57,7 @@ struct lmod_info {
 bool lmod_arg(lmod_t *mod, const struct lmod_info *info,
 	      const char *optarg, bool enable);
 
-void lswlog_lmod(struct lswlog *buf, const enum_names *names,
-		 const char *separator, lmod_t mod);
+size_t jam_lmod(struct jambuf *buf, const enum_names *names,
+		const char *separator, lmod_t mod);
 
 #endif

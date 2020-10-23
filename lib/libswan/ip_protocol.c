@@ -13,76 +13,102 @@
  * for more details.
  */
 
-#include "ip_protocol.h"
-#include "ietf_constants.h"
+#include <netinet/in.h>		/* for IPPROTO_* */
+
 #include "lswcdefs.h"		/* for elemsof() */
 #include "constants.h"		/* for strncaseeq() */
+#include "enum_names.h"
 
-#include "libreswan/pfkeyv2.h"
+#include "ip_protocol.h"
+#include "ip_encap.h"
 
-#if 0
-const struct ip_protocol ip_protocol_unspec = {
+const struct ip_protocol ip_protocol_unset = {
 	.prefix = "unk",
 	.description = "unknown",
 	.name = "UNKNOWN",
+	.ipproto = 0,
 };
-#endif
 
 const struct ip_protocol ip_protocol_icmp = {
-	.prefix = "icmp",
 	.description = "Internet Control Message",
-	.protoid = 1,
+	.prefix = "icmp",
+	.name = "ICMP",
+	.ipproto = IPPROTO_ICMP,
 };
 
 const struct ip_protocol ip_protocol_ipip = {
 	.description = "IPv4 encapsulation",
 	.prefix = "tun",
-	.protoid = 4,
 	.name = "IPIP",
+	.ipproto = IPPROTO_IPIP,
+};
+
+const struct ip_protocol ip_protocol_tcp = {
+	.description = "Transmission Control",
+	.prefix = "tcp",
+	.name = "TCP",
+	.ipproto = IPPROTO_TCP,
+	.encap_esp = &ip_encap_esp_in_tcp,
+};
+
+const struct ip_protocol ip_protocol_udp = {
+	.description = "User Datagram",
+	.prefix = "udp",
+	.name = "UDP",
+	.ipproto = IPPROTO_UDP,
+	.encap_esp = &ip_encap_esp_in_udp,
 };
 
 const struct ip_protocol ip_protocol_esp = {
 	.description = "Encapsulated Security Payload",
 	.prefix = "esp",
-	.ikev1 = PROTO_IPSEC_ESP,
-	.protoid = 50,
 	.name = "ESP",
+	.ipproto = IPPROTO_ESP,
+	.ikev1 = PROTO_IPSEC_ESP,
 };
 
 const struct ip_protocol ip_protocol_ah = {
 	.description = "Authentication Header",
 	.prefix = "ah",
-	.ikev1 = PROTO_IPSEC_AH,
-	.protoid = 51,
 	.name = "AH",
+	.ipproto = IPPROTO_AH,
+	.ikev1 = PROTO_IPSEC_AH,
 };
 
 const struct ip_protocol ip_protocol_comp = {
 	.description = "IP Payload Compression Protocol",
 	.prefix = "comp",
-	.ikev1 = PROTO_IPCOMP,
-	.protoid = 108,
 	.name = "COMP",
+#ifdef IPPROTO_IPCOMP
+	.ipproto = IPPROTO_IPCOMP,
+#endif
+#ifdef IPPROTO_COMP
+	.ipproto = IPPROTO_COMP,
+#endif
+	.ikev1 = PROTO_IPCOMP,
 };
 
-const struct ip_protocol ip_protocol_int = {
+const struct ip_protocol ip_protocol_internal = {
 	.description = "any host internal protocol",
 	.prefix = "int",
-	.protoid = 61,
 	.name = "INT",
-};
-
-static const struct ip_protocol *ip_protocols[] = {
-	&ip_protocol_icmp,
-	&ip_protocol_ipip,
-	&ip_protocol_esp,
-	&ip_protocol_ah,
-	&ip_protocol_comp,
-	&ip_protocol_int,
+#define INTERNAL 61
+	.ipproto = INTERNAL,
 };
 
 const struct ip_protocol *protocol_by_prefix(const char *prefix)
 {
+	static const struct ip_protocol *ip_protocols[] = {
+		&ip_protocol_unset,
+		&ip_protocol_icmp,
+		&ip_protocol_ipip,
+		&ip_protocol_tcp,
+		&ip_protocol_udp,
+		&ip_protocol_esp,
+		&ip_protocol_ah,
+		&ip_protocol_comp,
+		&ip_protocol_internal,
+	};
 	for (unsigned u = 0; u < elemsof(ip_protocols); u++) {
 		const struct ip_protocol *p = ip_protocols[u];
 		if (strncaseeq(prefix, p->prefix, strlen(p->prefix))) {
@@ -92,13 +118,45 @@ const struct ip_protocol *protocol_by_prefix(const char *prefix)
 	return NULL;
 }
 
-const struct ip_protocol *protocol_by_protoid(unsigned protoid)
+const struct ip_protocol *protocol_by_ipproto(unsigned ipproto)
 {
-	for (unsigned u = 0; u < elemsof(ip_protocols); u++) {
-		const struct ip_protocol *p = ip_protocols[u];
-		if (p->protoid == protoid) {
-			return p;
-		}
+	/* perhaps a little sparse */
+	static const struct ip_protocol *ip_protocols[] = {
+		[0] = &ip_protocol_unset,
+		[IPPROTO_ICMP] = &ip_protocol_icmp,
+		[IPPROTO_IPIP] = &ip_protocol_ipip,
+		[IPPROTO_TCP] = &ip_protocol_tcp,
+		[IPPROTO_UDP] = &ip_protocol_udp,
+		[IPPROTO_ESP] = &ip_protocol_esp,
+		[IPPROTO_AH] = &ip_protocol_ah,
+#ifdef IPPROTO_IPCOMP
+		[IPPROTO_IPCOMP] = &ip_protocol_comp,
+
+#endif
+#ifdef IPPROTO_COMP
+		[IPPROTO_COMP] = &ip_protocol_comp,
+#endif
+		[INTERNAL] = &ip_protocol_internal,
+	};
+	if (ipproto < elemsof(ip_protocols)) {
+		return ip_protocols[ipproto];
+	} else {
+		return NULL;
 	}
-	return NULL;
 }
+
+static const char *const ip_protocol_id_name[] = {
+	[0] = "ALL",
+#define A(P) [IPPROTO_##P] = #P
+	A(UDP),
+	A(TCP),
+	A(ICMP),
+#undef A
+};
+
+enum_names ip_protocol_id_names = {
+	0, elemsof(ip_protocol_id_name) - 1,
+	ARRAY_REF(ip_protocol_id_name),
+	NULL, /* prefix */
+	NULL, /* next */
+};

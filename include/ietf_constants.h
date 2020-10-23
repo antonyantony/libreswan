@@ -11,6 +11,8 @@
  * Copyright (C) 2016 Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2017 Sahana Prasad <sahana.prasad07@gmail.com>
  * Copyright (C) 2017 Vukasin Karadzic <vukasin.karadzic@gmail.com>
+ * Copyright (C) 2017 Mayank Totale <mtotale@gmail.com>
+ * Copyright (C) 2020 Yulia Kuzovkova <ukuzovkova@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -491,6 +493,8 @@
 /* RFC3948: bytes of zeros, same size as ESP SPI */
 #define NON_ESP_MARKER_SIZE 4
 
+/* RFC8229: prefix at start of tcp stream (no NUL) */
+#define IKE_IN_TCP_PREFIX { 'I', 'K', 'E', 'T', 'C', 'P', }
 
 /* ICMP type number for neighbor discovery */
 #define ICMP_NEIGHBOR_DISCOVERY 34816
@@ -793,7 +797,9 @@ enum isakmp_xchg_types {
 	ISAKMP_v2_GSA_AUTH = 39, /* draft-yeung-g-ikev2 */
 	ISAKMP_v2_GSA_REGISTRATION = 40, /* draft-yeung-g-ikev2 */
 	ISAKMP_v2_GSA_REKEY = 41, /* draft-yeung-g-ikev2 */
-	/* 42 - 239 Unassigned */
+	ISAKMP_v2_UNASSIGNED_42 = 42, /* avoid hole in enum */
+	ISAKMP_v2_IKE_INTERMEDIATE = 43, /* draft-ietf-ipsecme-ikev2-intermediate */
+	/* 42, 44 - 239 Unassigned */
 	/* 240 - 255 Private Use */
 
 	/* libreswan private use */
@@ -811,6 +817,15 @@ enum isakmp_xchg_types {
 #define ISAKMP_FLAGS_RESERVED_BIT6 (1 << 6) /* RESERVED */
 #define ISAKMP_FLAGS_RESERVED_BIT7 (1 << 7) /* RESERVED */
 extern const char *const isakmp_flag_names[];
+
+/* IKEv2 header field sizes and offsets from the start of the header */
+#define ADJ_LENGTH_SIZE 4
+#define ADJ_LENGTH_OFFSET 24
+#define EXCH_TYPE_OFFSET 18
+
+/* SK payload header field sizes */
+#define SK_HEADER_SIZE 4
+#define ADJ_PAYLOAD_LENGTH_SIZE 2
 
 /* Situation definition for IPsec DOI */
 extern const char *const sit_bit_names[];
@@ -1570,14 +1585,16 @@ typedef enum {
 	v2N_USE_PPK = 16435, /* draft-ietf-ipsecme-qr-ikev2 */
 	v2N_PPK_IDENTITY = 16436, /* draft-ietf-ipsecme-qr-ikev2 */
 	v2N_NO_PPK_AUTH = 16437, /* draft-ietf-ipsecme-qr-ikev2 */
+	v2N_INTERMEDIATE_EXCHANGE_SUPPORTED = 16438, /* draft-ietf-ipsecme-ikev2-intermediate-04 */
 
 	v2N_STATUS_PSTATS_ROOF, /* used to cap status statistics array */
 
-	/* 16438 - 40969 Unassigned */
+	/* 16438 - 40959 Unassigned */
+
+	/* 40960 - 65535 Private Use */
 
 	v2N_NULL_AUTH = 40960,
 
-	/* 40961 - 65535 Private Use */
 } v2_notification_t;
 
 /* draft-ietf-ipsecme-qr-ikev2-01 created registry */
@@ -1790,21 +1807,23 @@ enum ipsec_comp_algo {
 };
 
 /*
- * RFC 7427 Signature Authentication in the Internet Key Exchange Version 2 (IKEv2)
- * Section 7: IANA Considerations
+ * Internet Key Exchange Version 2 (IKEv2) Parameters: IKEv2 Hash Algorithms
  * https://www.iana.org/assignments/ikev2-parameters/ikev2-parameters.xhtml#hash-algorithms
+ *
+ * Currently it is only used by RFC 7427 Signature Authentication in
+ * the Internet Key Exchange Version 2.
  */
 
-enum notify_payload_hash_algorithms {
-	IKEv2_AUTH_HASH_RESERVED = 0,
-	IKEv2_AUTH_HASH_SHA1     = 1,
-	IKEv2_AUTH_HASH_SHA2_256 = 2,
-	IKEv2_AUTH_HASH_SHA2_384 = 3,
-	IKEv2_AUTH_HASH_SHA2_512 = 4,
-	IKEv2_AUTH_HASH_IDENTITY = 5, /* RFC 4307-bis */
+enum ikev2_hash_algorithm {
+	IKEv2_HASH_ALGORITHM_RESERVED = 0,
+	IKEv2_HASH_ALGORITHM_SHA1     = 1,
+	IKEv2_HASH_ALGORITHM_SHA2_256 = 2,
+	IKEv2_HASH_ALGORITHM_SHA2_384 = 3,
+	IKEv2_HASH_ALGORITHM_SHA2_512 = 4,
+	IKEv2_HASH_ALGORITHM_IDENTITY = 5, /* RFC 4307-bis */
 	/* 6-1023 Unassigned */
 	/* 1024-65535 Reserved for private use */
-	IKEv2_AUTH_HASH_ROOF
+	IKEv2_HASH_ALGORITHM_ROOF
 };
 
 /*

@@ -15,10 +15,10 @@
  */
 
 #include "lswalloc.h"
-#include "lswlog.h"
 #include "ike_alg.h"
 #include "ike_alg_hash.h"
 #include "ike_alg_hash_ops.h"
+#include "passert.h"
 
 #include "crypt_symkey.h"
 #include "ikev2_prf.h"
@@ -37,7 +37,7 @@ static struct cavp_entry config[] = {
 
 struct hash_desc ike_alg_hash_sha2_224 = {
 	.common = {
-		.name = "sha2_224",
+		.fqn = "SHA2_224",
 		.algo_type = IKE_ALG_HASH,
 		.fips = TRUE,
 	},
@@ -74,7 +74,7 @@ static void print_config(void)
 		fprintf(stderr, "SHA length %lu not recognised\n", l);
 	} else {
 		fprintf(stderr, "SHA %s with length %lu\n",
-			hash_alg->common.name, l);
+			hash_alg->common.fqn, l);
 	}
 }
 
@@ -88,7 +88,7 @@ static struct cavp_entry msg_data[] = {
 	{ .key = NULL, },
 };
 
-static void msg_run_test(void)
+static void msg_run_test(struct logger *logger_unused UNUSED)
 {
 	print_number("Len", NULL, len);
 	/* byte aligned */
@@ -102,7 +102,7 @@ static void msg_run_test(void)
 	chunk_t bytes = alloc_chunk(l, "bytes");
 	hash_alg->hash_ops->final_bytes(&hash, bytes.ptr, bytes.len);
 	print_chunk("MD", NULL, bytes, 0);
-	freeanychunk(bytes);
+	free_chunk_content(&bytes);
 }
 
 const struct cavp test_sha_msg = {
@@ -128,7 +128,7 @@ static struct cavp_entry monte_data[] = {
 	{ .key = NULL, },
 };
 
-static void monte_run_test(void)
+static void monte_run_test(struct logger *logger_unused UNUSED)
 {
 	print_chunk("Seed", NULL, seed, 0);
 	chunk_t MDi_3 = alloc_chunk(seed.len, "MDi_3");
@@ -165,10 +165,10 @@ static void monte_run_test(void)
 		// OUTPUT: MDj; (aka seed)
 		print_chunk("MD", NULL, seed, 0);
 	}
-	freeanychunk(MDi_3);
-	freeanychunk(MDi_2);
-	freeanychunk(MDi_1);
-	freeanychunk(Mi);
+	free_chunk_content(&MDi_3);
+	free_chunk_content(&MDi_2);
+	free_chunk_content(&MDi_1);
+	free_chunk_content(&Mi);
 	print_line("");
 	exit(0);
 }

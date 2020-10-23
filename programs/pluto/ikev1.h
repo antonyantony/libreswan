@@ -16,15 +16,15 @@ extern void init_ikev1(void);
 
 const struct dh_desc *ikev1_quick_pfs(const struct child_proposals proposals);
 
-void ikev1_init_out_pbs_echo_hdr(struct msg_digest *md, bool enc, uint8_t np,
-				 pb_stream *output_stream, uint8_t *output_buffer,
-				 size_t sizeof_output_buffer,
-				 pb_stream *rbody);
+void ikev1_init_pbs_out_from_md_hdr(struct msg_digest *md, bool enc,
+				    struct pbs_out *output_stream,
+				    uint8_t *output_buffer, size_t sizeof_output_buffer,
+				    struct pbs_out *rbody, struct logger *logger);
 
-extern void complete_v1_state_transition(struct msg_digest **mdp,
+extern void complete_v1_state_transition(struct msg_digest *md,
 					 stf_status result);
 
-extern void process_v1_packet(struct msg_digest **mdp);
+extern void process_v1_packet(struct msg_digest *md);
 
 /*
  * IKEv1 functions: that ikev1_main.c provides and ikev1_aggr.c
@@ -32,28 +32,24 @@ extern void process_v1_packet(struct msg_digest **mdp);
  */
 
 /* continue with encrypted packet */
-extern void process_packet_tail(struct msg_digest **mdp);
+extern void process_packet_tail(struct msg_digest *md);
 
-extern bool ikev1_justship_nonce(chunk_t *n,
-			   pb_stream *outs, uint8_t np,
-			   const char *name);
+extern bool ikev1_justship_nonce(chunk_t *n, pb_stream *outs,
+				 const char *name);
 
 /* calls previous two routines */
 extern bool ikev1_ship_nonce(chunk_t *n, struct pluto_crypto_req *r,
-		       pb_stream *outs, uint8_t np,
-		       const char *name);
+			     pb_stream *outs, const char *name);
 
-extern notification_t accept_v1_nonce(struct msg_digest *md, chunk_t *dest,
+extern notification_t accept_v1_nonce(struct logger *logger,
+				      struct msg_digest *md, chunk_t *dest,
 				      const char *name);
 
-extern bool ikev1_justship_KE(chunk_t *g,
-			pb_stream *outs, uint8_t np);
+extern bool ikev1_justship_KE(struct logger *logger, chunk_t *g, pb_stream *outs);
 
 /* just calls previous two routines now */
-extern bool ikev1_ship_KE(struct state *st,
-		    struct pluto_crypto_req *r,
-		    chunk_t *g,
-		    pb_stream *outs, uint8_t np);
+extern bool ikev1_ship_KE(struct state *st, struct pluto_crypto_req *r,
+			  chunk_t *g, pb_stream *outs);
 
 /* **MAIN MODE FUNCTIONS** in ikev1_main.c */
 
@@ -85,9 +81,9 @@ extern void send_v1_delete(struct state *st);
 extern bool ikev1_decode_peer_id(struct msg_digest *md, bool initiator,
 			   bool aggrmode);
 
-extern size_t v1_sign_hash_RSA(const struct connection *c,
-			       uint8_t *sig_val, size_t sig_size,
-			       const struct crypt_mac *hash);
+struct hash_signature v1_sign_hash_RSA(const struct connection *c,
+				       const struct crypt_mac *hash,
+				       struct logger *logger);
 
 struct crypt_mac main_mode_hash(struct state *st, enum sa_role role,
 				const pb_stream *idpl);  /* ID payload, as PBS; cur must be at end */
@@ -101,8 +97,7 @@ extern stf_status oakley_id_and_auth(struct msg_digest *md,
 				     bool aggrmode);                     /* aggressive mode? */
 
 extern bool ikev1_ship_chain(chunk_t *chain, int n, pb_stream *outs,
-					     uint8_t type,
-					     uint8_t setnp);
+			     uint8_t type);
 
 void doi_log_cert_thinking(uint16_t auth,
 			   enum ike_cert_type certtype,
@@ -116,8 +111,7 @@ extern bool ikev1_out_sa(pb_stream *outs,
 		const struct db_sa *sadb,
 		struct state *st,
 		bool oakley_mode,
-		bool aggressive_mode,
-		enum next_payload_types_ikev1 np);
+		bool aggressive_mode);
 #endif
 
 bool ikev1_encrypt_message(pb_stream *pbs, struct state *st);
@@ -163,5 +157,7 @@ extern ikev1_state_transition_fn quick_inI2;
 #define restore_new_iv(st, tmp)	{ \
 	(st)->st_v1_new_iv = (tmp); \
     }
+
+extern pb_stream reply_stream;
 
 #endif

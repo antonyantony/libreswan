@@ -28,19 +28,18 @@
 #include "constants.h"
 #include "lswalloc.h"
 #include "ipsecconf/confread.h"
-#include "kernel_xfrm_reply.h"
+#include "kernel_netlink_reply.h"
 #include "addr_lookup.h"
 #ifdef USE_DNSSEC
 # include "dnssec.h"
-#else
-# include <netdb.h>
 #endif
+#include <netdb.h>
+#include "ip_info.h"
 
-static void resolve_point_to_point_peer(
-	const char *interface,
-	sa_family_t family,
-	char peer[ADDRTOT_BUF],	/* result, if any */
-	bool verbose)
+static void resolve_point_to_point_peer(const char *interface,
+					const struct ip_info *family,
+					char *peer/*[ADDRTOT_BUF]*/,	/* result, if any */
+					bool verbose)
 {
 	struct ifaddrs *ifap;
 
@@ -54,7 +53,7 @@ static void resolve_point_to_point_peer(
 			streq(ifa->ifa_name, interface)) {
 			struct sockaddr *sa = ifa->ifa_ifu.ifu_dstaddr;
 
-			if (sa != NULL && sa->sa_family == family &&
+			if (sa != NULL && sa->sa_family == family->af &&
 				getnameinfo(sa,
 					sa->sa_family == AF_INET ?
 						sizeof(struct sockaddr_in) :
@@ -194,7 +193,8 @@ static ssize_t netlink_query(char **pmsgbuf, size_t bufsize)
  *  1: please call again: more to do
  */
 int resolve_defaultroute_one(struct starter_end *host,
-				struct starter_end *peer, bool verbose)
+			     struct starter_end *peer, bool verbose,
+			     struct logger *logger)
 {
 	/*
 	 * "left="         == host->addrtype and host->addr
@@ -220,8 +220,8 @@ int resolve_defaultroute_one(struct starter_end *host,
 	int query_again = 0;
 
 	/* Fill netlink request */
-	netlink_query_init(msgbuf, host->addr_family);
-	if (host->nexttype == KH_IPADDR && peer->addr_family == AF_INET) {
+	netlink_query_init(msgbuf, host->host_family->af);
+	if (host->nexttype == KH_IPADDR && peer->host_family == &ipv4_info) {
 		/*
 		 * My nexthop (gateway) is specified.
 		 * We need to figure out our source IP to get there.
@@ -248,18 +248,22 @@ int resolve_defaultroute_one(struct starter_end *host,
 			if (er != NULL) {
 				/* not numeric, so resolve it */
 				if (!unbound_resolve(peer->strings[KSCF_IP],
-							0, AF_INET,
-							&peer->addr)) {
+						     0, AF_INET,
+						     &peer->addr,
+						     logger)) {
 					if (!unbound_resolve(
 							peer->strings[KSCF_IP],
 							0, AF_INET6,
-							&peer->addr)) {
+							&peer->addr,
+							logger)) {
 						pfree(msgbuf);
 						return -1;
 					}
 				}
 			}
 #else
+			(void)logger /* UNUSED */;
+
 			err_t er = ttoaddr(peer->strings[KSCF_IP], 0,
 				AF_UNSPEC, &peer->addr);
 			if (er != NULL) {
@@ -418,9 +422,8 @@ int resolve_defaultroute_one(struct starter_end *host,
 				 * Attempt to find r_gateway as the IP address
 				 * on the interface.
 				 */
-				resolve_point_to_point_peer(
-					r_interface, host->addr_family,
-					r_gateway, verbose);
+				resolve_point_to_point_peer(r_interface, host->host_family,
+							    r_gateway, verbose);
 			}
 			if (r_gateway[0] != '\0') {
 				err_t err = tnatoaddr(r_gateway, 0,

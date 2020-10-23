@@ -8,6 +8,7 @@
  * Copyright (C) 2013-2019 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2014-2019 Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2017 Antony Antony <antony@phenome.org>
+ * Copyright (C) 2020 Yulia Kuzovkova <ukuzovkova@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -30,7 +31,6 @@
 
 #include "sysdep.h"
 #include "constants.h"
-#include "lswlog.h"
 
 #include "defs.h"
 #include "id.h"
@@ -65,141 +65,33 @@
 # include "kernel_xfrm_interface.h"
 #endif
 
-static struct child_sa *ikev2_cp_reply_state(struct ike_sa *ike,
-					     const struct msg_digest *md,
-					     enum isakmp_xchg_types isa_xchg)
-{
-	ip_address ip;
-	struct connection *c = md->st->st_connection;
-
-	err_t e = lease_an_address(c, md->st, &ip);
-	if (e != NULL) {
-		libreswan_log("ikev2 lease_an_address failure %s", e);
-		return NULL;
-	}
-
-	struct child_sa *child;	/* to-be-determined */
-	if (isa_xchg == ISAKMP_v2_CREATE_CHILD_SA) {
-		child = pexpect_child_sa(md->st);
-		update_state_connection(&child->sa, c);
-	} else {
-		child = ikev2_duplicate_state(ike, IPSEC_SA,
-					      SA_RESPONDER,
-					      null_fd);
-		update_state_connection(&child->sa, c);
-		binlog_refresh_state(&child->sa);
-		/*
-		 * XXX: This is to hack around the broken responder
-		 * code that switches from the IKE SA to the CHILD SA
-		 * before sending the reply.  Instead, because the
-		 * CHILD SA can fail, the IKE SA should be the one
-		 * processing the message?
-		 */
-		v2_msgid_switch_responder(ike, child, md);
-	}
-
-	/*
-	 * XXX: Per above if(), md->st could be either the IKE or the
-	 * CHILD!
-	 */
-	struct spd_route *spd = &md->st->st_connection->spd;
-	spd->that.has_lease = TRUE;
-	spd->that.client.addr = ip;
-
-	if (addrtypeof(&ip) == AF_INET)
-		spd->that.client.maskbits = INTERNL_IP4_PREFIX_LEN; /* export it as value */
-	else
-		spd->that.client.maskbits = INTERNL_IP6_PREFIX_LEN; /* export it as value */
-	spd->that.has_client = TRUE;
-
-	child->sa.st_ts_this = ikev2_end_to_ts(&spd->this);
-	child->sa.st_ts_that = ikev2_end_to_ts(&spd->that);
-
-	return child;
-}
-
-/*
- * The caller could have done the linux_audit_conn() call, except one case
- * here deletes the state before returning an STF error
- */
-
-stf_status ikev2_auth_child_responder(struct ike_sa *ike,
-				      struct child_sa **child_out,
-				      struct msg_digest *md)
-{
-	struct connection *c = md->st->st_connection;
-	struct child_sa *child;
-	pexpect(md->hdr.isa_xchg == ISAKMP_v2_IKE_AUTH); /* redundant */
-
-	if (c->pool != NULL && md->chain[ISAKMP_NEXT_v2CP] != NULL) {
-		/*
-		 * XXX: unlike above and below, this also screws
-		 * around with the connection.
-		 */
-		child = ikev2_cp_reply_state(ike, md, ISAKMP_v2_IKE_AUTH);
-		if (child == NULL)
-			return STF_INTERNAL_ERROR;
-	} else {
-		/*
-		 * While this function is called with MD->ST pointing
-		 * at either an IKE SA or CHILD SA, this code path
-		 * only works when MD->ST is the IKE SA.
-		 *
-		 * XXX: this create-state code block should be moved
-		 * to the ISAKMP_v2_AUTH caller.
-		 */
-		pexpect(md->st != NULL);
-		pexpect(md->st == &ike->sa); /* passed in parent */
-		child = ikev2_duplicate_state(ike, IPSEC_SA,
-					      SA_RESPONDER,
-					      null_fd/* XXX: IKE's whack-fd? */);
-		binlog_refresh_state(&child->sa);
-		/*
-		 * XXX: This is to hack around the broken responder
-		 * code that switches from the IKE SA to the CHILD SA
-		 * before sending the reply.  Instead, because the
-		 * CHILD SA can fail, the IKE SA should be the one
-		 * processing the message?
-		 */
-		v2_msgid_switch_responder(ike, child, md);
-
-		if (!v2_process_ts_request(child, md)) {
-			/*
-			 * XXX: while the CHILD SA failed, the IKE SA
-			 * should continue to exist.  This STF_FAIL
-			 * will blame MD->ST aka the IKE SA.
-			 */
-			delete_state(&child->sa);
-			return STF_FAIL + v2N_TS_UNACCEPTABLE;
-		}
-	}
-	*child_out = child;
-	return STF_OK;
-}
-
 stf_status ikev2_child_sa_respond(struct ike_sa *ike,
 				  struct child_sa *child,
 				  struct msg_digest *md,
 				  pb_stream *outpbs,
 				  enum isakmp_xchg_types isa_xchg)
 {
-	struct connection *c = md->st->st_connection;
 	struct state *cst = &child->sa;	/* child state */
 
 	/* switch to child */
-	dbg("switching MD.ST from #%lu to CHILD #%lu; ulgh",
-	    md->st != NULL ? md->st->st_serialno : 0, cst->st_serialno);
-	md->st = cst;
-	c = cst->st_connection;
+	pexpect(md->st == &child->sa);
+	struct connection *c = cst->st_connection;
 
 	if (c->spd.that.has_lease &&
 	    md->chain[ISAKMP_NEXT_v2CP] != NULL &&
-	    cst->st_state->kind != STATE_V2_REKEY_IKE_R) {
-		ikev2_send_cp(&ike->sa, ISAKMP_NEXT_v2SA, outpbs);
+	    child->sa.st_state->kind != STATE_V2_REKEY_IKE_R0) {
+		/*
+		 * XXX: should this be passed the CHILD SA's
+		 * .st_connection?  Here things are negotiating a new
+		 * CHILD?
+		 */
+		if (!emit_v2_child_configuration_payload(ike->sa.st_connection,
+							 child, outpbs)) {
+			return STF_INTERNAL_ERROR;
+		}
 	} else if (md->chain[ISAKMP_NEXT_v2CP] != NULL) {
-		DBG(DBG_CONTROL, DBG_log("#%lu %s ignoring unexpected v2CP payload",
-					 cst->st_serialno,
-					 cst->st_state->name));
+		dbg("#%lu %s ignoring unexpected v2CP payload",
+		    cst->st_serialno, cst->st_state->name);
 	}
 
 	/* start of SA out */
@@ -209,15 +101,15 @@ stf_status ikev2_child_sa_respond(struct ike_sa *ike,
 			= ikev2_child_sa_proto_info(pexpect_child_sa(cst), c->policy);
 
 		if (isa_xchg != ISAKMP_v2_CREATE_CHILD_SA)  {
-			stf_status res = ikev2_process_child_sa_pl(md, FALSE);
+			stf_status res = ikev2_process_child_sa_pl(ike, child, md, FALSE);
 			if (res != STF_OK)
 				return res;
 		}
 		proto_info->our_spi = ikev2_child_sa_spi(&c->spd, c->policy);
 		chunk_t local_spi = THING_AS_CHUNK(proto_info->our_spi);
 		if (!ikev2_emit_sa_proposal(outpbs,
-					cst->st_accepted_esp_or_ah_proposal,
-					&local_spi)) {
+					    child->sa.st_accepted_esp_or_ah_proposal,
+					    &local_spi)) {
 			dbg("problem emitting accepted proposal");
 			return STF_INTERNAL_ERROR;
 		}
@@ -230,13 +122,13 @@ stf_status ikev2_child_sa_respond(struct ike_sa *ike,
 		};
 		pb_stream pb_nr;
 		if (!out_struct(&in, &ikev2_nonce_desc, outpbs, &pb_nr) ||
-		    !out_chunk(cst->st_nr, &pb_nr, "IKEv2 nonce"))
+		    !pbs_out_hunk(cst->st_nr, &pb_nr, "IKEv2 nonce"))
 			return STF_INTERNAL_ERROR;
 
 		close_output_pbs(&pb_nr);
 
 		/*
-		 * XXX: shoudn't this be conditional on the local end
+		 * XXX: shouldn't this be conditional on the local end
 		 * having computed KE and not what the remote sent?
 		 */
 		if (md->chain[ISAKMP_NEXT_v2KE] != NULL)  {
@@ -261,12 +153,12 @@ stf_status ikev2_child_sa_respond(struct ike_sa *ike,
 		case v2N_IKEV2_FRAGMENTATION_SUPPORTED:
 		case v2N_COOKIE:
 		case v2N_USE_PPK:
-			DBG(DBG_CONTROL, DBG_log("received %s which is not valid for current exchange",
-						 enum_name(&ikev2_notify_names,
-							   ntfy->payload.v2n.isan_type)));
+		case v2N_INTERMEDIATE_EXCHANGE_SUPPORTED:
+			dbg("received %s which is not valid for current exchange",
+			    enum_name(&ikev2_notify_names, ntfy->payload.v2n.isan_type));
 			break;
 		case v2N_USE_TRANSPORT_MODE:
-			DBG(DBG_CONTROL, DBG_log("received USE_TRANSPORT_MODE"));
+			dbg("received USE_TRANSPORT_MODE");
 			cst->st_seen_use_transport = TRUE;
 			break;
 		case v2N_IPCOMP_SUPPORTED:
@@ -275,7 +167,7 @@ stf_status ikev2_child_sa_respond(struct ike_sa *ike,
 			size_t len = pbs_left(&pbs);
 			struct ikev2_notify_ipcomp_data n_ipcomp;
 
-			DBG(DBG_CONTROLMORE, DBG_log("received v2N_IPCOMP_SUPPORTED of length %zd", len));
+			dbg("received v2N_IPCOMP_SUPPORTED of length %zd", len);
 
 			if (!in_struct(&n_ipcomp, &ikev2notify_ipcomp_data_desc, &pbs, NULL)) {
 				return STF_FATAL;
@@ -291,40 +183,40 @@ stf_status ikev2_child_sa_respond(struct ike_sa *ike,
 				return STF_FATAL;
 			}
 			if ((c->policy & POLICY_COMPRESS) == LEMPTY) {
-				DBG(DBG_CONTROLMORE, DBG_log("Ignored IPCOMP request as connection has compres=no"));
+				dbg("Ignored IPCOMP request as connection has compress=no");
 				cst->st_ipcomp.present = FALSE;
 				break;
 			}
-			DBG(DBG_CONTROL, DBG_log("Received compression CPI=%d", htonl(n_ipcomp.ikev2_cpi)));
+			dbg("Received compression CPI=%d", htonl(n_ipcomp.ikev2_cpi));
 
-			//cst->st_ipcomp.attrs.spi = uniquify_his_cpi((ipsec_spi_t)htonl(n_ipcomp.ikev2_cpi), cst, 0);
+			//cst->st_ipcomp.attrs.spi = uniquify_peer_cpi((ipsec_spi_t)htonl(n_ipcomp.ikev2_cpi), cst, 0);
 			cst->st_ipcomp.attrs.spi = htonl((ipsec_spi_t)n_ipcomp.ikev2_cpi);
 			cst->st_ipcomp.attrs.transattrs.ta_comp = n_ipcomp.ikev2_notify_ipcomp_trans;
-			cst->st_ipcomp.attrs.encapsulation = ENCAPSULATION_MODE_TUNNEL; /* always? */
+			cst->st_ipcomp.attrs.mode = ENCAPSULATION_MODE_TUNNEL; /* always? */
 			cst->st_ipcomp.present = TRUE;
 			cst->st_seen_use_ipcomp = TRUE;
 			break;
 		}
 		case v2N_ESP_TFC_PADDING_NOT_SUPPORTED:
-			DBG(DBG_CONTROL, DBG_log("received ESP_TFC_PADDING_NOT_SUPPORTED"));
+			dbg("received ESP_TFC_PADDING_NOT_SUPPORTED");
 			cst->st_seen_no_tfc = TRUE;
 			break;
 		case v2N_MOBIKE_SUPPORTED:
-			DBG(DBG_CONTROL, DBG_log("received v2N_MOBIKE_SUPPORTED"));
+			dbg("received v2N_MOBIKE_SUPPORTED");
 			cst->st_seen_mobike = ike->sa.st_seen_mobike = TRUE;
 			break;
 		case v2N_INITIAL_CONTACT:
-			DBG(DBG_CONTROL, DBG_log("received v2N_INITIAL_CONTACT"));
+			dbg("received v2N_INITIAL_CONTACT");
 			cst->st_seen_initialc = ike->sa.st_seen_initialc = TRUE;
 			break;
 		case v2N_REKEY_SA:
-			DBG(DBG_CONTROL, DBG_log("received REKEY_SA already proceesd"));
+			dbg("received REKEY_SA already proceesd");
 			break;
 		case v2N_PPK_IDENTITY:
-			DBG(DBG_CONTROL, DBG_log("received PPK_IDENTITY already processed"));
+			dbg("received PPK_IDENTITY already processed");
 			break;
 		case v2N_NO_PPK_AUTH:
-			DBG(DBG_CONTROL, DBG_log("received NO_PPK_AUTH already processed"));
+			dbg("received NO_PPK_AUTH already processed");
 			break;
 		default:
 			libreswan_log("received unsupported NOTIFY %s ",
@@ -350,11 +242,11 @@ stf_status ikev2_child_sa_respond(struct ike_sa *ike,
 
 		if (c->policy & POLICY_COMPRESS) {
 			if (!cst->st_seen_use_ipcomp) {
-				DBG(DBG_CONTROLMORE, DBG_log("policy suggested compression, but peer did not offer support"));
+				dbg("policy suggested compression, but peer did not offer support");
 			}
 		} else {
 			if (cst->st_seen_use_ipcomp) {
-				DBG(DBG_CONTROLMORE, DBG_log("policy did not allow compression, ignoring peer's request"));
+				dbg("policy did not allow compression, ignoring peer's request");
 			}
 		}
 
@@ -373,13 +265,13 @@ stf_status ikev2_child_sa_respond(struct ike_sa *ike,
 		if (c->policy & POLICY_TUNNEL) {
 			libreswan_log("Local policy is tunnel mode - ignoring request for transport mode");
 		} else {
-			DBG(DBG_CONTROL, DBG_log("Local policy is transport mode and received USE_TRANSPORT_MODE"));
+			dbg("Local policy is transport mode and received USE_TRANSPORT_MODE");
 			if (cst->st_esp.present) {
-				cst->st_esp.attrs.encapsulation =
+				cst->st_esp.attrs.mode =
 					ENCAPSULATION_MODE_TRANSPORT;
 			}
 			if (cst->st_ah.present) {
-				cst->st_ah.attrs.encapsulation =
+				cst->st_ah.attrs.mode =
 					ENCAPSULATION_MODE_TRANSPORT;
 			}
 			/* In v2, for parent, protoid must be 0 and SPI must be empty */
@@ -395,7 +287,7 @@ stf_status ikev2_child_sa_respond(struct ike_sa *ike,
 	}
 
 	if (c->send_no_esp_tfc) {
-		DBG(DBG_CONTROL, DBG_log("Sending ESP_TFC_PADDING_NOT_SUPPORTED"));
+		dbg("Sending ESP_TFC_PADDING_NOT_SUPPORTED");
 		if (!emit_v2N(v2N_ESP_TFC_PADDING_NOT_SUPPORTED, outpbs))
 			return STF_INTERNAL_ERROR;
 	}
@@ -416,11 +308,11 @@ stf_status ikev2_child_sa_respond(struct ike_sa *ike,
 		ike->sa.st_connection->newest_isakmp_sa = ike->sa.st_serialno;
 	} else {
 #ifdef USE_XFRM_INTERFACE
-		if (c->xfrmi != NULL && c->xfrmi->if_id != yn_no)
-			if (add_xfrmi(c))
+		if (c->xfrmi != NULL && c->xfrmi->if_id != 0)
+			if (add_xfrmi(c, child->sa.st_logger))
 				return STF_FATAL;
 #endif
-		ISAKMP_SA_established(&ike->sa);
+		IKE_SA_established(ike);
 	}
 
 	/* install inbound and outbound SPI info */
@@ -462,7 +354,7 @@ static bool ikev2_set_dns(pb_stream *cp_a_pbs, struct state *st,
 	}
 
 	/* i.e. all zeros */
-	if (address_is_any(&ip)) {
+	if (address_eq_any(&ip)) {
 		address_buf ip_str;
 		libreswan_log("ERROR INTERNAL_IP%d_DNS %s is invalid",
 			      af->ip_version, ipstr(&ip, &ip_str));
@@ -499,7 +391,7 @@ static bool ikev2_set_ia(pb_stream *cp_a_pbs, struct state *st,
 	 * There should be one more byte in the pbs, 17th byte is prefix length.
 	 */
 
-	if (address_is_any(&ip)) {
+	if (address_eq_any(&ip)) {
 		ipstr_buf ip_str;
 		libreswan_log("ERROR INTERNAL_IP%d_ADDRESS %s is invalid",
 			      af->ip_version, ipstr(&ip, &ip_str));
@@ -542,7 +434,7 @@ static bool ikev2_set_ia(pb_stream *cp_a_pbs, struct state *st,
 			c->spd.this.has_cat = TRUE; /* create iptable entry */
 		}
 	} else {
-		addrtosubnet(&ip, &c->spd.this.client);
+		endtosubnet(&ip, &c->spd.this.client, HERE);
 		setportof(0, &c->spd.this.client.addr); /* ??? redundant? */
 		/* only set sourceip= value if unset in configuration */
 		if (address_type(&c->spd.this.host_srcip) == NULL ||
@@ -562,8 +454,8 @@ bool ikev2_parse_cp_r_body(struct payload_digest *cp_pd, struct state *st)
 	struct connection *c = st->st_connection;
 	pb_stream *attrs = &cp_pd->pbs;
 
-	DBG(DBG_CONTROLMORE, DBG_log("#%lu %s[%lu] parsing ISAKMP_NEXT_v2CP payload",
-				st->st_serialno, c->name, c->instance_serial));
+	dbg("#%lu %s[%lu] parsing ISAKMP_NEXT_v2CP payload",
+	    st->st_serialno, c->name, c->instance_serial);
 
 	if (st->st_state->kind == STATE_PARENT_I2 && cp->isacp_type !=  IKEv2_CP_CFG_REPLY) {
 		loglog(RC_LOG_SERIOUS, "ERROR expected IKEv2_CP_CFG_REPLY got a %s",

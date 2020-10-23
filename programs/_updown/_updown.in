@@ -1,4 +1,4 @@
-#! /bin/sh
+#!@SHELL_BINARY@
 # iproute2 version, default updown script
 #
 # Copyright (C) 2003-2004 Nigel Metheringham
@@ -114,10 +114,6 @@ export LC_ALL
 #		is the peer's port. Useful for firewalling.
 #
 #	PLUTO_CONNECTION_TYPE
-#
-#	PLUTO_MY_REF/PLUTO_PEER_REF
-#		KLIPSng(mast) references to the SA to be used in each
-#		direction.
 #
 #	PLUTO_STACK
 #		The kernel level IPstack used (see protostack=)

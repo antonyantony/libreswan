@@ -23,7 +23,7 @@
 
 struct list_info {
 	const char *name;
-	void (*jam)(struct lswlog *buf, const void *data);
+	void (*jam)(struct jambuf *buf, const void *data);
 };
 
 /*
@@ -46,7 +46,7 @@ struct list_info {
  * is detached from any list.  Otherwise both must be non-NULL.
  *
  * Currently all elements of a list must have identical .info values.
- * This could easily be changed if we needed heterogenous lists.
+ * This could easily be changed if we needed heterogeneous lists.
  */
 
 struct list_entry {
@@ -56,18 +56,28 @@ struct list_entry {
 	const struct list_info *info;
 };
 
-void jam_list_entry(struct lswlog *buf, const struct list_entry *entry);
+void jam_list_entry(struct jambuf *buf, const struct list_entry *entry);
 
 /*
  * Double linked list HEAD.
+ *
+ * INIT_LIST_HEAD() is intended for static structures.  To use it at
+ * runtime, prefix the macro with (struct list_head).
  */
 
 struct list_head {
 	struct list_entry head;
 };
 
-void init_list(const struct list_info *info, struct list_head *list);
 struct list_entry list_entry(const struct list_info *info, void *data);
+#define INIT_LIST_HEAD(LIST_HEAD_PTR, LIST_INFO_PTR)		\
+	{							\
+		.head = {					\
+			.info = (LIST_INFO_PTR),		\
+			.older = &(LIST_HEAD_PTR)->head,	\
+			.newer = &(LIST_HEAD_PTR)->head,	\
+		},						\
+	}
 
 /*
  * detached_list_entry: test whether an entry is on any list.

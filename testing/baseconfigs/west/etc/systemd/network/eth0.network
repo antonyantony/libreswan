@@ -1,9 +1,0 @@
-[Match]
-Name=eth0
-
-[Network]
-Address=192.0.1.254/24
-Address=2001:db8:0:1::254/64
-IPForward=yes
-IPv6DuplicateAddressDetection=0
-IPv6AcceptRouterAdvertisements=false

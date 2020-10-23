@@ -14,6 +14,9 @@
  * for more details.
  */
 
+#if !defined(linux) || !defined(USE_XFRM_INTERFACE) || !defined(XFRM_SUPPORT)
+# error this file should only compile on Linux when XFRM_SUPPORT & USE_XFRM_INTERFACE are defined
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
@@ -25,37 +28,39 @@
 #include <net/if.h>
 
 #include <linux/rtnetlink.h>
-#include <linux/rtnetlink.h>
 #include <linux/if_addr.h>
 #include <linux/if_link.h>
+#if defined(USE_XFRM_INTERFACE_IFLA_HEADER)
+/* kernel header linux/if_link.h < 4.19 may need this extra */
+# include "if_link_extra.h"
+#endif
 
 #include "lswalloc.h"
 #include "netlink_attrib.h"
-#include "lswlog.h"
 #include "connections.h"
 #include "server.h" /* for struct iface_port */
 #include "kernel_xfrm_interface.h"
-#include "kernel_xfrm_reply.h"
-
-#if !defined(USE_XFRM_INTERFACE) || !defined(NETKEY_SUPPORT)
-# error this file should only compile when NETKEY_SUPPORT & USE_XFRM_INTERFACE are defined
-#endif
+#include "kernel_netlink_reply.h"
+#include "kernel_netlink_query.h"
+#include "iface.h"
+#include "log.h"
 
 #define IPSEC1_XFRM_IF_ID (1U)
 #define IFINFO_REPLY_BUFFER_SIZE (32768 + NL_BUFMARGIN)
 
 
-static struct pluto_xfrmi *pluto_xfrm_interfaces = NULL;
+static struct pluto_xfrmi *pluto_xfrm_interfaces;
 
 struct nl_ifinfomsg_req {
 	struct nlmsghdr n;
 	struct ifinfomsg i;
 	char data[NETLINK_REQ_DATA_SIZE];
+	size_t maxlen;
 };
 
 struct ifinfo_response {
 	struct ifinfo_req {
-		char *if_name;
+		const char *if_name;
 		uint32_t xfrm_if_id;
 		bool filter_xfrm_if_id /* because if_id can be zero too */;
 		uint32_t dev_if_id /* if_id of the dev such as eth0 or lo */;
@@ -73,122 +78,106 @@ struct ifinfo_response {
 	struct pluto_xfrmi result_if;
 };
 
-static int xfrm_interface_support;
+/* -1 missing; 0 uninitialized; 1 present */
+static int xfrm_interface_support = 0;
+
 static bool stale_checked;
 static uint32_t xfrm_interface_id = IPSEC1_XFRM_IF_ID; /* XFRMA_IF_ID && XFRMA_SET_MARK */
 
-static int nl_send_query(struct nlmsghdr *req, int protocol)
+/* ??? true means failure! */
+static bool nl_query_small_resp(const struct nlmsghdr *req,
+			       const char *context,
+			       const char *if_name,
+			       struct logger *logger)
 {
-	size_t len;
-	ssize_t r;
-	int nl_fd = socket(AF_NETLINK, SOCK_DGRAM, protocol);
-
+	int nl_fd = nl_send_query(req, NETLINK_ROUTE, logger);
 	if (nl_fd < 0) {
-		LOG_ERRNO(errno, "socket() in nl_send_query() protocol %d", protocol);
-		return nl_fd;
-	}
-
-	if (fcntl(nl_fd, F_SETFL, O_NONBLOCK) != 0) {
-		LOG_ERRNO(errno, "fcntl(O_NONBLOCK) in nl_send_query() protocol %d", protocol);
-		close(nl_fd);
-		return -1;
-	}
-
-	/* req->nlmsg_seq = ++seq; for repeated quries to same socket */
-	len = req->nlmsg_len;
-	do {
-		r = write(nl_fd, req, len);
-	} while (r < 0 && errno == EINTR);
-	if (r < 0) {
-		LOG_ERRNO(errno, "netlink nl_send_query() write");
-		close(nl_fd);
-		return -2;
-	} else if ((size_t)r != len) {
-		loglog(RC_LOG_SERIOUS,
-			"ERROR: netlink write() message truncated: %zd instead of %zu",
-			r, len);
-		close(nl_fd);
-		return -3;
-	}
-
-	return nl_fd;
-}
-
-static bool nl_query_small_resp(struct nlmsghdr *req, int protocol, struct nlm_resp *rsp)
-{
-	int nl_fd = nl_send_query(req, protocol);
-	if (nl_fd < 0)
+		/* errno already logged (without context, unfortunately) */
 		return true;
+	}
 
+	bool unhappy = false;
 	struct sockaddr_nl addr;
-	ssize_t r;
 	socklen_t alen = sizeof(addr);
-	for (;;) {
-		r = recvfrom(nl_fd, &rsp, sizeof(rsp), 0,
-				(struct sockaddr *)&addr, &alen);
-		if (r < 0) {
-			if (errno == EAGAIN) {
-				//AA_2019 fix this xxx
-				dbg("xfrmi go EAGAIN Resource Currently not available ignore?? %s", __func__);
-				break;
-			} else {
-				LOG_ERRNO(errno, " in nl_query_small_resp() reading");
-				close(nl_fd);
-				break;
-			}
+	struct nlm_resp rsp;
+	ssize_t r = recvfrom(nl_fd, &rsp, sizeof(rsp), 0,
+			(struct sockaddr *)&addr, &alen);
+
+	if (r < 0) {
+		if (errno == EAGAIN) {
+			/* ??? this treatment looks suspect */
+			dbg("xfrmi got EAGAIN (Resource Currently not available); ignore?? nl_query_small_resp() for %s() dev %s",
+				context, if_name);
+			/* pretend all is well */
+		} else {
+			LOG_ERRNO(errno, "in nl_query_small_resp() for %s() dev %s", context, if_name);
+			passert(errno > 0);
+			unhappy = true;
 		}
+	} else if (r < (ssize_t)sizeof(struct nlmsghdr)) {
+		/* ??? this treatment looks suspect */
+		/* a runt packet. Odd. */
+		/* pretend all is well */
+	} else if (rsp.n.nlmsg_type == NLMSG_ERROR) {
+		/* The packet is an error packet: rsp.u.e.error is a negative errno value */
+		passert(rsp.u.e.error < 0);
+		LOG_ERRNO(-rsp.u.e.error, "NLMSG_ERROR in nl_query_small_resp() for %s() dev %s", context, if_name);
+		unhappy = true;
+	} else {
+		/* ??? this treatment looks suspect */
+		/* an ordinary message: ignore! */
 	}
 
 	close(nl_fd);
-
-	return false;
+	return unhappy;
 }
 
 static struct nl_ifinfomsg_req init_nl_ifi(uint16_t type, uint16_t flags)
 {
 	struct nl_ifinfomsg_req req;
 	zero(&req);
-	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+	req.n.nlmsg_len = NLMSG_ALIGN(NLMSG_LENGTH(sizeof(struct ifinfomsg)));
+	req.maxlen = req.n.nlmsg_len + sizeof(req.data);
 	req.n.nlmsg_flags = flags;
 	req.n.nlmsg_type = type;
 	req.n.nlmsg_pid = getpid();
-	req.i.ifi_family = AF_PACKET; //AA_2019 test this works to create also. works for dump
-
+	req.i.ifi_family = AF_PACKET;
 	return req;
 }
 
-static bool link_add_nl_msg(const char *if_name,
-                const char *dev_name, const uint32_t if_id,
-		struct nl_ifinfomsg_req *req)
+/* ??? true means failure! */
+static bool link_add_nl_msg(const char *if_name /*non-NULL*/,
+			    const char *dev_name /*non-NULL*/,
+			    const uint32_t if_id,
+			    struct nl_ifinfomsg_req *req)
 {
-
-	char link_type[] = "xfrm";
 	*req = init_nl_ifi(RTM_NEWLINK, NLM_F_REQUEST | NLM_F_CREATE | NLM_F_EXCL);
 
-	nl_addattrstrz(&req->n, sizeof(struct nl_ifinfomsg_req), IFLA_IFNAME, if_name);
+	nl_addattrstrz(&req->n, req->maxlen, IFLA_IFNAME, if_name);
 
-	struct rtattr *linkinfo;
-	linkinfo = nl_addattr_nest(&req->n, sizeof(struct nl_ifinfomsg_req), IFLA_LINKINFO);
-	nl_addattr_l(&req->n, sizeof(struct nl_ifinfomsg_req), IFLA_INFO_KIND, link_type,
-			strlen(link_type));
+	struct rtattr *linkinfo = nl_addattr_nest(&req->n, req->maxlen, IFLA_LINKINFO);
 
-	struct rtattr *xfrm_link = nl_addattr_nest(&req->n, sizeof(struct nl_ifinfomsg_req), IFLA_INFO_DATA);
+	static const char link_type[] = "xfrm";
+	nl_addattr_l(&req->n, req->maxlen, IFLA_INFO_KIND, link_type,
+		     strlen(link_type));
+
+	struct rtattr *xfrm_link = nl_addattr_nest(&req->n, req->maxlen,
+						   IFLA_INFO_DATA);
 	/*
 	 * IFLA_XFRM_IF_ID was added to mainline kernel 4.19 linux/if_link.h
 	 * with older kernel headers 'make USE_XFRM_INTERFACE_IFLA_HEADER=true'
 	 */
-	nl_addattr32(&req->n, 1024, IFLA_XFRM_IF_ID, if_id);
+	nl_addattr32(&req->n, sizeof(req->data), IFLA_XFRM_IF_ID, if_id);
 
 	if (dev_name != NULL) {
-		uint32_t dev_link_id; /* e.g link id of the interace, eth0 */
-		dev_link_id = if_nametoindex(dev_name);
-		if (dev_link_id != 0) {
-			nl_addattr32(&req->n, 1024, IFLA_XFRM_LINK, dev_link_id);
-		} else {
-			LOG_ERRNO(errno, "Can not find interface index for device %s",
+		/* e.g link id of the interface, eth0 */
+		uint32_t dev_link_id = if_nametoindex(dev_name);
+		if (dev_link_id == 0) {
+			LOG_ERRNO(errno, "Cannot find interface index for device %s",
 					dev_name);
 			return true;
 		}
+		nl_addattr32(&req->n, sizeof(req->data), IFLA_XFRM_LINK, dev_link_id);
 	}
 
 	nl_addattr_nest_end(&req->n, xfrm_link);
@@ -198,125 +187,83 @@ static bool link_add_nl_msg(const char *if_name,
 	return false;
 }
 
-bool ip_link_set_up(const char *if_name)
+/* ??? true means failure! */
+static bool ip_link_set_up(const char *if_name, struct logger *logger)
 {
 	struct nl_ifinfomsg_req req = init_nl_ifi(RTM_NEWLINK, NLM_F_REQUEST);
 	req.i.ifi_change |= IFF_UP;
 	req.i.ifi_flags |= IFF_UP;
 	req.i.ifi_index = if_nametoindex(if_name);
 	if (req.i.ifi_index == 0) {
-		LOG_ERRNO(errno, "link_set_up_nl() can not find index of xfrm interface %s",
-				if_name);
+		log_errno(logger, errno,
+			  "link_set_up_nl() cannot find index of xfrm interface %s",
+			  if_name);
 		return true;
 	}
 
-	struct nlm_resp nl_rsp;
-	if (nl_query_small_resp(&req.n, NETLINK_ROUTE, &nl_rsp))
-	{
-		libreswan_log_rc(RC_FATAL, "ERROR:ip_link_set_up() netlink query dev %s", if_name);
-
-	} else {
-		/* netlink query succeeded. check NL response */
-		if (nl_rsp.n.nlmsg_type == NLMSG_ERROR) {
-			libreswan_log_rc(RC_INFORMATIONAL, "deleting interface %s failed", if_name);
-
-			return true;
-		}
-	}
-	return false;
+	return nl_query_small_resp(&req.n, "ip_link_set_up", if_name, logger);
 }
 
-static bool ip_link_del(const char *if_name)
+/* ??? true means failure! */
+static bool ip_link_del(const char *if_name, struct logger *logger)
 {
 	struct nl_ifinfomsg_req req = init_nl_ifi(RTM_DELLINK, NLM_F_REQUEST);
 	req.i.ifi_index = if_nametoindex(if_name);
 	if (req.i.ifi_index == 0) {
-		LOG_ERRNO(errno, "ip_link_del() can not find index of interface %s",
-				if_name);
+		log_errno(logger, errno, "ip_link_del() cannot find index of interface %s",
+			  if_name);
 		return true;
 	}
 
-	struct nlm_resp nl_rsp;
-	if (nl_query_small_resp(&req.n, NETLINK_ROUTE, &nl_rsp))
-	{
-		libreswan_log_rc(RC_FATAL, "ERROR: ip_link_del() deleting xfrmi interface %s failed", if_name);
-
-	} else {
-		/* netlink query succeeded. Lets check NL response */
-		if (nl_rsp.n.nlmsg_type == NLMSG_ERROR) {
-			libreswan_log_rc(RC_INFORMATIONAL, "WARNING: ip_link_del() deleting interface %s failed", if_name);
-
-			return true;
-		}
-	}
-	return false;
+	return nl_query_small_resp(&req.n, "ip_link_del", if_name, logger);
 }
 
-static bool ip_link_add_xfrmi(const char *if_name, const char *dev_name, const uint32_t if_id)
+/* ??? true means failure! */
+static bool ip_link_add_xfrmi(const char *if_name /*non-NULL*/,
+			      const char *dev_name /*non-NULL*/,
+			      const uint32_t if_id,
+			      struct logger *logger)
 {
 	dbg("add xfrm interface %s@%s id=%u", if_name, dev_name, if_id);
 	struct nl_ifinfomsg_req req;
 	zero(&req);
-	if(link_add_nl_msg(if_name, dev_name, if_id, &req))
-	{
-		libreswan_log_rc(RC_FATAL, "ERROR: nl_query_small_resp() creating netlink message failed");
+	if (link_add_nl_msg(if_name, dev_name, if_id, &req)) {
+		log_message(RC_FATAL, logger,
+			    "ERROR: link_add_nl_msg() creating netlink message failed");
 		return true;
 	}
 
-	struct nlm_resp nl_rsp;
-	if (nl_query_small_resp(&req.n, NETLINK_ROUTE, &nl_rsp))
-	{
-		libreswan_log_rc(RC_FATAL, "ERROR: nl_query_small_resp() netlink query failed");
-
-	} else {
-		/* netlink query succeeded. check NL response */
-		if (nl_rsp.n.nlmsg_type == NLMSG_ERROR &&
-				nl_rsp.u.e.error == -ENOPROTOOPT) {
-			libreswan_log_rc(RC_FATAL,"CONFIG_XFRM_INTERFACE fail got ENOPROTOOPT");
-
-			return true;
-		}
-	}
-
-	return false;
+	return nl_query_small_resp(&req.n, "ip_kink_add_xfrmi", if_name, logger);
 }
 
-static bool dev_exist_check(const char *dev_name, bool quiet)
+/* ??? true means failure! */
+/* errno will be set on error: one caller will report it */
+static bool dev_exists_check(const char *dev_name /*non-NULL*/)
 {
-	unsigned int if_id = 0;
-	if (dev_name != NULL)
-		if_id = if_nametoindex(dev_name);
-	if (if_id == 0) {
-		if (!quiet)
-			LOG_ERRNO(errno, "FATAL can not find device %s",
-					dev_name);
-		return true;
-	}
-	return false;
+	return if_nametoindex(dev_name) == 0;
 }
 
-static bool parse_xfrm_linkinfo_data(struct rtattr *attribute, char *if_name,
+/* ??? returns an integer (-1, -2, or 0), not a bool */
+static bool parse_xfrm_linkinfo_data(struct rtattr *attribute, const char *if_name,
 	       struct ifinfo_response *ifi_rsp)
 {
 	struct rtattr *nested_attrib;
-	struct rtattr *dev_if_id_attr = NULL;
-	struct rtattr *if_id_attr = NULL;
+	const struct rtattr *dev_if_id_attr = NULL;
+	const struct rtattr *if_id_attr = NULL;
 
 	for (nested_attrib = (struct rtattr *) RTA_DATA(attribute);
 			RTA_OK(nested_attrib, attribute->rta_len);
 			nested_attrib = RTA_NEXT(nested_attrib,
 				attribute->rta_len)) {
-		if (nested_attrib->rta_type == IFLA_XFRM_LINK) {
+		if (nested_attrib->rta_type == IFLA_XFRM_LINK)
 			dev_if_id_attr = nested_attrib;
-		}
 
-		if (nested_attrib->rta_type == IFLA_XFRM_IF_ID) {
+		if (nested_attrib->rta_type == IFLA_XFRM_IF_ID)
 			if_id_attr = nested_attrib;
-		}
 	}
 
 	if (dev_if_id_attr != NULL) {
-		uint32_t dev_if_id = *((uint32_t *)RTA_DATA(dev_if_id_attr));
+		uint32_t dev_if_id = *((const uint32_t *)RTA_DATA(dev_if_id_attr));
 		if (ifi_rsp->match.dev_if_id) {
 			if (dev_if_id == ifi_rsp->req.dev_if_id) {
 				ifi_rsp->result_if.dev_if_id = dev_if_id;
@@ -332,7 +279,7 @@ static bool parse_xfrm_linkinfo_data(struct rtattr *attribute, char *if_name,
 	if (if_id_attr == NULL)
 		return -1;
 
-	uint32_t xfrm_if_id = *((uint32_t *)RTA_DATA(if_id_attr));
+	uint32_t xfrm_if_id = *((const uint32_t *)RTA_DATA(if_id_attr));
 	if (ifi_rsp->req.filter_xfrm_if_id) {
 		if (xfrm_if_id == ifi_rsp->req.xfrm_if_id) {
 			ifi_rsp->result_if.if_id = xfrm_if_id;
@@ -353,7 +300,8 @@ static bool parse_xfrm_linkinfo_data(struct rtattr *attribute, char *if_name,
 	return 0;
 }
 
-static int parse_link_info_xfrm(struct rtattr *attribute, char *if_name, struct ifinfo_response *ifi_rsp)
+/* ??? why return an int?  A bool would make more sense.  Besides one return is of a bool. */
+static int parse_link_info_xfrm(struct rtattr *attribute, const char *if_name, struct ifinfo_response *ifi_rsp)
 {
 	struct rtattr *nested_attrib;
 	struct rtattr *info_data_attr = NULL;
@@ -362,29 +310,31 @@ static int parse_link_info_xfrm(struct rtattr *attribute, char *if_name, struct 
 			RTA_OK(nested_attrib, len);
 			nested_attrib = RTA_NEXT(nested_attrib, len)) {
 		if (nested_attrib->rta_type == IFLA_INFO_KIND) {
-			char *kind_str = RTA_DATA(nested_attrib);
-			if (!strcmp("xfrm", kind_str)) {
+			const char *kind_str = RTA_DATA(nested_attrib);
+			if (streq("xfrm", kind_str))
 				ifi_rsp->match.kind = true;
-			}
 		}
 
 		if (nested_attrib->rta_type == IFLA_INFO_DATA)
 			info_data_attr = nested_attrib;
 	}
 
-	if (ifi_rsp->match.kind && info_data_attr !=  NULL)
+	if (ifi_rsp->match.kind && info_data_attr !=  NULL) {
+		/* ??? this returns a bool! */
 		return parse_xfrm_linkinfo_data(info_data_attr, if_name, ifi_rsp);
-	else
+	} else {
 		return -1;
+	}
 }
 
+/* ??? result is only tested for being zero.  Why int? */
 static int parse_nl_newlink_msg(struct nlmsghdr *nlmsg, struct ifinfo_response *ifi_rsp)
 {
 	struct rtattr *attribute;
 	struct rtattr *linkinfo_attr =  NULL;
 	struct ifinfomsg *iface = NLMSG_DATA(nlmsg);
 	int len = nlmsg->nlmsg_len - NLMSG_LENGTH(sizeof(*iface));
-	char *if_name = NULL;
+	const char *if_name = NULL;
 
 	for (attribute = IFLA_RTA(iface); RTA_OK(attribute, len); attribute = RTA_NEXT(attribute, len)) {
 		switch (attribute->rta_type) {
@@ -458,38 +408,39 @@ static void process_nlmsgs(char *msgbuf,  ssize_t len, struct ifinfo_response *i
 			break;
 		}
 	}
-
-	return;
 }
 
-static bool find_xfrmi_interface(char *if_name, uint32_t xfrm_if_id)
+/* ??? true means failure! */
+static bool find_xfrmi_interface(const char *if_name, /* optional */
+				 uint32_t xfrm_if_id,
+				 struct logger *logger)
 {
-	if (if_name != NULL) {
-		/* this is name based check first to do a simple check */
-		if (dev_exist_check(if_name, true /* ignore error */))
-			return true /* error */;
-	}
+	/* first do a cheap check */
+	if (if_name != NULL && dev_exists_check(if_name))
+		return true /* error */;
 
 	struct nl_ifinfomsg_req req = init_nl_ifi(RTM_GETLINK,
 			(NLM_F_REQUEST | NLM_F_DUMP));
 
-	int nl_fd = nl_send_query(&req.n, NETLINK_ROUTE);
+	int nl_fd = nl_send_query(&req.n, NETLINK_ROUTE, logger);
 
 	if (nl_fd < 0) {
-		loglog(RC_LOG_SERIOUS, "ERROR write to netlink socket faild");
+		log_message(RC_LOG_SERIOUS, logger, "ERROR: write to netlink socket failed");
 		return true;
 	}
 
 	char *resp_msgbuf = alloc_bytes(IFINFO_REPLY_BUFFER_SIZE,
 			"netlink ifiinfo query");
-	ssize_t len = netlink_read_reply(nl_fd,  &resp_msgbuf,
+	ssize_t len = netlink_read_reply(nl_fd, &resp_msgbuf,
 			IFINFO_REPLY_BUFFER_SIZE, 0, getpid());
-	if (len < 0) {
-		loglog(RC_LOG_SERIOUS, "ERROR find_any_xfrmi_interface() received %d", nl_fd);
-		return true;
-	}
 
 	close(nl_fd);
+
+	if (len < 0) {
+		log_message(RC_LOG_SERIOUS, logger, "ERROR: netlink_read_reply() failed in find_any_xfrmi_interface()");
+		pfreeany(resp_msgbuf);
+		return true;
+	}
 
 	struct ifinfo_response ifi_rsp;
 	zero(&ifi_rsp);
@@ -499,15 +450,14 @@ static bool find_xfrmi_interface(char *if_name, uint32_t xfrm_if_id)
 		ifi_rsp.req.filter_xfrm_if_id = true;
 	ifi_rsp.req.xfrm_if_id = xfrm_if_id;
 
-
 	process_nlmsgs(resp_msgbuf, len, &ifi_rsp);
 	pfreeany(resp_msgbuf);
 
 	if (ifi_rsp.result) {
-		char if_name[IF_NAMESIZE];
-		if_indextoname(ifi_rsp.result_if.dev_if_id, if_name);
+		char if_name_buf[IF_NAMESIZE];
+		if_indextoname(ifi_rsp.result_if.dev_if_id, if_name_buf);
 		dbg("xfrmi support found existing %s@%s xfrm if_id 0x%x",
-				ifi_rsp.result_if.name, if_name, ifi_rsp.result_if.if_id);
+				ifi_rsp.result_if.name, if_name_buf, ifi_rsp.result_if.if_id);
 		pfreeany(ifi_rsp.result_if.name);
 		return false; /* success */
 	}
@@ -517,88 +467,102 @@ static bool find_xfrmi_interface(char *if_name, uint32_t xfrm_if_id)
 	return true;
 }
 
-static bool find_any_xfrmi_interface(void)
+/* ??? true means failure! */
+static bool find_any_xfrmi_interface(struct logger *logger)
 {
 
-	if (find_xfrmi_interface(NULL, 0)) {
+	if (find_xfrmi_interface(NULL, 0, logger)) {
 		dbg("%s no xfrmi interface found", __func__);
 		return true;
 	}
 	return false;
 }
 
-static err_t ipsec1_support_test(const char *if_name, const char *dev_name)
+static err_t ipsec1_support_test(const char *if_name /*non-NULL*/,
+				 const char *dev_name /*non-NULL*/,
+				 struct logger *logger)
 {
-	if (!find_any_xfrmi_interface())
-		return NULL; /* success there is already xfrmi interefaces */
+	if (!find_any_xfrmi_interface(logger))
+		return NULL; /* success: there is already xfrmi interface */
 
 	dbg("create and delete an xfrmi interrace '%s@%s' to test xfrmi support",
 			if_name, dev_name);
-	if (ip_link_add_xfrmi(if_name, dev_name, xfrm_interface_id)) {
+	if (ip_link_add_xfrmi(if_name, dev_name, xfrm_interface_id, logger)) {
 		xfrm_interface_support = -1;
 		dbg("xfrmi is not supported. failed to create %s@%s", if_name, dev_name);
+		return "xfrmi is not supported";
 	} else {
-		if (dev_exist_check(if_name, false /* log error */)) {
+		if (dev_exists_check(if_name)) {
+			LOG_ERRNO(errno, "FATAL cannot find device %s", if_name);
+
 			/*
-			 * faled. assume kernel support is not enabled.
-			 * ip link add ipsec1 type xfrm xfrmi-id 6 dev eth0
-			 * can be quiet when kernel has no CONFIG_XFRM_INTERFACE=no 
+			 * failed to create xfrmi device.
+			 * assume kernel support is not enabled.
+			 * build kernel with CONFIG_XFRM_INTERFACE=y
+			 * to diagnose:
+			 * 'ip link add ipsec1 type xfrm if_id 1 dev lo'
+			 * 'ip -d link show dev ipsec1'
 			 */
 			xfrm_interface_support = -1;
 			return "missing CONFIG_XFRM_INTERFACE support in kernel";
-		} else {
-			dbg("xfrmi supported success creating %s@%s",
-					if_name, dev_name);
-			ip_link_del(if_name); /* ignore return value??? */
-			xfrm_interface_support = 1; /* success */
 		}
+		dbg("xfrmi supported success creating %s@%s and delete it",
+				if_name, dev_name);
+		ip_link_del(if_name, logger); /* ignore return value??? */
+		xfrm_interface_support = 1; /* success */
 	}
 
 	return NULL;
 }
 
-/* 
- * format the name of xfrmi interface. To maintain consistancy 
+/*
+ * format the name of xfrmi interface. To maintain consistency
  * on longer names won't be truncated, instead passert.
+ * The caller MUST free the string.
  */
-static char *fmt_xfrmi_ifname(uint32_t if_id) {
+static char *fmt_xfrmi_ifname(uint32_t if_id)
+{
 	char *if_name = alloc_things(char, IFNAMSIZ, "xfrmi name");
-	int n  = snprintf(if_name, IFNAMSIZ, XFRMI_DEV_FORMAT, if_id);
+	/* remap if_id PLUTO_XFRMI_REMAP_IF_ID_ZERO to ipsec0 as special case */
+	int n  = snprintf(if_name, IFNAMSIZ, XFRMI_DEV_FORMAT,
+		 if_id == PLUTO_XFRMI_REMAP_IF_ID_ZERO ? 0  : if_id);
 	passert(n < IFNAMSIZ);
 	return if_name;
 }
 
-err_t xfrm_iface_supported(void)
+err_t xfrm_iface_supported(struct logger *logger)
 {
 	err_t err = NULL; /* success */
 
 	if (xfrm_interface_support == 0) {
 		char *if_name = fmt_xfrmi_ifname(IPSEC1_XFRM_IF_ID);
-		char lo[]  ="lo";
+		static const char lo[] = "lo";
 
-		if (dev_exist_check(lo, true /* ignore error */)) {
-			/* possibly no need to pancic may be get smarter one day */
+		if (dev_exists_check(lo)) {
+			/* possibly no need to panic: may be get smarter one day */
 			xfrm_interface_support = -1;
 			pfreeany(if_name);
-			return ("Could not create find real device needed to test xfrmi support");
+			return "Could not create find real device needed to test xfrmi support";
 		}
 
 		unsigned int if_id = if_nametoindex(if_name);
-		int e = errno;
+		int e = errno; /* save error */
 		if (if_id == 0 && (e == ENXIO || e == ENODEV)) {
-			err = ipsec1_support_test(if_name, lo);
+			err = ipsec1_support_test(if_name, lo, logger);
 		} else if (if_id == 0) {
-			LOG_ERRNO(e, "FATAL unexpeted error in xfrm_iface_supported() while checking device %s",
-					if_name);
+			log_errno(logger, e,
+				  "FATAL unexpected error in xfrm_iface_supported() while checking device %s",
+				  if_name);
 			xfrm_interface_support = -1;
-			err = "can not decide xfrmi support. assumed no.";
+			err = "cannot decide xfrmi support. assumed no.";
 		} else {
 			/*
 			 * may be more extensive checks?
 			 * such if it is a xfrmi device or something else
 			 */
-			loglog(RC_LOG_SERIOUS, "conflict %s already exist can not support xfrm-interface. May be leftover from previous pluto?",
-					if_name);
+			log_message(RC_LOG_SERIOUS, logger,
+				    "conflict %s already exist cannot support xfrm-interface. May be leftover from previous pluto?",
+				    if_name);
 			xfrm_interface_support = -1;
 			err = "device name conflict in xfrm_iface_supported()";
 		}
@@ -607,7 +571,6 @@ err_t xfrm_iface_supported(void)
 
 	if (xfrm_interface_support < 0 && err == NULL)
 		err = "may be missing CONFIG_XFRM_INTERFACE support in kernel";
-
 
 	return err;
 }
@@ -618,24 +581,19 @@ static struct pluto_xfrmi *find_pluto_xfrmi_interface(uint32_t if_id)
 	struct pluto_xfrmi *ret = NULL;
 
 	for (h = pluto_xfrm_interfaces;  h != NULL; h = h->next) {
-		if (h->if_id == if_id)
-		ret = h;
-		break;
+		if (h->if_id == if_id) {
+			ret = h;
+			break;
+		}
 	}
 
 	return ret;
 }
 
-/*
-static char *find_exisiting_xfrmi_index(uint32_t if_id) {
-
-}
-*/
-
 static void new_pluto_xfrmi(uint32_t if_id, bool shared, char *name, struct connection *c)
 {
 	struct pluto_xfrmi **head = &pluto_xfrm_interfaces;
-	/* create a new xfrmi it is not added to sytem yet */
+	/* create a new xfrmi it is not added to system yet */
 	struct pluto_xfrmi *p = alloc_thing(struct pluto_xfrmi, "new xfrmi interface");
 	p->if_id = if_id;
 	p->name = name;
@@ -647,6 +605,7 @@ static void new_pluto_xfrmi(uint32_t if_id, bool shared, char *name, struct conn
 	c->xfrmi->shared = shared;
 }
 
+/* false means error - but it cannot fail right now? */
 static bool init_pluto_xfrmi(struct connection *c, uint32_t if_id, bool shared)
 {
 	c->xfrmi = find_pluto_xfrmi_interface(if_id);
@@ -665,15 +624,16 @@ static bool init_pluto_xfrmi(struct connection *c, uint32_t if_id, bool shared)
 		reference_xfrmi(c);
 	}
 
-	return false;
+	return true;
 }
 
+/* false means error */
 bool setup_xfrm_interface(struct connection *c, uint32_t xfrm_if_id)
 {
-
-
-	if (xfrm_if_id == yn_no)
-		return true;
+	if (xfrm_if_id == 0) {
+		dbg("remap ipsec0");
+		xfrm_if_id = PLUTO_XFRMI_REMAP_IF_ID_ZERO;
+	}
 
 	bool shared = true;
 
@@ -687,64 +647,68 @@ bool setup_xfrm_interface(struct connection *c, uint32_t xfrm_if_id)
 		return false;
 	*/
 
+	/* always success for now */
 	return init_pluto_xfrmi(c, xfrm_if_id, shared);
 }
 
-bool add_xfrmi(struct connection *c)
+/* ??? true means failure! */
+bool add_xfrmi(struct connection *c, struct logger *logger)
 {
-	if (dev_exist_check(c->xfrmi->name, true /* ignore error */)) {
+	passert(c->xfrmi->name != NULL);
+	passert(c->interface->ip_dev->id_rname != NULL);
+	if (dev_exists_check(c->xfrmi->name)) {
 		if (ip_link_add_xfrmi(c->xfrmi->name,
-					c->interface->ip_dev->id_rname,
-					c->xfrmi->if_id))
+				      c->interface->ip_dev->id_rname,
+				      c->xfrmi->if_id,
+				      logger)) {
 			return true;
-		else
-			c->xfrmi->pluto_added = true;
-	} else { /* device exist match name, type xfrmi, and xfrm_if_id */
-		if (find_xfrmi_interface(c->xfrmi->name, c->xfrmi->if_id)) {
+		}
+
+		c->xfrmi->pluto_added = true;
+	} else {
+		/* device exists: match name, type xfrmi, and xfrm_if_id */
+		if (find_xfrmi_interface(c->xfrmi->name, c->xfrmi->if_id, logger)) {
 			/* found wrong device abort adding */
-			loglog(RC_LOG_SERIOUS, "ERROR device %s exist and do not match expected type xfrm or xfrm_if_id %u. check 'ip -d link show dev %s'", c->xfrmi->name, c->xfrmi->if_id, c->xfrmi->name);
+			log_message(RC_LOG_SERIOUS, logger,
+				    "ERROR device %s exist and do not match expected type xfrm or xfrm_if_id %u. check 'ip -d link show dev %s'", c->xfrmi->name, c->xfrmi->if_id, c->xfrmi->name);
 			return true;
 		}
 	}
 
-	if (ip_link_set_up(c->xfrmi->name))
-		return true;
-	return false;
+	return ip_link_set_up(c->xfrmi->name, logger);
 }
 
-static void free_xfrmi(struct pluto_xfrmi *xfrmi)
+static void free_xfrmi(struct pluto_xfrmi *xfrmi /*non-NULL*/, struct logger *logger)
 {
 	struct pluto_xfrmi **pp;
 	struct pluto_xfrmi *p;
 
-	if (xfrmi == NULL)
-		return;
 	for (pp = &pluto_xfrm_interfaces; (p = *pp) != NULL; pp = &p->next) {
 		if (p == xfrmi) {
 			*pp = p->next;
 			if (xfrmi->pluto_added)  {
-				ip_link_del(xfrmi->name);
-				libreswan_log("delete ipsec-interface=%s if_id=%u added by pluto", xfrmi->name, xfrmi->if_id);
+				ip_link_del(xfrmi->name, logger);
+				log_message(RC_LOG, logger,
+					    "delete ipsec-interface=%s if_id=%u added by pluto", xfrmi->name, xfrmi->if_id);
 			} else {
-
-				libreswan_log("can not delete ipsec-interface=%s if_id=%u, not created by pluto", xfrmi->name, xfrmi->if_id);
+				log_message(RC_LOG, logger,
+					    "cannot delete ipsec-interface=%s if_id=%u, not created by pluto", xfrmi->name, xfrmi->if_id);
 			}
 			pfreeany(xfrmi->name);
 			pfreeany(xfrmi);
 			return;
-		} else {
-			dbg("p=%p xfrmi=%p", p , xfrmi);
 		}
+		dbg("p=%p xfrmi=%p", p, xfrmi);
 	}
 	dbg("p=%p xfrmi=%s if_id=%u not found in the list", xfrmi,
 			xfrmi->name, xfrmi->if_id);
 }
 
 /* at start call this to see if there are any stale interface lying around. */
-bool stale_xfrmi_interfaces(void)
+void stale_xfrmi_interfaces(void)
 {
 	if (stale_checked)
-		return false; /* possibly from second whack listen */
+		return; /* possibly from second whack listen */
 
 	stale_checked = true; /* do not re-enter */
 
@@ -761,27 +725,24 @@ bool stale_xfrmi_interfaces(void)
 	if (if_id != 0) {
 		loglog(RC_LOG_SERIOUS, "found an unexpected interface %s if_id=%u From previous pluto run?",
 				if_name, if_id);
-		return true; /* ERROR */
-	} else {
-		if (errno == ENXIO || errno == ENODEV) {
-			dbg("no stale xfrmi interface '%s' found", if_name);
-		} else {
-			LOG_ERRNO(errno, "failed stale_xfrmi_interfaces() call if_nametoindex('%s')",if_name);
-			return true;
-		}
+		return; /* ERROR */
 	}
-	return false;
+	if (errno == ENXIO || errno == ENODEV) {
+		dbg("no stale xfrmi interface '%s' found", if_name);
+	} else {
+		LOG_ERRNO(errno, "failed stale_xfrmi_interfaces() call if_nametoindex('%s')", if_name);
+		return;
+	}
 }
 
-void free_xfrmi_ipsec1(void)
+void free_xfrmi_ipsec1(struct logger *logger)
 {
 	char if_name[IFNAMSIZ];
-	snprintf(if_name, sizeof(if_name), XFRMI_DEV_FORMAT, IPSEC1_XFRM_IF_ID); /* gloabl ipsec1 */
+	snprintf(if_name, sizeof(if_name), XFRMI_DEV_FORMAT, IPSEC1_XFRM_IF_ID); /* global ipsec1 */
 	unsigned int if_id = if_nametoindex(if_name);
 
-	if (if_id > 0) {
-		ip_link_del(if_name); /* ignore return value??? */
-	}
+	if (if_id > 0)
+		ip_link_del(if_name, logger); /* ignore return value??? */
 }
 
 void reference_xfrmi(struct connection *c)
@@ -791,7 +752,7 @@ void reference_xfrmi(struct connection *c)
 			c->xfrmi->name, c->xfrmi->if_id, c->xfrmi->refcount);
 }
 
-void unreference_xfrmi(struct connection *c)
+void unreference_xfrmi(struct connection *c, struct logger *logger)
 {
 	passert(c->xfrmi->refcount > 0);
 	c->xfrmi->refcount--;
@@ -800,7 +761,6 @@ void unreference_xfrmi(struct connection *c)
 			c->xfrmi, c->xfrmi->name,
 			c->xfrmi->if_id, c->xfrmi->refcount,
 			c->xfrmi->refcount == 0 ? "delete interface." : ".");
-	if (c->xfrmi->refcount == 0) {
-		free_xfrmi(c->xfrmi);
-	}
+	if (c->xfrmi->refcount == 0)
+		free_xfrmi(c->xfrmi, logger);
 }

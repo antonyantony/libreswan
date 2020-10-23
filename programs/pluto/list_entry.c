@@ -16,43 +16,49 @@
 
 #include <stdint.h>
 
-#include "lswlog.h"
-#include "libreswan/passert.h"
+#include "passert.h"
 #include "defs.h"
+#include "log.h"
 #include "hash_table.h"
 
 #define passert_entry(ENTRY, ASSERTION)					\
 	{								\
-		bool a_ = ASSERTION;					\
+		bool a_ = ASSERTION; /* evaluate once */		\
 		if (!a_) {						\
-			LSWLOG_PEXPECT(buf) {				\
+			JAMBUF(buf) {					\
 				jam(buf, "%s: ",			\
 				    (ENTRY)->info->name);		\
 				jam_list_entry(buf, (ENTRY));		\
 				jam(buf, ": %s", #ASSERTION);		\
+				/* XXX: hack: double copy */		\
+				log_pexpect(HERE, PRI_SHUNK,		\
+					    pri_shunk(jambuf_as_shunk(buf))); \
 			}						\
 		}							\
 	}
 
 #define passert_info(INFO, ASSERTION)					\
 	{								\
-		bool a_ = ASSERTION;					\
+		bool a_ = ASSERTION; /* evaluate once */		\
 		if (!a_) {						\
-			LSWLOG_PEXPECT(buf) {				\
+			JAMBUF(buf) {					\
 				jam(buf, "%s: %s",			\
 				    (INFO)->name,			\
 				    #ASSERTION);			\
+				/* XXX: hack: double copy */		\
+				log_pexpect(HERE, PRI_SHUNK,		\
+					    pri_shunk(jambuf_as_shunk(buf))); \
 			}						\
 		}							\
 	}
 
-void jam_list_entry(struct lswlog *buf, const struct list_entry *entry)
+void jam_list_entry(struct jambuf *buf, const struct list_entry *entry)
 {
 	if (entry == NULL) {
 		jam(buf, "(null)");
 	} else {
 		if (entry->data == NULL) {
-			lswlogf(buf, "HEAD");
+			jam(buf, "HEAD");
 		} else {
 			entry->info->jam(buf, entry->data);
 		}
@@ -65,7 +71,7 @@ static void log_entry(const char *op, struct list_entry *entry)
 	passert(entry != NULL);
 	if (DBGP(DBG_TMI)) {
 		LSWLOG_DEBUG(buf) {
-			lswlogf(buf, "%s: %s ", entry->info->name, op);
+			jam(buf, "%s: %s ", entry->info->name, op);
 			jam_list_entry(buf, entry);
 		}
 	}
@@ -74,25 +80,6 @@ static void log_entry(const char *op, struct list_entry *entry)
 		passert_entry(entry, entry->newer->older == entry);
 		passert_entry(entry, entry->older != NULL);
 		passert_entry(entry, entry->older->newer == entry);
-	}
-}
-
-void init_list(const struct list_info *info,
-	       struct list_head *list)
-{
-	if (list->head.info == NULL) {
-		list->head.info = info;
-		passert_info(info, list->head.newer == NULL);
-		passert_info(info, list->head.older == NULL);
-		list->head.older = &list->head;
-		list->head.newer = &list->head;
-		list->head.data = NULL;	/* sign of being head */
-	} else {
-		/* already initialized */
-		/* ??? does this ever happen? */
-		passert_info(info, list->head.newer != NULL);
-		passert_info(info, list->head.info == info);
-		passert_info(info, list->head.data == NULL);
 	}
 }
 
@@ -124,10 +111,10 @@ void insert_list_entry(struct list_head *list,
 	passert_entry(entry, entry->data != NULL);
 	if (DBGP(DBG_TMI)) {
 		LSWLOG_DEBUG(buf) {
-			lswlogf(buf, "%s: inserting ",
+			jam(buf, "%s: inserting ",
 				entry->info->name);
 			jam_list_entry(buf, entry);
-			lswlogf(buf, " into list ");
+			jam(buf, " into list ");
 			jam_list_entry(buf, &list->head);
 		}
 	}
@@ -143,10 +130,10 @@ void insert_list_entry(struct list_head *list,
 	/* list->newer = list->newer; */
 	if (DBGP(DBG_TMI)) {
 		LSWLOG_DEBUG(buf) {
-			lswlogf(buf, "%s: inserted  ",
+			jam(buf, "%s: inserted  ",
 				entry->info->name);
 			jam_list_entry(buf, entry);
-			lswlogf(buf, " into list ");
+			jam(buf, " into list ");
 			jam_list_entry(buf, &list->head);
 		}
 	}

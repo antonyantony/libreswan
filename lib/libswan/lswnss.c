@@ -15,10 +15,10 @@
  */
 
 #include <nspr.h>
-#include <nss.h>
 #include <pk11pub.h>
 #include <secmod.h>
 #include <keyhi.h>
+#include <nss.h>	/* for NSS_Initialize() */
 
 #include "lswconf.h"
 #include "lswnss.h"
@@ -26,10 +26,11 @@
 #include "lswlog.h"
 #include "lswfips.h"
 
+static char *lsw_nss_get_password(PK11SlotInfo *slot, PRBool retry, void *arg);
+
 static unsigned flags;
 
-bool lsw_nss_setup(const char *configdir, unsigned setup_flags,
-		   PK11PasswordFunc get_password, lsw_nss_buf_t err)
+bool lsw_nss_setup(const char *configdir, unsigned setup_flags, struct logger *logger)
 {
 	/*
 	 * save for cleanup
@@ -42,7 +43,8 @@ bool lsw_nss_setup(const char *configdir, unsigned setup_flags,
 	 */
 	PR_Init(PR_USER_THREAD, PR_PRIORITY_NORMAL, 1);
 
-	libreswan_log("Initializing NSS");
+	log_message(RC_LOG, logger, "Initializing NSS");
+	enum lsw_fips_mode fips_mode;
 	if (configdir != NULL) {
 		const char sql[] = "sql:";
 		char *nssdir;
@@ -53,60 +55,69 @@ bool lsw_nss_setup(const char *configdir, unsigned setup_flags,
 			strcpy(nssdir, sql);
 			strcat(nssdir, configdir);
 		}
-		libreswan_log("Opening NSS database \"%s\" %s", nssdir,
-			      (flags & LSW_NSS_READONLY) ? "read-only" : "read-write");
+		log_message(RC_LOG, logger, "Opening NSS database \"%s\" %s", nssdir,
+			    (flags & LSW_NSS_READONLY) ? "read-only" : "read-write");
 		SECStatus rv = NSS_Initialize(nssdir, "", "", SECMOD_DB,
 					      (flags & LSW_NSS_READONLY) ? NSS_INIT_READONLY : 0);
 		if (rv != SECSuccess) {
-			snprintf(err, sizeof(lsw_nss_buf_t),
-				 "Initialization of NSS with %s database \"%s\" failed (%d)",
-				 (flags & LSW_NSS_READONLY) ? "read-only" : "read-write",
-				 nssdir, PR_GetError());
+			log_message(RC_LOG_SERIOUS|ERROR_STREAM, logger,
+				    "Initialization of NSS with %s database \"%s\" failed (%d)",
+				    (flags & LSW_NSS_READONLY) ? "read-only" : "read-write",
+				    nssdir, PR_GetError());
 			pfree(nssdir);
-			return FALSE;
+			return false;
 		}
+		fips_mode = lsw_get_fips_mode(logger);
 	} else {
 		NSS_NoDB_Init(".");
-		if (libreswan_fipsmode() && !PK11_IsFIPS()) {
+		fips_mode = lsw_get_fips_mode(logger);
+		if (fips_mode == LSW_FIPS_ON && !PK11_IsFIPS()) {
 			SECMODModule *internal = SECMOD_GetInternalModule();
 			if (internal == NULL) {
-				snprintf(err, sizeof(lsw_nss_buf_t),
-					 "SECMOD_GetInternalModule() failed");
+				log_message(RC_LOG_SERIOUS|ERROR_STREAM, logger,
+					    "SECMOD_GetInternalModule() failed");
 				return false;
 			}
 			if (SECMOD_DeleteInternalModule(internal->commonName) != SECSuccess) {
-				snprintf(err, sizeof(lsw_nss_buf_t),
-					 "SECMOD_DeleteInternalModule(%s) failed",
-					 internal->commonName);
+				log_message(RC_LOG_SERIOUS|ERROR_STREAM, logger,
+					    "SECMOD_DeleteInternalModule(%s) failed",
+					    internal->commonName);
 				return false;
 			}
 			if (!PK11_IsFIPS()) {
-				snprintf(err, sizeof(lsw_nss_buf_t),
-					 "NSS FIPS mode toggle failed");
+				log_message(RC_LOG_SERIOUS|ERROR_STREAM, logger,
+					    "NSS FIPS mode toggle failed");
 				return false;
 			}
 		}
 	}
 
-	if (PK11_IsFIPS() && configdir != NULL && get_password == NULL) {
-		snprintf(err, sizeof(lsw_nss_buf_t),
-			 "in FIPS mode a password is required");
-		return FALSE;
+	if (fips_mode == LSW_FIPS_UNKNOWN) {
+		log_message(RC_LOG_SERIOUS|ERROR_STREAM, logger,
+			    "ABORT: pluto FIPS mode could not be determined");
+		return false;
 	}
 
-	if (get_password != NULL) {
-		PK11_SetPasswordFunc(get_password);
-	}
+	/*
+	 * The wrapper lsw_nss_get_password_context(LOGGER) must be
+	 * passed as the the final argument to any NSS call that might
+	 * call lsw_nss_get_password().  NSS will then pass the
+	 * context along.
+	 *
+	 * It is currently the logger but it might change.
+	 */
+	PK11_SetPasswordFunc(lsw_nss_get_password);
 
 	if (configdir != NULL) {
-		PK11SlotInfo *slot = lsw_nss_get_authenticated_slot(err);
+		PK11SlotInfo *slot = lsw_nss_get_authenticated_slot(logger);
 		if (slot == NULL) {
-			return FALSE;
+			/* already logged */
+			return false;
 		}
 		PK11_FreeSlot(slot);
 	}
 
-	return TRUE;
+	return true;
 }
 
 void lsw_nss_shutdown(void)
@@ -118,28 +129,22 @@ void lsw_nss_shutdown(void)
 	}
 }
 
-static void fill_RSA_public_key(struct RSA_public_key *rsa, SECKEYPublicKey *pubkey)
-{
-	passert(SECKEY_GetPublicKeyType(pubkey) == rsaKey);
-	rsa->e = clone_secitem_as_chunk(pubkey->u.rsa.publicExponent, "e");
-	rsa->n = clone_secitem_as_chunk(pubkey->u.rsa.modulus, "n");
-	form_keyid(rsa->e, rsa->n, rsa->keyid, &rsa->k);
-}
-
-PK11SlotInfo *lsw_nss_get_authenticated_slot(lsw_nss_buf_t err)
+PK11SlotInfo *lsw_nss_get_authenticated_slot(struct logger *logger)
 {
 	PK11SlotInfo *slot = PK11_GetInternalKeySlot();
 	if (slot == NULL) {
-		snprintf(err, sizeof(lsw_nss_buf_t), "no internal key slot");
+		log_message(RC_LOG_SERIOUS|ERROR_STREAM, logger,
+			    "no internal key slot");
 		return NULL;
 	}
 
 	if (PK11_IsFIPS() || PK11_NeedLogin(slot)) {
 		SECStatus status = PK11_Authenticate(slot, PR_FALSE,
-						     lsw_return_nss_password_file_info());
+						     lsw_nss_get_password_context(logger));
 		if (status != SECSuccess) {
 			const char *token = PK11_GetTokenName(slot);
-			snprintf(err, sizeof(lsw_nss_buf_t), "authentication of \"%s\" failed", token);
+			log_message(RC_LOG_SERIOUS|ERROR_STREAM, logger,
+				    "authentication of \"%s\" failed", token);
 			PK11_FreeSlot(slot);
 			return NULL;
 		}
@@ -147,111 +152,11 @@ PK11SlotInfo *lsw_nss_get_authenticated_slot(lsw_nss_buf_t err)
 	return slot;
 }
 
-struct private_key_stuff *lsw_nss_foreach_private_key_stuff(secret_eval func,
-							    void *uservoid,
-							    lsw_nss_buf_t err)
+static char *lsw_nss_get_password(PK11SlotInfo *slot, PRBool retry, void *arg)
 {
-	/*
-	 * So test for error with "if (err[0]) ..." works.
-	 */
-	err[0] = '\0';
+	struct logger *logger = arg;
+	pexpect(logger != NULL);
 
-	PK11SlotInfo *slot = lsw_nss_get_authenticated_slot(err);
-	if (slot == NULL) {
-		return NULL;
-	}
-
-	SECKEYPrivateKeyList *list = PK11_ListPrivateKeysInSlot(slot);
-	if (list == NULL) {
-		snprintf(err, sizeof(lsw_nss_buf_t), "no list");
-		PK11_FreeSlot(slot);
-		return NULL;
-	}
-
-	int line = 1;
-
-	struct private_key_stuff *result = NULL;
-
-	SECKEYPrivateKeyListNode *node;
-	for (node = PRIVKEY_LIST_HEAD(list);
-	     !PRIVKEY_LIST_END(node, list);
-	     node = PRIVKEY_LIST_NEXT(node)) {
-
-		if (SECKEY_GetPrivateKeyType(node->key) != rsaKey) {
-			/* only rsa for now */
-			continue;
-		}
-
-		struct private_key_stuff pks = {
-			.kind = PKK_RSA,
-			.on_heap = TRUE,
-		};
-
-		{
-			SECItem *nss_ckaid
-				= PK11_GetLowLevelKeyIDForPrivateKey(node->key);
-			if (nss_ckaid == NULL) {
-				// fprintf(stderr, "ckaid not found\n");
-				continue;
-			}
-			const char *err = form_ckaid_nss(nss_ckaid,
-							 &pks.u.RSA_private_key.pub.ckaid);
-			SECITEM_FreeItem(nss_ckaid, PR_TRUE);
-			if (err) {
-				// fprintf(stderr, "ckaid not found\n");
-				continue;
-			}
-		}
-
-		{
-			SECKEYPublicKey *pubkey = SECKEY_ConvertToPublicKey(node->key);
-			if (pubkey != NULL) {
-				fill_RSA_public_key(&pks.u.RSA_private_key.pub, pubkey);
-				SECKEY_DestroyPublicKey(pubkey);
-			}
-		}
-
-		/*
-		 * Only count private keys that get processed.
-		 */
-		pks.line = line++;
-
-		int ret = func(NULL, &pks, uservoid);
-		if (ret == 0) {
-			/*
-			 * save/return the result.
-			 *
-			 * XXX: Potential Memory leak.
-			 *
-			 * lsw_foreach_secret() + lsw_get_pks()
-			 * returns an object that must not be freed
-			 * BUT lsw_nss_foreach_private_key_stuff()
-			 * returns an object that must be freed.
-			 *
-			 * For moment ignore this - as only caller is
-			 * showhostkey.c which quickly exits.
-			 */
-			result = clone_thing(pks, "pks");
-			break;
-		}
-
-		freeanyckaid(&pks.u.RSA_private_key.pub.ckaid);
-		freeanychunk(pks.u.RSA_private_key.pub.e);
-		freeanychunk(pks.u.RSA_private_key.pub.n);
-
-		if (ret < 0) {
-			break;
-		}
-	}
-
-	SECKEY_DestroyPrivateKeyList(list);
-	PK11_FreeSlot(slot);
-
-	return result;
-}
-
-char *lsw_nss_get_password(PK11SlotInfo *slot, PRBool retry, void *arg UNUSED)
-{
 	if (retry) {
 		/* nothing changed */
 		return NULL;
@@ -269,13 +174,15 @@ char *lsw_nss_get_password(PK11SlotInfo *slot, PRBool retry, void *arg UNUSED)
 	 */
 	const char *token = PK11_GetTokenName(slot);
 	if (token == NULL) {
-		libreswan_log("NSS Password slot has no token name");
+		log_message(RC_LOG, logger,
+			    "NSS Password slot has no token name");
 		return NULL;
 	}
 
 	if (PK11_ProtectedAuthenticationPath(slot)) {
-		libreswan_log("NSS Password for token \"%s\" failed, slot has protected authentication path",
-			      token);
+		log_message(RC_LOG, logger,
+			    "NSS Password for token \"%s\" failed, slot has protected authentication path",
+			    token);
 		return NULL;
 	}
 
@@ -286,8 +193,9 @@ char *lsw_nss_get_password(PK11SlotInfo *slot, PRBool retry, void *arg UNUSED)
 	 */
 	if (oco->nsspassword != NULL) {
 		char *password = PORT_Strdup(oco->nsspassword);
-		libreswan_log("NSS Password for token \"%s\" with length %zu passed to NSS",
-			      token, strlen(password));
+		log_message(RC_LOG, logger,
+			    "NSS Password for token \"%s\" with length %zu passed to NSS",
+			    token, strlen(password));
 		return password;
 	}
 	/*
@@ -298,8 +206,9 @@ char *lsw_nss_get_password(PK11SlotInfo *slot, PRBool retry, void *arg UNUSED)
 	const int max_password_file_size = 4096;
 	char *passwords = PORT_ZAlloc(max_password_file_size);
 	if (passwords == NULL) {
-		libreswan_log("NSS Password file \"%s\" for token \"%s\" could not be loaded, NSS memory allocate failed",
-			      oco->nsspassword_file, token);
+		log_message(RC_LOG, logger,
+			    "NSS Password file \"%s\" for token \"%s\" could not be loaded, NSS memory allocate failed",
+			    oco->nsspassword_file, token);
 		return NULL;
 	}
 
@@ -311,8 +220,9 @@ char *lsw_nss_get_password(PK11SlotInfo *slot, PRBool retry, void *arg UNUSED)
 	{
 		PRFileDesc *fd = PR_Open(oco->nsspassword_file, PR_RDONLY, 0);
 		if (fd == NULL) {
-			libreswan_log("NSS Password file \"%s\" for token \"%s\" could not be opened for reading",
-				      oco->nsspassword_file, token);
+			log_message(RC_LOG, logger,
+				    "NSS Password file \"%s\" for token \"%s\" could not be opened for reading",
+				    oco->nsspassword_file, token);
 			PORT_Free(passwords);
 			return NULL;
 		}
@@ -337,8 +247,9 @@ char *lsw_nss_get_password(PK11SlotInfo *slot, PRBool retry, void *arg UNUSED)
 			i++;
 
 		if (i == passwords_len) {
-			libreswan_log("NSS Password file \"%s\" for token \"%s\" ends with a partial line (ignored)",
-				      oco->nsspassword_file, token);
+			log_message(RC_LOG, logger,
+				    "NSS Password file \"%s\" for token \"%s\" ends with a partial line (ignored)",
+				    oco->nsspassword_file, token);
 			break;	/* no match found */
 		}
 
@@ -355,16 +266,18 @@ char *lsw_nss_get_password(PK11SlotInfo *slot, PRBool retry, void *arg UNUSED)
 		    p[toklen] == ':') {
 			/* we have a winner! */
 			p = PORT_Strdup(&p[toklen + 1]);
-			libreswan_log("NSS Password from file \"%s\" for token \"%s\" with length %zu passed to NSS",
-				      oco->nsspassword_file, token, PORT_Strlen(p));
+			log_message(RC_LOG, logger,
+				    "NSS Password from file \"%s\" for token \"%s\" with length %zu passed to NSS",
+				    oco->nsspassword_file, token, PORT_Strlen(p));
 			PORT_Free(passwords);
 			return p;
 		}
 	}
 
 	/* no match found in password file */
-	libreswan_log("NSS Password file \"%s\" does not contain token \"%s\"",
-		      oco->nsspassword_file, token);
+	log_message(RC_LOG, logger,
+		    "NSS Password file \"%s\" does not contain token \"%s\"",
+		    oco->nsspassword_file, token);
 	PORT_Free(passwords);
 	return NULL;
 }

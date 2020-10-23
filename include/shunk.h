@@ -18,7 +18,10 @@
 
 #include <stdbool.h>
 #include <stddef.h>	/* size_t */
-#include <stdint.h>	/* uint8_t */
+#include <stdint.h>	/* uint8_t uintmax_t */
+
+#include "hunk.h"
+#include "err.h"
 
 /*
  * Think of shunk_t and shunk_t as opposite solutions to the same
@@ -86,7 +89,7 @@ shunk_t shunk_slice(shunk_t s, size_t start, size_t stop);
 shunk_t shunk_token(shunk_t *input, char *delim, const char *delims);
 
 /*
- * Return the sequence of charcters in ACCEPT, update INPUT.
+ * Return the sequence of characters in ACCEPT, update INPUT.
  *
  * When input is exhausted the NULL_SHUNK is returned (rather than the
  * EMPTY_SHUNK).
@@ -111,35 +114,14 @@ shunk_t shunk_span(shunk_t *input, const char *accept);
  * EMPTY (pointing somewhere but no bytes) are considered different.
  */
 
-/* XXX: move to constants.h? */
-bool bytes_eq(const void *l_ptr, size_t l_len,
-	      const void *r_ptr, size_t r_len);
-
-#define hunk_eq(L,R)							\
-	({								\
-		typeof(L) l_ = L; /* evaluate once */			\
-		typeof(R) r_ = R; /* evaluate once */			\
-		bytes_eq(l_.ptr, l_.len, r_.ptr, r_.len);		\
-	})
-
-#define hunk_streq(HUNK, STRING) hunk_eq(HUNK, shunk1(STRING))
-#define hunk_memeq(HUNK, MEM, SIZE) hunk_eq(HUNK, shunk2(MEM, SIZE))
-
-#define hunk_thingeq(SHUNK, THING) hunk_memeq(SHUNK, &(THING), sizeof(THING))
-
-bool shunk_caseeq(shunk_t lhs, shunk_t rhs);
-bool shunk_strcaseeq(shunk_t shunk, const char *string);
-
 bool shunk_caseeat(shunk_t *lhs, shunk_t rhs);
 bool shunk_strcaseeat(shunk_t *lhs, const char *string);
-
-bool shunk_isdigit(shunk_t s, size_t offset);
-bool shunk_ischar(shunk_t s, size_t offset, const char *chars);
 
 /*
  * Number conversion.  like strtoul() et.al.
  */
-bool shunk_tou(shunk_t lhs, unsigned *value, int base);
+err_t shunk_to_uint(shunk_t input, shunk_t *cursor, unsigned base,
+		    uintmax_t *value, uintmax_t ceiling);
 
 /*
  * To print, use: printf(PRI_SHUNK, pri_shunk(shunk));

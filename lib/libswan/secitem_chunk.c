@@ -14,8 +14,8 @@
  * for more details.
  */
 
-#include <lswalloc.h>
-#include "nss.h"
+#include "lswalloc.h"
+#include "jambuf.h"
 #include "secrets.h"
 
 SECItem same_chunk_as_secitem(chunk_t chunk, SECItemType type)

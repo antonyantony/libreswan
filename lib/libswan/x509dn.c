@@ -289,7 +289,7 @@ int dn_count_wildcards(chunk_t dn)
  * using \<CHAR> for printable and \XX for non-printable.
  */
 
-static err_t format_dn(jambuf_t *buf, chunk_t dn,
+static err_t format_dn(struct jambuf *buf, chunk_t dn,
 		       jam_bytes_fn *jam_bytes, bool nss_compatible)
 {
 	chunk_t rdn;
@@ -554,7 +554,7 @@ static err_t format_dn(jambuf_t *buf, chunk_t dn,
  * into LDAP-style human-readable ASCII format
  */
 
-void jam_raw_dn(jambuf_t *buf, chunk_t dn, jam_bytes_fn *jam_bytes,
+void jam_raw_dn(struct jambuf *buf, chunk_t dn, jam_bytes_fn *jam_bytes,
 		bool nss_compatible)
 {
 	/* save start in case things screw up */
@@ -562,8 +562,10 @@ void jam_raw_dn(jambuf_t *buf, chunk_t dn, jam_bytes_fn *jam_bytes,
 	err_t ugh = format_dn(buf, dn, jam_bytes, nss_compatible);
 	if (ugh != NULL) {
 		/* error: print DN as hex string */
-		libreswan_log("error in DN parsing: %s", ugh);
-		DBG_dump_hunk("Bad DN:", dn);
+		if (DBGP(DBG_BASE)) {
+			dbg("error in DN parsing: %s", ugh);
+			DBG_dump_hunk("Bad DN:", dn);
+		}
 		/* reset the buffer */
 		jambuf_set_pos(buf, &pos);
 		jam(buf, "0x");
@@ -571,7 +573,14 @@ void jam_raw_dn(jambuf_t *buf, chunk_t dn, jam_bytes_fn *jam_bytes,
 	}
 }
 
-void jam_dn_or_null(jambuf_t *buf, chunk_t dn, const char *null_dn,
+err_t parse_dn(chunk_t dn)
+{
+	dn_buf dnb;
+	struct jambuf buf = ARRAY_AS_JAMBUF(dnb.buf);
+	return format_dn(&buf, dn, jam_raw_bytes, true/*nss_compatible*/);
+}
+
+void jam_dn_or_null(struct jambuf *buf, chunk_t dn, const char *null_dn,
 		    jam_bytes_fn *jam_bytes)
 {
 	if (dn.ptr == NULL) {
@@ -583,19 +592,19 @@ void jam_dn_or_null(jambuf_t *buf, chunk_t dn, const char *null_dn,
 
 const char *str_dn_or_null(chunk_t dn, const char *null_dn, dn_buf *dst)
 {
-	jambuf_t buf = ARRAY_AS_JAMBUF(dst->buf);
+	struct jambuf buf = ARRAY_AS_JAMBUF(dst->buf);
 	jam_dn_or_null(&buf, dn, null_dn, jam_sanitized_bytes);
 	return dst->buf;
 }
 
-void jam_dn(jambuf_t *buf, chunk_t dn, jam_bytes_fn *jam_bytes)
+void jam_dn(struct jambuf *buf, chunk_t dn, jam_bytes_fn *jam_bytes)
 {
 	jam_dn_or_null(buf, dn, "(empty)", jam_bytes);
 }
 
 const char *str_dn(chunk_t dn, dn_buf *dst)
 {
-	jambuf_t buf = ARRAY_AS_JAMBUF(dst->buf);
+	struct jambuf buf = ARRAY_AS_JAMBUF(dst->buf);
 	jam_dn(&buf, dn, jam_sanitized_bytes);
 	return dst->buf;
 }
@@ -838,7 +847,7 @@ err_t atodn(const char *src, chunk_t *dn)
 
 			unsigned char *ns = ppp[-1];	/* name operand start */
 			asn1_t t = op->type == ASN1_PRINTABLESTRING &&
-				!is_printablestring(chunk(ns, dn_ptr - ns)) ?
+				!is_printablestring(chunk2(ns, dn_ptr - ns)) ?
 				ASN1_T61STRING : op->type;
 
 			END_OBJ(t);	/* 3 value */
@@ -941,7 +950,7 @@ bool match_dn(chunk_t a, chunk_t b, int *wildcards)
 		}
 
 		/* OIDs must agree */
-		if (!chunk_eq(oid_a, oid_b))
+		if (!hunk_eq(oid_a, oid_b))
 			return FALSE;
 
 		/* does rdn_b contain a wildcard? */
@@ -1001,14 +1010,13 @@ bool match_dn(chunk_t a, chunk_t b, int *wildcards)
 	/* both DNs must have same number of RDNs */
 	if (more_a || more_b) {
 		if (wildcards != NULL && *wildcards != 0) {
-			/* ??? for some reason we think a failure with wildcards is worth logging */
 			dn_buf abuf;
 			dn_buf bbuf;
-			libreswan_log("while comparing A='%s'<=>'%s'=B with a wildcard count of %d, %s had too few RDNs",
-				      str_dn(a, &abuf), str_dn(b, &bbuf), *wildcards,
-				      (more_a ? "B" : "A"));
+			dbg("while comparing A='%s'<=>'%s'=B with a wildcard count of %d, %s had too few RDNs",
+			    str_dn(a, &abuf), str_dn(b, &bbuf), *wildcards,
+			    (more_a ? "B" : "A"));
 		}
-		return FALSE;
+		return false;
 	}
 
 	/* the two DNs match! */

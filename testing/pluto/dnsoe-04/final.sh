@@ -2,7 +2,7 @@
 ipsec whack --trafficstatus
 grep "negotiated connection" /tmp/pluto.log
 # you should see one RSA and on NULL only
-grep IKEv2_AUTH_ /tmp/pluto.log
+grep -e 'auth method: ' -e 'hash algorithm identifier' -e ': authenticated using ' /tmp/pluto.log
 : ==== cut ====
 ipsec auto --status
 : ==== tuc ====

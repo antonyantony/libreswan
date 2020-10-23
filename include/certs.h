@@ -41,6 +41,8 @@
 #include <cert.h> /* NSS */
 #include "x509.h"
 
+struct show;
+
 /* advance warning of imminent expiry of
  * cacerts, public keys, and crls
  * unused: OCSP_CERT_WARNING_INTERVAL	(30 * secs_per_day)
@@ -53,7 +55,7 @@
 /* certificate access structure
  * currently X.509 certificates are supported
  */
-typedef struct {
+typedef struct cert {
 	enum ike_cert_type ty;
 	union {
 		/* some day we may support more */
@@ -63,7 +65,7 @@ typedef struct {
 
 const char *cert_nickname(const cert_t *cert);
 
-extern void list_certs(struct fd *whackfd);
+extern void list_certs(struct show *s);
 
 /*
  * Maintain a list of certificates.

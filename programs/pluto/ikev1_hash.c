@@ -1,4 +1,4 @@
-/* IKEv1 HASH payload wierdness, for Libreswan
+/* IKEv1 HASH payload weirdness, for Libreswan
  *
  * Copyright (C) 2019  Andrew Cagney
  *
@@ -14,38 +14,40 @@
  *
  */
 
-#include "ikev1_hash.h"
-
-#include "state.h"
-#include "crypt_prf.h"
 #include "ike_alg.h"
-#include "lswlog.h"
+#include "crypt_prf.h"
+
+#include "defs.h"		/* for so_serial_t */
+#include "log.h"
+#include "state.h"
 #include "demux.h"
 #include "impair.h"
+#include "ikev1_hash.h"
+#include "ikev1_message.h"
 
 bool emit_v1_HASH(enum v1_hash_type hash_type, const char *what,
-		  enum exchange_impairment exchange,
+		  enum impair_v1_exchange exchange,
 		  struct state *st, struct v1_hash_fixup *fixup,
 		  pb_stream *rbody)
 {
 	zero(fixup);
 	fixup->what = what;
 	fixup->hash_type = hash_type;
-	fixup->impair = (impair_v1_hash_exchange == exchange
-			 ? impair_v1_hash_payload : SEND_NORMAL);
-	if (fixup->impair == SEND_OMIT) {
+	fixup->impair = (impair.v1_hash_exchange == exchange
+			 ? impair.v1_hash_payload : IMPAIR_EMIT_NO);
+	if (fixup->impair == IMPAIR_EMIT_OMIT) {
 		libreswan_log("IMPAIR: omitting HASH payload for %s", what);
 		return true;
 	}
 	pb_stream hash_pbs;
-	if (!ikev1_out_generic(0, &isakmp_hash_desc, rbody, &hash_pbs)) {
+	if (!ikev1_out_generic(&isakmp_hash_desc, rbody, &hash_pbs)) {
 		return false;
 	}
-	if (fixup->impair == SEND_EMPTY) {
+	if (fixup->impair == IMPAIR_EMIT_EMPTY) {
 		libreswan_log("IMPAIR: sending HASH payload with no data for %s", what);
 	} else {
 		/* reserve space for HASH data */
-		fixup->hash_data = chunk(hash_pbs.cur, st->st_oakley.ta_prf->prf_output_size);
+		fixup->hash_data = chunk2(hash_pbs.cur, st->st_oakley.ta_prf->prf_output_size);
 		if (!out_zero(fixup->hash_data.len, &hash_pbs, "HASH DATA"))
 			return false;
 	}
@@ -58,20 +60,21 @@ bool emit_v1_HASH(enum v1_hash_type hash_type, const char *what,
 void fixup_v1_HASH(struct state *st, const struct v1_hash_fixup *fixup,
 		   msgid_t msgid, const uint8_t *roof)
 {
-	if (fixup->impair >= SEND_ROOF) {
+	if (fixup->impair >= IMPAIR_EMIT_ROOF) {
 		libreswan_log("IMPAIR: setting HASH payload bytes to %02x",
-			      fixup->impair - SEND_ROOF);
+			      fixup->impair - IMPAIR_EMIT_ROOF);
 		/* chunk_fill()? */
-		memset(fixup->hash_data.ptr, fixup->impair - SEND_ROOF,
+		memset(fixup->hash_data.ptr, fixup->impair - IMPAIR_EMIT_ROOF,
 		       fixup->hash_data.len);
 		return;
-	} else if (fixup->impair != SEND_NORMAL) {
+	} else if (fixup->impair != IMPAIR_EMIT_NO) {
 		/* already logged above? */
 		return;
 	}
 	struct crypt_prf *hash =
 		crypt_prf_init_symkey("HASH(1)", st->st_oakley.ta_prf,
-				      "SKEYID_a", st->st_skeyid_a_nss);
+				      "SKEYID_a", st->st_skeyid_a_nss,
+				      st->st_logger);
 	/* msgid */
 	passert(sizeof(msgid_t) == sizeof(uint32_t));
 	msgid_t raw_msgid = htonl(msgid);
@@ -115,7 +118,7 @@ bool check_v1_HASH(enum v1_hash_type type, const char *what,
 		dbg("message '%s' HASH payload not checked early", what);
 		return true;
 	}
-	if (impair_v1_hash_check) {
+	if (impair.v1_hash_check) {
 		libreswan_log("IMPAIR: skipping check of '%s' HASH payload", what);
 		return true;
 	}
@@ -140,7 +143,7 @@ bool check_v1_HASH(enum v1_hash_type type, const char *what,
 		.len = st->st_oakley.ta_prf->prf_output_size,
 	};
 	struct v1_hash_fixup expected = {
-		.hash_data = chunk(computed_hash.ptr, computed_hash.len),
+		.hash_data = chunk2(computed_hash.ptr, computed_hash.len),
 		.body = received_hash.ptr + received_hash.len,
 		.what = what,
 		.hash_type = type,

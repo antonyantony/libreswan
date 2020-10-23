@@ -58,7 +58,6 @@
 #include <prmem.h>
 #include <keyhi.h>
 #include <keythi.h>
-#include <nss.h>
 #include <pk11pub.h>
 #include <seccomon.h>
 #include <secerr.h>
@@ -72,22 +71,22 @@
 
 static struct secret *pluto_secrets = NULL;
 
-void load_preshared_secrets(void)
+void load_preshared_secrets(struct logger *logger)
 {
 	const struct lsw_conf_options *oco = lsw_init_options();
-	lsw_load_preshared_secrets(&pluto_secrets, oco->secretsfile);
+	lsw_load_preshared_secrets(&pluto_secrets, oco->secretsfile, logger);
 }
 
-void free_preshared_secrets(void)
+void free_preshared_secrets(struct logger *logger)
 {
-	lsw_free_preshared_secrets(&pluto_secrets);
+	lsw_free_preshared_secrets(&pluto_secrets, logger);
 }
 
 static int print_secrets(struct secret *secret,
 			 struct private_key_stuff *pks UNUSED,
-			 void *uservoid UNUSED)
+			 void *uservoid)
 {
-	struct id_list *ids;
+	struct show *s = uservoid;
 
 	const char *kind;
 	switch (pks->kind) {
@@ -107,10 +106,12 @@ static int print_secrets(struct secret *secret,
 		return 1;
 	}
 
-	ids = lsw_get_idlist(secret);
+	struct id_list *ids = lsw_get_idlist(secret);
 
-	LSWLOG_WHACK(RC_COMMENT, buf) {
-		jam(buf, "    %d: %s ", pks->line, kind);
+	int indent = 0;
+	SHOW_JAMBUF(RC_COMMENT, s, buf) {
+		indent = jam(buf, "%5d:", pks->line);
+		jam(buf, " %s ", kind);
 		if (ids == NULL) {
 			jam(buf, "%%any");
 		} else {
@@ -125,268 +126,33 @@ static int print_secrets(struct secret *secret,
 		}
 	}
 
+	const ckaid_t *ckaid = secret_ckaid(secret); /* may be NULL */
+	if (ckaid != NULL) {
+		SHOW_JAMBUF(RC_COMMENT, s, buf) {
+			jam(buf, "%*s ckaid: ", indent, "");
+			jam_ckaid(buf, ckaid);
+		}
+	}
+
 	/* continue loop until end */
 	return 1;
 }
 
-void list_psks(struct fd *whackfd)
+void list_psks(struct show *s)
 {
 	const struct lsw_conf_options *oco = lsw_init_options();
-	whack_comment(whackfd, " ");
-	whack_comment(whackfd, "List of Pre-shared secrets (from %s)",
-		  oco->secretsfile);
-	whack_comment(whackfd, " ");
-	lsw_foreach_secret(pluto_secrets, print_secrets, NULL);
-}
-
-enum PrivateKeyKind nss_cert_key_kind(CERTCertificate *cert)
-{
-	if (!pexpect(cert != NULL)) {
-		return PKK_INVALID;
-	}
-
-	SECKEYPublicKey *pk = SECKEY_ExtractPublicKey(&cert->subjectPublicKeyInfo);
-	if (pk == NULL) {
-		LSWLOG(buf) {
-			lswlogs(buf, "NSS: could not determine certificate kind; SECKEY_ExtractPublicKey() returned");
-			lswlog_nss_error(buf);
-		}
-		return PKK_INVALID;
-	}
-
-	KeyType type = SECKEY_GetPublicKeyType(pk);
-	enum PrivateKeyKind kind;
-	switch (type) {
-	case rsaKey:
-		kind = PKK_RSA;
-		break;
-	case ecKey:
-		kind = PKK_ECDSA;
-		break;
-	default:
-		kind = PKK_INVALID;
-		break;
-	}
-
-	SECKEY_DestroyPublicKey(pk);
-	return kind;
-}
-
-/* returns the length of the result on success; 0 on failure */
-int sign_hash_RSA(const struct RSA_private_key *k,
-		  const u_char *hash_val, size_t hash_len,
-		  u_char *sig_val, size_t sig_len,
-		  enum notify_payload_hash_algorithms hash_algo)
-{
-	SECKEYPrivateKey *privateKey = NULL;
-	SECItem signature;
-	SECItem data;
-	PK11SlotInfo *slot = NULL;
-
-	DBG(DBG_CRYPT, DBG_log("RSA_sign_hash: Started using NSS"));
-
-	slot = PK11_GetInternalKeySlot();
-	if (slot == NULL) {
-		loglog(RC_LOG_SERIOUS,
-		       "RSA_sign_hash: Unable to find (slot security) device (err %d)",
-		       PR_GetError());
-		return 0;
-	}
-
-	/* XXX: is there no way to detect if we _need_ to authenticate ?? */
-	if (PK11_Authenticate(slot, PR_FALSE,
-			       lsw_return_nss_password_file_info()) == SECSuccess) {
-		DBG(DBG_CRYPT,
-		    DBG_log("NSS: Authentication to NSS successful"));
-	} else {
-		DBG(DBG_CRYPT,
-		    DBG_log("NSS: Authentication to NSS either failed or not required,if NSS DB without password"));
-	}
-
-	privateKey = PK11_FindKeyByKeyID(slot, k->pub.ckaid.nss,
-					 lsw_return_nss_password_file_info());
-	if (privateKey == NULL) {
-		DBG(DBG_CRYPT,
-		    DBG_log("NSS: Can't find the private key from the NSS CKA_ID"));
-		CERTCertificate *cert = get_cert_by_ckaid_t_from_nss(k->pub.ckaid);
-		if (cert == NULL) {
-			loglog(RC_LOG_SERIOUS, "Can't find the certificate or private key from the NSS CKA_ID");
-			return 0;
-		}
-		privateKey = PK11_FindKeyByAnyCert(cert, lsw_return_nss_password_file_info());
-		CERT_DestroyCertificate(cert);
-		if (privateKey == NULL) {
-			loglog(RC_LOG_SERIOUS, "Can't find the private key from the certificate (found using NSS CKA_ID");
-			return 0;
-		}
-	}
-
-	/*
-	 * SIG_LEN contains "adjusted" length of modulus n in octets:
-	 * [RSA_MIN_OCTETS, RSA_MAX_OCTETS].
-	 *
-	 * According to form_keyid() this is the modulus length less
-	 * any leading byte added by DER encoding.
-	 *
-	 * The adjusted length is used in sign_hash() as the signature
-	 * length - wouldn't PK11_SignatureLen be better?
-	 *
-	 * Let's find out.
-	 */
-	pexpect((int)sig_len == PK11_SignatureLen(privateKey));
-
-	PK11_FreeSlot(slot);
-
-	data.type = siBuffer;
-	data.len = hash_len;
-	data.data = DISCARD_CONST(u_char *, hash_val);
-
-	signature.len = sig_len;
-	signature.data = sig_val;
-
-	if (hash_algo == 0 /* ikev1*/ ||
-		hash_algo == IKEv2_AUTH_HASH_SHA1 /* old style rsa with SHA1*/) {
-		{
-			SECStatus s = PK11_Sign(privateKey, &signature, &data);
-
-			if (s != SECSuccess) {
-				loglog(RC_LOG_SERIOUS,
-					"RSA_sign_hash: sign function failed (%d)",
-					PR_GetError());
-				return 0;
-			}
-		}
-	} else { /* Digital signature scheme with rsa-pss*/
-		CK_RSA_PKCS_PSS_PARAMS mech;
-
-		switch (hash_algo) {
-		case IKEv2_AUTH_HASH_SHA2_256:
-			mech = rsa_pss_sha2_256;
-			break;
-		case IKEv2_AUTH_HASH_SHA2_384:
-			mech = rsa_pss_sha2_384;
-			break;
-		case IKEv2_AUTH_HASH_SHA2_512:
-			mech = rsa_pss_sha2_512;
-			break;
-		default:
-			bad_case(hash_algo);
-		}
-		SECItem mechItem = { siBuffer, (unsigned char *)&mech, sizeof(mech) };
-
-		{
-			SECStatus s = PK11_SignWithMechanism(privateKey, CKM_RSA_PKCS_PSS,
-					&mechItem, &signature, &data);
-
-			if (s != SECSuccess) {
-				loglog(RC_LOG_SERIOUS,
-					"RSA_sign_hash: sign function failed (%d)",
-					PR_GetError());
-				return 0;
-			}
-		}
-	}
-
-	SECKEY_DestroyPrivateKey(privateKey);
-
-	DBG(DBG_CRYPT, DBG_log("RSA_sign_hash: Ended using NSS"));
-	return signature.len;
-}
-
-int sign_hash_ECDSA(const struct ECDSA_private_key *k,
-		    const u_char *hash_val, size_t hash_len,
-		    u_char *sig_val, size_t sig_len)
-{
-	SECKEYPrivateKey *privateKey = NULL;
-	PK11SlotInfo *slot = NULL;
-	DBG(DBG_CRYPT, DBG_log("ECDSA_sign_hash: Started using NSS"));
-
-	slot = PK11_GetInternalKeySlot();
-	if (slot == NULL) {
-		loglog(RC_LOG_SERIOUS,
-		       "ECDSA_sign_hash: Unable to find (slot security) device (err %d)",
-		       PR_GetError());
-		return 0;
-	}
-
-	/* XXX: is there no way to detect if we _need_ to authenticate ?? */
-	if (PK11_Authenticate(slot, PR_FALSE,
-			       lsw_return_nss_password_file_info()) == SECSuccess) {
-		DBG(DBG_CRYPT,
-		    DBG_log("NSS: Authentication to NSS successful"));
-	} else {
-		DBG(DBG_CRYPT,
-		    DBG_log("NSS: Authentication to NSS either failed or not required,if NSS DB without password"));
-	}
-
-	DBG(DBG_CRYPT, DBG_dump("nss", k->pub.ckaid.nss->data, k->pub.ckaid.nss->len));
-
-	CERTCertificate *cert = get_cert_by_ckaid_t_from_nss(k->pub.ckaid);
-
-	LSWDBGP(DBG_BASE, buf) {
-		lswlogf(buf, "got cert form ckaid");
-		lswlog_nss_error(buf);
-	}
-
-	privateKey = PK11_FindKeyByAnyCert(cert, lsw_return_nss_password_file_info());
-	DBGF(DBG_CRYPT, "keyType %d",privateKey->keyType);
-
-	if (privateKey == NULL) {
-		LSWDBGP(DBG_CRYPT, buf) {
-			lswlogf(buf, "NSS: Can't find the private key from the NSS CKA_ID");
-			lswlog_nss_error(buf);
-		}
-
-		CERTCertificate *cert = get_cert_by_ckaid_t_from_nss(k->pub.ckaid);
-		if (cert == NULL) {
-			loglog(RC_LOG_SERIOUS, "Can't find the certificate or private key from the NSS CKA_ID");
-			return 0;
-		}
-		privateKey = PK11_FindKeyByAnyCert(cert, lsw_return_nss_password_file_info());
-		CERT_DestroyCertificate(cert);
-		if (privateKey == NULL) {
-			loglog(RC_LOG_SERIOUS, "Can't find the private key from the certificate (found using NSS CKA_ID");
-			return 0;
-		}
-	}
-
-	PK11_FreeSlot(slot);
-
-	/* point hash at HASH_VAL */
-	SECItem hash = {
-		.type = siBuffer,
-		.len = hash_len,
-		.data = DISCARD_CONST(uint8_t *, hash_val),
-	};
-
-	/* point signature at the SIG_VAL buffer */
-	SECItem signature = {
-		.type = siBuffer,
-		.len = PK11_SignatureLen(privateKey),
-		.data = sig_val,
-	};
-	DBGF(DBG_CRYPT, "ECDSA signature.len %d", signature.len);
-	passert(signature.len <= sig_len);
-
-	SECStatus s = PK11_Sign(privateKey, &signature, &hash);
-	DBG(DBG_CRYPT, DBG_dump("sig_from_nss", signature.data, signature.len));
-	if (s != SECSuccess) {
-		LSWDBGP(DBG_CRYPT, buf) {
-			lswlogf(buf, "NSS: signing hash using PK11_Sign() failed:");
-			lswlog_nss_error(buf);
-		}
-		return 0;
-	}
-	SECKEY_DestroyPrivateKey(privateKey);
-
-	DBG(DBG_CRYPT, DBG_log("ECDSA_sign_hash: Ended using NSS"));
-	return signature.len;
+	show_comment(s, " "); /* show_separator(s); */
+	show_comment(s, "List of Pre-shared secrets (from %s)",
+		     oco->secretsfile);
+	show_comment(s, " "); /* show_separator(s); */
+	lsw_foreach_secret(pluto_secrets, print_secrets, s);
 }
 
 err_t RSA_signature_verify_nss(const struct RSA_public_key *k,
 			       const struct crypt_mac *expected_hash,
 			       const uint8_t *sig_val, size_t sig_len,
-			       enum notify_payload_hash_algorithms hash_algo)
+			       const struct hash_desc *hash_algo,
+			       struct logger *logger)
 {
 	SECStatus retVal;
 	if (DBGP(DBG_BASE)) {
@@ -460,8 +226,8 @@ err_t RSA_signature_verify_nss(const struct RSA_public_key *k,
 		.len  = (unsigned int)sig_len,
 	};
 
-	if (hash_algo == 0 /* ikev1*/ ||
-	    hash_algo == IKEv2_AUTH_HASH_SHA1 /* old style rsa with SHA1*/) {
+	if (hash_algo == NULL /* ikev1*/ ||
+	    hash_algo == &ike_alg_hash_sha1 /* old style rsa with SHA1*/) {
 		SECItem decrypted_signature = {
 			.type = siBuffer,
 		};
@@ -473,15 +239,15 @@ err_t RSA_signature_verify_nss(const struct RSA_public_key *k,
 
 		if (PK11_VerifyRecover(publicKey, &encrypted_signature,
 				       &decrypted_signature,
-				       lsw_return_nss_password_file_info()) != SECSuccess) {
+				       lsw_nss_get_password_context(logger)) != SECSuccess) {
 			dbg("NSS RSA verify: decrypting signature is failed");
 			SECKEY_DestroyPublicKey(publicKey);
 			return "13""NSS error: Not able to decrypt";
 		}
 
 		LSWDBGP(DBG_CRYPT, buf) {
-			lswlogs(buf, "NSS RSA verify: decrypted sig: ");
-			lswlog_nss_secitem(buf, &decrypted_signature);
+			jam_string(buf, "NSS RSA verify: decrypted sig: ");
+			jam_nss_secitem(buf, &decrypted_signature);
 		}
 
 		/* hash at end? See above for length check */
@@ -496,24 +262,16 @@ err_t RSA_signature_verify_nss(const struct RSA_public_key *k,
 		}
 	} else {
 		/* Digital signature scheme with RSA-PSS */
-		CK_RSA_PKCS_PSS_PARAMS mech;
-		switch (hash_algo) {
-		case IKEv2_AUTH_HASH_SHA2_256:
-			mech = rsa_pss_sha2_256;
-			break;
-		case IKEv2_AUTH_HASH_SHA2_384:
-			mech = rsa_pss_sha2_384;
-			break;
-		case IKEv2_AUTH_HASH_SHA2_512:
-			mech = rsa_pss_sha2_512;
-			break;
-		default:
-			bad_case(hash_algo);
+		const CK_RSA_PKCS_PSS_PARAMS *mech = hash_algo->nss.rsa_pkcs_pss_params;
+		if (mech == NULL) {
+			dbg("NSS RSA verify: hash algorithm not supported");
+			SECKEY_DestroyPublicKey(publicKey);
+			return "13""hash algorithm not supported";
 		}
 		const SECItem hash_mech_item = {
 			.type = siBuffer,
-			.data = (unsigned char *)&mech,
-			.len = sizeof(mech),
+			.data = (void*)mech, /* strip const */
+			.len = sizeof(*mech),
 		};
 
 		struct crypt_mac hash_data = *expected_hash; /* cast away const */
@@ -526,7 +284,7 @@ err_t RSA_signature_verify_nss(const struct RSA_public_key *k,
 		if (PK11_VerifyWithMechanism(publicKey, CKM_RSA_PKCS_PSS,
 					     &hash_mech_item, &encrypted_signature,
 					     &expected_hash_item,
-					     lsw_return_nss_password_file_info()) != SECSuccess) {
+					     lsw_nss_get_password_context(logger)) != SECSuccess) {
 			dbg("NSS RSA verify: decrypting signature is failed");
 			SECKEY_DestroyPublicKey(publicKey);
 			return "13""NSS error: Not able to decrypt";
@@ -555,19 +313,14 @@ struct tac_state {
 	struct state *st;
 	const struct crypt_mac *hash;
 	const pb_stream *sig_pbs;
-	enum notify_payload_hash_algorithms hash_algo;
-
-	err_t (*try_signature)(const struct crypt_mac *hash,
-			       const pb_stream *sig_pbs,
-			       struct pubkey *kr,
-			       struct state *st,
-			       enum notify_payload_hash_algorithms hash_algo);
+	const struct hash_desc *hash_algo;
+	try_signature_fn *try_signature;
 
 	/* state carried between calls */
 	err_t best_ugh; /* most successful failure */
 	int tried_cnt;  /* number of keys tried */
 	char tried[50]; /* keyids of tried public keys */
-	jambuf_t tn;
+	struct jambuf tn;
 };
 
 static bool take_a_crack(struct tac_state *s,
@@ -667,7 +420,7 @@ static bool try_all_keys(const char *pubkey_description,
 stf_status check_signature_gen(struct state *st,
 			       const struct crypt_mac *hash,
 			       const pb_stream *sig_pbs,
-			       enum notify_payload_hash_algorithms hash_algo,
+			       const struct hash_desc *hash_algo,
 			       const struct pubkey_type *type,
 			       try_signature_fn *try_signature)
 {
@@ -694,16 +447,17 @@ stf_status check_signature_gen(struct state *st,
 			str_dn_or_null(c->spd.that.ca, "%any", &buf));
 	}
 
+	pexpect(st->st_remote_certs.processed);
 	if (try_all_keys("remote certificates",
 			 &st->st_remote_certs.pubkey_db,
 			 c, now, &s) ||
 	    try_all_keys("preloaded keys",
 			 &pluto_pubkeys,
 			 c, now, &s)) {
-		loglog(RC_LOG_SERIOUS, "Authenticated using %s with %s",
-			type->name,
-			(c->ike_version == IKEv1) ? "SHA-1" :
-				enum_name(&notify_hash_algo_names, hash_algo));
+		log_state(RC_LOG_SERIOUS, st,
+			  "authenticated using %s with %s",
+			  type->name,
+			  (c->ike_version == IKEv1) ? "SHA-1" : hash_algo->common.fqn);
 		return STF_OK;
 	}
 
@@ -721,27 +475,27 @@ stf_status check_signature_gen(struct state *st,
 	passert(id_str.buf[0] != '\0');
 
 	if (s.best_ugh == NULL) {
-		loglog(RC_LOG_SERIOUS,
-		       "no %s public key known for '%s'",
-		       type->name, id_str.buf);
+		log_state(RC_LOG_SERIOUS, st,
+			  "no %s public key known for '%s'",
+			  type->name, id_str.buf);
 		/* ??? is this the best code there is? */
 		return STF_FAIL + INVALID_KEY_INFORMATION;
 	}
 
 	if (s.best_ugh[0] == '9') {
-		loglog(RC_LOG_SERIOUS, "%s", s.best_ugh + 1);
+		log_state(RC_LOG_SERIOUS, st, "%s", s.best_ugh + 1);
 		/* XXX Could send notification back */
 		return STF_FAIL + INVALID_HASH_INFORMATION;
 	}
 
 	if (s.tried_cnt == 1) {
-		loglog(RC_LOG_SERIOUS,
-		       "%s Signature check (on %s) failed (wrong key?); tried%s",
-		       type->name, id_str.buf, s.tried);
+		log_state(RC_LOG_SERIOUS, st,
+			  "%s Signature check (on %s) failed (wrong key?); tried%s",
+			  type->name, id_str.buf, s.tried);
 	} else {
-		loglog(RC_LOG_SERIOUS,
-		       "%s Signature check (on %s) failed: tried%s keys but none worked.",
-		       type->name, id_str.buf, s.tried);
+		log_state(RC_LOG_SERIOUS, st,
+			  "%s Signature check (on %s) failed: tried%s keys but none worked.",
+			  type->name, id_str.buf, s.tried);
 	}
 	dbg("all %d %s public keys for %s failed: best decrypted SIG payload into a malformed ECB (%s)",
 	    s.tried_cnt, type->name, id_str.buf, s.best_ugh+1/*skip '9'*/);
@@ -756,66 +510,8 @@ stf_status check_signature_gen(struct state *st,
  */
 static struct secret *lsw_get_secret(const struct connection *c,
 				     enum PrivateKeyKind kind,
-				     bool asym)
+				     bool asym, struct logger *logger UNUSED)
 {
-	/* is there a certificate assigned to this connection? */
-	if ((kind == PKK_ECDSA || kind == PKK_RSA) &&
-	    c->spd.this.cert.ty == CERT_X509_SIGNATURE &&
-	    c->spd.this.cert.u.nss_cert != NULL) {
-
-		if (DBGP(DBG_BASE)) {
-			id_buf this_buf, that_buf;
-			DBG_log("%s() using certificate for %s->%s of kind %s",
-				__func__,
-				str_id(&c->spd.this.id, &this_buf),
-				str_id(&c->spd.that.id, &that_buf),
-				enum_name(&pkk_names, kind));
-		}
-
-		/* from here on: must free my_public_key */
-		struct pubkey *my_public_key;
-		switch (kind) {
-		case PKK_RSA:
-			my_public_key = allocate_RSA_public_key_nss(c->spd.this.cert.u.nss_cert);
-			break;
-		case PKK_ECDSA:
-			my_public_key = allocate_ECDSA_public_key_nss(c->spd.this.cert.u.nss_cert);
-			break;
-		default:
-			bad_case(kind);
-		}
-
-		if (my_public_key == NULL) {
-			loglog(RC_LOG_SERIOUS, "private key not found (certificate missing from NSS DB or token locked?)");
-			return NULL;
-		}
-
-		dbg("finding secret using public key");
-		struct secret *best = lsw_find_secret_by_public_key(pluto_secrets,
-								    my_public_key, kind);
-		if (best == NULL) {
-			const char *nickname = cert_nickname(&c->spd.this.cert);
-			dbg("private key for cert %s not found in local cache; loading from NSS DB",
-			    nickname);
-
-			err_t err = load_nss_cert_secret(c->spd.this.cert.u.nss_cert);
-			if (err != NULL) {
-				/* ??? should this be logged? */
-				dbg("private key for cert %s not found in NSS DB (%s)",
-				    nickname, err);
-			} else {
-				best = lsw_find_secret_by_public_key(pluto_secrets,
-								     my_public_key, kind);
-			}
-		}
-		/*
-		 * If we don't find the right keytype (RSA, ECDSA, etc)
-		 * then best will end up as NULL
-		 */
-		free_public_key(my_public_key);
-		return best;
-	}
-
 	/* under certain conditions, override that_id to %ANYADDR */
 
 	struct id rw_id;
@@ -842,26 +538,21 @@ static struct secret *lsw_get_secret(const struct connection *c,
 		rw_id.kind = addrtypeof(&c->spd.that.host_addr) == AF_INET ?
 			     ID_IPV4_ADDR : ID_IPV6_ADDR;
 		rw_id.ip_addr = address_any(address_type(&c->spd.that.host_addr));
-		if (DBGP(DBG_BASE)) {
-			id_buf old_buf, new_buf;
-			DBG_log("%s() switching remote roadwarrier ID from %s to %s (%%ANYADDR)",
-				__func__, str_id(that_id, &old_buf), str_id(&rw_id, &new_buf));
-		}
+		id_buf old_buf, new_buf;
+		dbg("%s() switching remote roadwarrier ID from %s to %s (%%ANYADDR)",
+		    __func__, str_id(that_id, &old_buf), str_id(&rw_id, &new_buf));
 		that_id = &rw_id;
 
 	}
 
-	if (DBGP(DBG_BASE)) {
-		id_buf this_buf, that_buf;
-		DBG_log("%s() using IDs for %s->%s of kind %s",
-			__func__,
-			str_id(this_id, &this_buf),
-			str_id(that_id, &that_buf),
-			enum_name(&pkk_names, kind));
-	}
+	id_buf this_buf, that_buf;
+	dbg("%s() using IDs for %s->%s of kind %s",
+	    __func__,
+	    str_id(this_id, &this_buf),
+	    str_id(that_id, &that_buf),
+	    enum_name(&pkk_names, kind));
 
-	return lsw_find_secret_by_id(pluto_secrets,
-				     kind,
+	return lsw_find_secret_by_id(pluto_secrets, kind,
 				     this_id, that_id, asym);
 }
 
@@ -872,9 +563,7 @@ struct secret *lsw_get_xauthsecret(char *xauthname)
 {
 	struct secret *best = NULL;
 
-	DBG(DBG_CONTROL,
-	    DBG_log("started looking for xauth secret for %s",
-		    xauthname));
+	dbg("started looking for xauth secret for %s", xauthname);
 
 	struct id xa_id = {
 		.kind = ID_FQDN,
@@ -891,35 +580,30 @@ struct secret *lsw_get_xauthsecret(char *xauthname)
 	return best;
 }
 
-/* check the existence of an RSA private key matching an RSA public */
-static bool has_private_rawkey(struct pubkey *pk)
-{
-	return lsw_has_private_rawkey(pluto_secrets, pk);
-}
-
 /*
  * find the appropriate preshared key (see get_secret).
  * Failure is indicated by a NULL pointer.
  * Note: the result is not to be freed by the caller.
  * Note2: this seems to be called for connections using RSA too?
  */
-const chunk_t *get_psk(const struct connection *c)
+const chunk_t *get_connection_psk(const struct connection *c,
+				  struct logger *logger)
 {
 	if (c->policy & POLICY_AUTH_NULL) {
-		DBG(DBG_CRYPT, DBG_log("Mutual AUTH_NULL secret - returning empty_chunk"));
+		DBGF(DBG_CRYPT, "Mutual AUTH_NULL secret - returning empty_chunk");
 		return &empty_chunk;
 	}
 
-	struct secret *s = lsw_get_secret(c, PKK_PSK, FALSE);
+	struct secret *s = lsw_get_secret(c, PKK_PSK, FALSE, logger);
 	const chunk_t *psk =
 		s == NULL ? NULL : &lsw_get_pks(s)->u.preshared_secret;
 
 	if (psk != NULL) {
-		DBG(DBG_PRIVATE, {
+		if (DBGP(DBG_CRYPT)) {
 			DBG_dump_hunk("PreShared Key", *psk);
-		});
+		}
 	} else {
-		DBG(DBG_CONTROL, DBG_log("no PreShared Key Found"));
+		dbg("no PreShared Key Found");
 	}
 	return psk;
 }
@@ -927,9 +611,10 @@ const chunk_t *get_psk(const struct connection *c)
 
 /* Return ppk and store ppk_id in *ppk_id */
 
-chunk_t *get_ppk(const struct connection *c, chunk_t **ppk_id)
+chunk_t *get_connection_ppk(const struct connection *c, chunk_t **ppk_id,
+			    struct logger *logger)
 {
-	struct secret *s = lsw_get_secret(c, PKK_PPK, FALSE);
+	struct secret *s = lsw_get_secret(c, PKK_PPK, FALSE, logger);
 
 	if (s == NULL) {
 		*ppk_id = NULL;
@@ -938,11 +623,11 @@ chunk_t *get_ppk(const struct connection *c, chunk_t **ppk_id)
 
 	struct private_key_stuff *pks = lsw_get_pks(s);
 	*ppk_id = &pks->ppk_id;
-	DBG(DBG_PRIVATE, {
+	if (DBGP(DBG_CRYPT)) {
 		DBG_log("Found PPK");
 		DBG_dump_hunk("PPK_ID:", **ppk_id);
 		DBG_dump_hunk("PPK:", pks->ppk);
-		});
+	}
 	return &pks->ppk;
 }
 
@@ -956,15 +641,13 @@ const chunk_t *get_ppk_by_id(const chunk_t *ppk_id)
 
 	if (s != NULL) {
 		const struct private_key_stuff *pks = lsw_get_pks(s);
-		DBG(DBG_PRIVATE, {
+		if (DBGP(DBG_CRYPT)) {
 			DBG_dump_hunk("Found PPK:", pks->ppk);
 			DBG_dump_hunk("with PPK_ID:", *ppk_id);
-		});
+		}
 		return &pks->ppk;
 	}
-	DBG(DBG_CONTROL, {
-		DBG_log("No PPK found with given PPK_ID");
-	});
+	dbg("No PPK found with given PPK_ID");
 	return NULL;
 }
 
@@ -974,18 +657,113 @@ const chunk_t *get_ppk_by_id(const chunk_t *ppk_id)
  */
 
 const struct private_key_stuff *get_connection_private_key(const struct connection *c,
-							   const struct pubkey_type *type)
+							   const struct pubkey_type *type,
+							   struct logger *logger)
 {
-	struct secret *s = lsw_get_secret(c, type->private_key_kind, TRUE);
+	/* is there a certificate assigned to this connection? */
+	if (c->spd.this.cert.ty == CERT_X509_SIGNATURE &&
+	    c->spd.this.cert.u.nss_cert != NULL) {
+		const char *nickname = cert_nickname(&c->spd.this.cert);
+
+		id_buf this_buf, that_buf;
+		dbg("%s() using certificate %s to find private key for %s->%s of kind %s",
+		    __func__, nickname,
+		    str_id(&c->spd.this.id, &this_buf),
+		    str_id(&c->spd.that.id, &that_buf),
+		    type->name);
+
+		const struct private_key_stuff *pks = NULL;
+		bool load_needed;
+		err_t err = find_or_load_private_key_by_cert(&pluto_secrets, &c->spd.this.cert,
+							     &pks, &load_needed, logger);
+		if (err != NULL) {
+			dbg("private key for certificate %s not found in NSS DB",
+			    nickname);
+			return NULL;
+		} else if (load_needed) {
+			/*
+			 * XXX: the private key that was pre-loaded
+			 * during "whack add" may have been deleted
+			 * because all secrets were thrown away.
+			 *
+			 * The real problem is that the connection
+			 * lacks a counted reference to the private
+			 * key.
+			 */
+			log_message(RC_LOG|LOG_STREAM/*not-whack-grrr*/, logger,
+				    "reloaded private key matching %s certificate '%s'",
+				    c->spd.this.leftright, nickname);
+		}
+
+		/*
+		 * If we don't find the right keytype (RSA, ECDSA,
+		 * etc) then best will end up as NULL
+		 */
+		dbg("connection %s's %s private key found in NSS DB using cert",
+		    c->name, type->name);
+		return pks;
+	}
+
+	/* is there a CKAID assigned to this connection? */
+	if (c->spd.this.ckaid != NULL) {
+		ckaid_buf ckb;
+		id_buf this_buf, that_buf;
+		dbg("%s() using CKAID %s to find private key for %s->%s of kind %s",
+		    __func__, str_ckaid(c->spd.this.ckaid, &ckb),
+		    str_id(&c->spd.this.id, &this_buf),
+		    str_id(&c->spd.that.id, &that_buf),
+		    type->name);
+
+		const struct private_key_stuff *pks;
+		bool load_needed;
+		err_t err = find_or_load_private_key_by_ckaid(&pluto_secrets, c->spd.this.ckaid,
+							      &pks, &load_needed, logger);
+		if (err != NULL) {
+			ckaid_buf ckb;
+			log_message(RC_LOG_SERIOUS, logger,
+				    "private key matching CKAID '%s' not found: %s",
+				    str_ckaid(c->spd.this.ckaid, &ckb), err);
+			return NULL;
+		} else if (load_needed) {
+			/*
+			 * XXX: the private key that was pre-loaded
+			 * during "whack add" may have been deleted
+			 * because all secrets were thrown away.
+			 *
+			 * The real problem is that the connection
+			 * lacks a counted reference to the private
+			 * key.
+			 */
+			ckaid_buf ckb;
+			log_message(RC_LOG|LOG_STREAM/*not-whack-grr*/, logger,
+				    "reloaded private key matching %s CKAID %s",
+				    c->spd.this.leftright, str_ckaid(c->spd.this.ckaid, &ckb));
+		}
+
+
+		/*
+		 * If we don't find the right keytype (RSA, ECDSA,
+		 * etc) then best will end up as NULL
+		 */
+		dbg("connection %s's %s private key found in NSS DB using CKAID",
+		    c->name, type->name);
+		return pks;
+	}
+
+	dbg("looking for connection %s's %s private key",
+	    c->name, type->name);
+	struct secret *s = lsw_get_secret(c, type->private_key_kind, true, logger);
 	if (s == NULL) {
-		dbg("no %s private key Found", type->name);
+		dbg("connection %s's %s private key not found",
+		    c->name, type->name);
 		return NULL;
 	}
 
 	const struct private_key_stuff *pks = lsw_get_pks(s);
 	passert(pks != NULL);
 
-	dbg("%s private key found", type->name);
+	dbg("connection %s's %s private key found",
+	    c->name, type->name);
 	return pks;
 }
 
@@ -1002,60 +780,32 @@ void free_remembered_public_keys(void)
 	free_public_keys(&pluto_pubkeys);
 }
 
-err_t add_public_key(const struct id *id, /* ASKK */
-		     enum dns_auth_level dns_auth_level,
-		     const struct pubkey_type *type,
-		     const chunk_t *key,
-		     struct pubkey_list **head)
-{
-	struct pubkey *pk = alloc_thing(struct pubkey, "pubkey");
-
-	/* first: algorithm-specific decoding of key chunk */
-	type->unpack_pubkey_content(&pk->u, *key);
-	pk->id = *id;
-	pk->dns_auth_level = dns_auth_level;
-	pk->type = type;
-	pk->until_time = realtime_epoch;
-	pk->issuer = EMPTY_CHUNK;
-
-	install_public_key(pk, head);
-	return NULL;
-}
-
-err_t add_ipseckey(const struct id *id,
-		   enum dns_auth_level dns_auth_level,
-		   const struct pubkey_type *type,
-		   uint32_t ttl, uint32_t ttl_used,
-		   const chunk_t *key,
-		   struct pubkey_list **head)
-{
-	struct pubkey *pk = alloc_thing(struct pubkey, "ipseckey publickey");
-
-	/* first: algorithm-specific decoding of key chunk */
-	type->unpack_pubkey_content(&pk->u, *key);
-	pk->dns_ttl = ttl;
-	pk->installed_time = realnow();
-	pk->until_time = realtimesum(pk->installed_time, deltatime(ttl_used));
-	pk->id = *id;
-	pk->dns_auth_level = dns_auth_level;
-	pk->type = type;
-	pk->issuer = EMPTY_CHUNK; /* ipseckey has no issuer */
-
-	install_public_key(pk, head);
-	return NULL;
-}
-
 /*
  *  list all public keys in the chained list
  */
-void list_public_keys(struct fd *whackfd, bool utc, bool check_pub_keys)
+void list_public_keys(struct show *s, bool utc, bool check_pub_keys)
 {
 	struct pubkey_list *p = pluto_pubkeys;
 
 	if (!check_pub_keys) {
-		whack_comment(whackfd, " ");
-		whack_comment(whackfd, "List of Public Keys:");
-		whack_comment(whackfd, " ");
+		/*
+		 * XXX: when there are no keys, the tests expect the
+		 * title with blank lines either side. Using the
+		 * current show_separator() would suppress that.  But
+		 * should this change, or should show_separator()
+		 * change to always wrap output in blank lines?
+		 */
+#if 0
+		show_separator(s);
+#else
+		show_comment(s, " ");
+#endif
+		show_comment(s, "List of Public Keys:");
+#if 0
+		show_separator(s);
+#else
+		show_comment(s, " ");
+#endif
 	}
 
 	while (p != NULL) {
@@ -1071,42 +821,41 @@ void list_public_keys(struct fd *whackfd, bool utc, bool check_pub_keys)
 
 			if (!check_pub_keys ||
 			    !startswith(check_expiry_msg, "ok")) {
-				LSWLOG_WHACK(RC_COMMENT, buf) {
-					lswlog_realtime(buf, key->installed_time, utc);
-					lswlogs(buf, ", ");
+				SHOW_JAMBUF(RC_COMMENT, s, buf) {
+					jam_realtime(buf, key->installed_time, utc);
+					jam(buf, ", ");
 					switch (key->type->alg) {
 					case PUBKEY_ALG_RSA:
-						lswlogf(buf, "%4d RSA Key %s",
-							8 * key->u.rsa.k,
-							key->u.rsa.keyid);
+						jam(buf, "%4d RSA Key %s",
+						    8 * key->u.rsa.k,
+						    key->u.rsa.keyid);
 						break;
 					case PUBKEY_ALG_ECDSA:
-						lswlogf(buf, "%4d ECDSA Key %s",
-							8 * key->u.ecdsa.k,
-							key->u.ecdsa.keyid);
+						jam(buf, "%4d ECDSA Key %s",
+						    8 * key->u.ecdsa.k,
+						    key->u.ecdsa.keyid);
 						break;
 					default:
 						bad_case(key->type->alg);
 					}
-					lswlogf(buf, " (%s private key), until ",
-						(has_private_rawkey(key) ? "has" : "no"));
-					lswlog_realtime(buf, key->until_time, utc);
-					lswlogf(buf, " %s", check_expiry_msg);
+					jam(buf, " (%s private key), until ",
+					    (lsw_has_private_rawkey(pluto_secrets, key) ? "has" : "no"));
+					jam_realtime(buf, key->until_time, utc);
+					jam(buf, " %s", check_expiry_msg);
 				}
 
 				/* XXX could be ikev2_idtype_names */
 				id_buf idb;
 
-				whack_comment(whackfd, "       %s '%s'",
-					enum_show(&ike_idtype_names,
-						    key->id.kind),
-					str_id(&key->id, &idb));
+				show_comment(s, "       %s '%s'",
+					     enum_show(&ike_idtype_names,
+						       key->id.kind),
+					     str_id(&key->id, &idb));
 
 				if (key->issuer.len > 0) {
 					dn_buf b;
-					whack_comment(whackfd,
-						  "       Issuer '%s'",
-						  str_dn(key->issuer, &b));
+					show_comment(s, "       Issuer '%s'",
+						     str_dn(key->issuer, &b));
 				}
 			}
 			break;
@@ -1118,87 +867,37 @@ void list_public_keys(struct fd *whackfd, bool utc, bool check_pub_keys)
 	}
 }
 
-err_t load_nss_cert_secret(CERTCertificate *cert)
+err_t preload_private_key_by_cert(const struct cert *cert, bool *load_needed, struct logger *logger)
 {
 	threadtime_t start = threadtime_start();
-	err_t err;
-	if (cert == NULL) {
-		err = "NSS cert not found";
-	} else {
-		switch (nss_cert_key_kind(cert)) {
-		case PKK_RSA:
-			err = lsw_add_rsa_secret(&pluto_secrets, cert);
-			break;
-		case PKK_ECDSA:
-			err = lsw_add_ecdsa_secret(&pluto_secrets, cert);
-			break;
-		default:
-			err = "NSS cert not supported";
-			break;
-		}
-	}
+	const struct private_key_stuff *pks;
+	err_t err = find_or_load_private_key_by_cert(&pluto_secrets, cert,
+						     &pks, load_needed, logger);
 	threadtime_stop(&start, SOS_NOBODY, "%s() loading private key %s", __func__,
-			cert->nickname);
+			cert->u.nss_cert->nickname);
 	return err;
 }
 
-static bool rsa_pubkey_ckaid_matches(struct pubkey *pubkey, char *buf, size_t buflen)
+err_t preload_private_key_by_ckaid(const ckaid_t *ckaid, bool *load_needed, struct logger *logger)
 {
-	if (pubkey->u.rsa.n.ptr == NULL) {
-		dbg("RSA pubkey with NULL modulus");
-		return FALSE;
-	}
-	SECItem modulus = {
-		.type = siBuffer,
-		.len = pubkey->u.rsa.n.len,
-		.data = pubkey->u.rsa.n.ptr,
-	};
-	SECItem *pubkey_ckaid = PK11_MakeIDFromPubKey(&modulus);
-	if (pubkey_ckaid == NULL) {
-		dbg("RSA pubkey incomputable CKAID");
-		return FALSE;
-	}
-	LSWDBGP(DBG_CONTROL, buf) {
-		lswlogs(buf, "comparing ckaid with: ");
-		lswlog_nss_secitem(buf, pubkey_ckaid);
-	}
-	bool eq = pubkey_ckaid->len == buflen &&
-		  memcmp(pubkey_ckaid->data, buf, buflen) == 0;
-	SECITEM_FreeItem(pubkey_ckaid, PR_TRUE);
-	return eq;
+	threadtime_t start = threadtime_start();
+	const struct private_key_stuff *pks;
+	err_t err = find_or_load_private_key_by_ckaid(&pluto_secrets, ckaid,
+						      &pks, load_needed, logger);
+	threadtime_stop(&start, SOS_NOBODY, "%s() loading private key using CKAID", __func__);
+	return err;
 }
 
-struct pubkey *get_pubkey_with_matching_ckaid(const char *ckaid)
+const struct pubkey *find_pubkey_by_ckaid(const char *ckaid)
 {
-	/* convert hex string ckaid to binary bin */
-	size_t binlen = (strlen(ckaid) + 1) / 2;
-	char *bin = alloc_bytes(binlen, "ckaid");
-	const char *ugh = ttodata(ckaid, 0, 16, bin, binlen, &binlen);
-	if (ugh != NULL) {
-		pfree(bin);
-		/* should have been rejected by whack? */
-		libreswan_log("invalid hex CKAID '%s': %s", ckaid, ugh);
-		return NULL;
-	}
-	DBG(DBG_CONTROL,
-	    DBG_dump("looking for pubkey with CKAID that matches", bin, binlen));
-
-	struct pubkey_list *p;
-	for (p = pluto_pubkeys; p != NULL; p = p->next) {
+	for (struct pubkey_list *p = pluto_pubkeys; p != NULL; p = p->next) {
 		DBG_log("looking at a PUBKEY");
 		struct pubkey *key = p->key;
-		switch (key->type->alg) {
-		case PUBKEY_ALG_RSA: {
-			if (rsa_pubkey_ckaid_matches(key, bin, binlen)) {
-				dbg("ckaid matching pubkey");
-				pfree(bin);
-				return key;
-			}
-		}
-		default:
-			break;
+		const ckaid_t *key_ckaid = pubkey_ckaid(key);
+		if (ckaid_starts_with(key_ckaid, ckaid)) {
+			dbg("ckaid matching pubkey");
+			return key;
 		}
 	}
-	pfree(bin);
 	return NULL;
 }

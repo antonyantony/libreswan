@@ -24,37 +24,35 @@
  * See:
  * https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
  *
- * Also see socket(IPPROTO_RAW).
+ * Also see ip(7) and socket(IF_INET, SOCK_RAW, protocol).
  */
 
-struct ip_protocol {
+typedef struct ip_protocol {
 	const char *description;
 	const char *prefix;
 	const char *name;
 	unsigned ikev1;
-#if 0
-	/* IKEv2 Security Protocol Identifiers */
-	/* https://www.iana.org/assignments/ikev2-parameters/ikev2-parameters.xhtml#ikev2-parameters-18 */
-	unsigned ikev2;
-#endif
-	/* https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml */
-	unsigned protoid;
-};
+	/*
+	 * https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
+	 *
+	 * IPPROTO_*
+	 */
+	unsigned ipproto;
+	/*
+	 * Using this to encapsulate.
+	 */
+	const struct ip_encap *encap_esp;
+} ip_protocol;
 
+extern const struct ip_protocol ip_protocol_unset;
 extern const struct ip_protocol ip_protocol_icmp;	/* Internet Control Message */
 extern const struct ip_protocol ip_protocol_ipip;	/* IPv4 encapsulation */
+extern const struct ip_protocol ip_protocol_tcp;	/* any host internal protocol */
+extern const struct ip_protocol ip_protocol_udp;	/* any host internal protocol */
 extern const struct ip_protocol ip_protocol_esp;	/* Encapsulated Security Payload */
-extern const struct ip_protocol ip_protocol_ah;	/* Authentication Header */
+extern const struct ip_protocol ip_protocol_ah;		/* Authentication Header */
 extern const struct ip_protocol ip_protocol_comp;	/* IP Payload Compression Protocol */
-extern const struct ip_protocol ip_protocol_int;	/* any host internal protocol */
-
-#if 0
-#               define  SA_ESP  50      /* IPPROTO_ESP */
-#               define  SA_AH   51      /* IPPROTO_AH */
-#               define  SA_IPIP 4       /* IPPROTO_IPIP */
-#               define  SA_COMP 108     /* IPPROTO_COMP */
-#               define  SA_INT  61      /* IANA reserved for internal use */
-#endif
+extern const struct ip_protocol ip_protocol_internal;	/* any host internal protocol */
 
 #if 0
 enum eroute_type {
@@ -68,6 +66,6 @@ enum eroute_type {
 #endif
 
 const struct ip_protocol *protocol_by_prefix(const char  *prefix);
-const struct ip_protocol *protocol_by_protoid(unsigned protoid);
+const struct ip_protocol *protocol_by_ipproto(unsigned protoid);
 
 #endif

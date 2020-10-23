@@ -16,7 +16,7 @@
  */
 
 #include "ip_subnet.h"
-#include "libreswan/passert.h"
+#include "passert.h"
 
 /*
  * rangetosubnet - turn an address range into a subnet, if possible
@@ -83,5 +83,5 @@ ip_subnet *dst;
 	if (i != 0)
 		return "invalid subnet";
 
-	return initsubnet(from, nnet, 'x', dst);
+	return initsubnet(from, nnet, 'x', dst, NULL);
 }

@@ -33,7 +33,8 @@ static bool ike_alg_nss_aead(const struct encrypt_desc *alg,
 			     uint8_t *aad, size_t aad_size,
 			     uint8_t *text_and_tag,
 			     size_t text_size, size_t tag_size,
-			     PK11SymKey *sym_key, bool enc)
+			     PK11SymKey *sym_key, bool enc,
+			     struct logger *logger)
 {
 	/* See pk11aeadtest.c */
 	bool ok = true;
@@ -73,20 +74,16 @@ static bool ike_alg_nss_aead(const struct encrypt_desc *alg,
 					    text_and_tag_size,
 					    text_and_tag, text_size);
 		if (rv != SECSuccess) {
-			LSWLOG(buf) {
-				lswlogf(buf, "NSS: AEAD encryption using %s_%u and PK11_Encrypt() failed",
-					alg->common.fqn, PK11_GetKeyLength(sym_key) * BITS_PER_BYTE);
-				lswlog_nss_error(buf);
-			}
+			log_nss_error(RC_LOG, logger,
+				      "AEAD encryption using %s_%u and PK11_Encrypt() failed",
+				      alg->common.fqn, PK11_GetKeyLength(sym_key) * BITS_PER_BYTE);
 			ok = false;
 		} else if (out_len != text_and_tag_size) {
 			/* should this be a pexpect fail? */
-			LSWLOG_RC(RC_LOG_SERIOUS, buf) {
-				lswlogf(buf, "NSS: AEAD encryption using %s_%u and PK11_Encrypt() failed (output length of %u not the expected %zd)",
-					alg->common.fqn, PK11_GetKeyLength(sym_key) * BITS_PER_BYTE,
-					out_len, text_and_tag_size);
-				lswlog_nss_error(buf);
-			}
+			log_nss_error(RC_LOG_SERIOUS, logger,
+				      "AEAD encryption using %s_%u and PK11_Encrypt() failed (output length of %u not the expected %zd)",
+				      alg->common.fqn, PK11_GetKeyLength(sym_key) * BITS_PER_BYTE,
+				      out_len, text_and_tag_size);
 			ok = false;
 		}
 	} else {
@@ -94,35 +91,31 @@ static bool ike_alg_nss_aead(const struct encrypt_desc *alg,
 					    out_buf, &out_len, text_and_tag_size,
 					    text_and_tag, text_and_tag_size);
 		if (rv != SECSuccess) {
-			LSWLOG(buf) {
-				lswlogf(buf, "NSS: AEAD decryption using %s_%u and PK11_Decrypt() failed",
-					alg->common.fqn, PK11_GetKeyLength(sym_key) * BITS_PER_BYTE);
-				lswlog_nss_error(buf);
-			}
+			log_nss_error(RC_LOG, logger,
+				      "NSS: AEAD decryption using %s_%u and PK11_Decrypt() failed",
+				      alg->common.fqn, PK11_GetKeyLength(sym_key) * BITS_PER_BYTE);
 			ok = false;
 		} else if (out_len != text_size) {
 			/* should this be a pexpect fail? */
-			LSWLOG_RC(RC_LOG_SERIOUS, buf) {
-				lswlogf(buf, "NSS: AEAD decryption using %s_%u and PK11_Decrypt() failed (output length of %u not the expected %zd)",
-					alg->common.fqn, PK11_GetKeyLength(sym_key) * BITS_PER_BYTE,
-					out_len, text_size);
-				lswlog_nss_error(buf);
-			}
+			log_nss_error(RC_LOG_SERIOUS, logger,
+				      "AEAD decryption using %s_%u and PK11_Decrypt() failed (output length of %u not the expected %zd)",
+				      alg->common.fqn, PK11_GetKeyLength(sym_key) * BITS_PER_BYTE,
+				      out_len, text_size);
 			ok = false;
 		}
 	}
 
 	memcpy(text_and_tag, out_buf, out_len);
 	PR_Free(out_buf);
-	freeanychunk(iv);
+	free_chunk_content(&iv);
 
 	return ok;
 }
 
-static void nss_aead_check(const struct encrypt_desc *encrypt)
+static void nss_aead_check(const struct encrypt_desc *encrypt, struct logger *logger)
 {
 	const struct ike_alg *alg = &encrypt->common;
-	pexpect_ike_alg(alg, encrypt->nss.mechanism > 0);
+	pexpect_ike_alg(logger, alg, encrypt->nss.mechanism > 0);
 }
 
 const struct encrypt_ops ike_alg_encrypt_nss_aead_ops = {

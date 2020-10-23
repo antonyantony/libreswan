@@ -9,7 +9,7 @@
  * Copyright (C) 2008-2009 David McCullough <david_mccullough@securecomputing.com>
  * Copyright (C) 2010-2019 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2011 Mika Ilmaranta <ilmis@foobar.fi>
- * Copyright (C) 2012-2019 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2012-2020 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2012 Philippe Vouters <philippe.vouters@laposte.net>
  * Copyright (C) 2013 David McCullough <ucdevel@gmail.com>
  * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
@@ -17,6 +17,7 @@
  * Copyright (C) 2017 Sahana Prasad <sahana.prasad07@gmail.com>
  * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2019 Tuomo Soini <tis@foobar.fi>
+ * Copyright (C) 2020 Yulia Kuzovkova <ukuzovkova@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -52,7 +53,6 @@
 #include "socketwrapper.h"
 #include "constants.h"
 #include "lswlog.h"
-#include "defs.h"
 #include "whack.h"
 #include "ip_address.h"
 #include "ip_info.h"
@@ -76,9 +76,6 @@ static void help(void)
 		"	[--ipv4 | --ipv6] [--tunnelipv4 | --tunnelipv6] \\\n"
 		"	(--host <ip-address> | --id <identity>) \\\n"
 		"	[--ca <distinguished name>] \\\n"
-		"	[--nexthop <ip-address>] \\\n"
-		"	[--client <subnet>] \\\n"
-		"	[--clientprotoport <protocol>/<port>] [--dnskeyondemand] \\\n"
 		"	[--ikeport <port-number>] [--srcip <ip-address>] \\\n"
 		"	[--vtiip <ip-address>/mask] \\\n"
 		"	[--updown <updown>] \\\n"
@@ -113,10 +110,11 @@ static void help(void)
 		"	[--mtu <mtu>] \\\n"
 		"	[--priority <prio>] [--reqid <reqid>] \\\n"
 		"	[--tfc <size>] [--send-no-esp-tfc] \\\n"
-		"	[--ikev1-allow | --ikev2-allow] \\\n"
-		"	[--allow-narrowing] [--sareftrack] [--sarefconntrack] \\\n"
+		"	[--ikev1 | --ikev2] \\\n"
+		"	[--allow-narrowing] \\\n"
 		"	[--ikefrag-allow | --ikefrag-force] [--no-ikepad] \\\n"
 		"	[--esn ] [--no-esn] [--decap-dscp] [--nopmtudisc] [--mobike] \\\n"
+		"	[--tcp <no|yes|fallback>] --tcp-remote-port <port>\\\n"
 #ifdef HAVE_NM
 		"	[--nm-configured] \\\n"
 #endif
@@ -140,12 +138,11 @@ static void help(void)
 		"	[--nflog-group <groupnum>] \\\n"
 		"	[--conn-mark <mark/mask>] [--conn-mark-in <mark/mask>] \\\n"
 		"	[--conn-mark-out <mark/mask>] \\\n"
-		"	[--vti-iface <iface> ] [--vti-routing] [--vti-shared] \\\n"
+		"	[--vti-iface <iface> ] [--vti-routing] [--vti-shared] [--ipsec-interface <num>] \\\n"
 		"	[--initiateontraffic | --pass | --drop | --reject] \\\n"
 		"	[--failnone | --failpass | --faildrop | --failreject] \\\n"
 		"	[--negopass ] \\\n"
 		"	[--donotrekey ] [--reauth ] \\\n"
-		"	[--disablearrivalcheck ] \\\n"
 		"	[--nic-offload ] \\\n"
 		"	--to\n"
 		"\n"
@@ -158,8 +155,7 @@ static void help(void)
 		"rekey: whack (--rekey-ike | --rekey-ipsec) \\\n"
 		"	--name <connection_name> [--asynchronous] \\\n"
 		"\n"
-		"active redirect: whack --redirect [--name <connection_name> | --peer-ip <ip-address>] \\\n"
-		"	--gateway <ip-address>\n"
+		"active redirect: whack [--name <connection_name>] --redirect-to <ip-address(es)> \n"
 		"\n"
 		"opportunistic initiation: whack [--tunnelipv4 | --tunnelipv6] \\\n"
 		"	--oppohere <ip-address> --oppothere <ip-address> \\\n"
@@ -199,6 +195,7 @@ static void help(void)
 		"\n"
 		"status: whack [--status] | [--trafficstatus] | [--globalstatus] | \\\n"
 		"	[--clearstats] | [--shuntstatus] | [--fipsstatus] | [--briefstatus] \n"
+		"	[--showstates] | [--addresspoolstatus]\n"
 		"\n"
 		"refresh dns: whack --ddns\n"
 		"\n"
@@ -308,8 +305,6 @@ enum option_enums {
 	OPT_REKEY_IPSEC,
 
 	OPT_ACTIVE_REDIRECT,
-	OPT_ACTIVE_REDIRECT_PEER,
-	OPT_ACTIVE_REDIRECT_GW,
 
 	OPT_DDOS_BUSY,
 	OPT_DDOS_UNLIMITED,
@@ -320,6 +315,7 @@ enum option_enums {
 	OPT_REREADSECRETS,
 	OPT_REREADCRLS,
 	OPT_FETCHCRLS,
+	OPT_REREADCERTS,
 	OPT_REREADALL,
 
 	OPT_PURGEOCSP,
@@ -330,6 +326,8 @@ enum option_enums {
 	OPT_SHUTDOWN,
 	OPT_TRAFFIC_STATUS,
 	OPT_SHUNT_STATUS,
+	OPT_SHOW_STATES,
+	OPT_ADDRESSPOOL_STATUS,
 	OPT_FIPS_STATUS,
 	OPT_BRIEF_STATUS,
 
@@ -398,9 +396,8 @@ enum option_enums {
 	END_VTIIP,
 	END_AUTHBY,
 	END_UPDOWN,
-	END_TUNDEV,
 
-#define END_LAST  END_TUNDEV	/* last end description*/
+#define END_LAST  END_UPDOWN	/* last end description*/
 
 /* Connection Description options -- segregated */
 
@@ -423,6 +420,7 @@ enum option_enums {
 	CD_VTI_IFACE,
 	CD_VTI_ROUTING,
 	CD_VTI_SHARED,
+	CD_IPSEC_IFACE,
 	CD_TUNNELIPV4,
 	CD_TUNNELIPV6,
 	CD_CONNIPV4,
@@ -452,6 +450,8 @@ enum option_enums {
 	CD_FAKE_STRONGSWAN,
 	CD_MOBIKE,
 	CD_IKE,
+	CD_IKE_TCP,
+	CD_IKE_TCP_REMOTE_PORT,
 	CD_SEND_CA,
 	CD_PFSGROUP,
 	CD_REMOTEPEERTYPE,
@@ -463,7 +463,8 @@ enum option_enums {
 	CD_XAUTHFAIL,
 	CD_NIC_OFFLOAD,
 	CD_ESP,
-#   define CD_LAST CD_ESP	/* last connection description */
+	CD_INTERMEDIATE,
+#   define CD_LAST CD_INTERMEDIATE	/* last connection description */
 
 /*
  * Algorithm options (just because CD_ was full)
@@ -565,9 +566,7 @@ static const struct option long_opts[] = {
 	{ "ike-socket-bufsize", required_argument, NULL, OPT_IKEBUF + OO + NUMERIC_ARG},
 	{ "ike-socket-errqueue-toggle", no_argument, NULL, OPT_IKE_MSGERR + OO },
 
-	{ "redirect", no_argument, NULL, OPT_ACTIVE_REDIRECT + OO },
-	{ "peer-ip", required_argument, NULL, OPT_ACTIVE_REDIRECT_PEER + OO },
-	{ "gateway", required_argument, NULL, OPT_ACTIVE_REDIRECT_GW + OO },
+	{ "redirect-to", required_argument, NULL, OPT_ACTIVE_REDIRECT + OO },
 
 	{ "ddos-busy", no_argument, NULL, OPT_DDOS_BUSY + OO },
 	{ "ddos-unlimited", no_argument, NULL, OPT_DDOS_UNLIMITED + OO },
@@ -577,6 +576,7 @@ static const struct option long_opts[] = {
 
 	{ "rereadsecrets", no_argument, NULL, OPT_REREADSECRETS + OO },
 	{ "rereadcrls", no_argument, NULL, OPT_REREADCRLS + OO }, /* obsolete */
+	{ "rereadcerts", no_argument, NULL, OPT_REREADCERTS + OO },
 	{ "fetchcrls", no_argument, NULL, OPT_FETCHCRLS + OO },
 	{ "rereadall", no_argument, NULL, OPT_REREADALL + OO },
 
@@ -587,8 +587,10 @@ static const struct option long_opts[] = {
 	{ "clearstats", no_argument, NULL, OPT_CLEAR_STATS + OO },
 	{ "trafficstatus", no_argument, NULL, OPT_TRAFFIC_STATUS + OO },
 	{ "shuntstatus", no_argument, NULL, OPT_SHUNT_STATUS + OO },
+	{ "addresspoolstatus", no_argument, NULL, OPT_ADDRESSPOOL_STATUS + OO },
 	{ "fipsstatus", no_argument, NULL, OPT_FIPS_STATUS + OO },
 	{ "briefstatus", no_argument, NULL, OPT_BRIEF_STATUS + OO },
+	{ "showstates", no_argument, NULL, OPT_SHOW_STATES + OO },
 #ifdef HAVE_SECCOMP
 	{ "seccomp-crashtest", no_argument, NULL, OPT_SECCOMP_CRASHTEST + OO },
 #endif
@@ -638,14 +640,16 @@ static const struct option long_opts[] = {
 	{ "vtiip",  required_argument, NULL, END_VTIIP + OO },
 	{ "authby",  required_argument, NULL, END_AUTHBY + OO },
 	{ "updown", required_argument, NULL, END_UPDOWN + OO },
-	{ "tundev", required_argument, NULL, END_TUNDEV + OO + NUMERIC_ARG },
 
 	/* options for a connection description */
 
 	{ "to", no_argument, NULL, CD_TO + OO },
 
+	/* option for cert rotation */
+
 #define PS(o, p)	{ o, no_argument, NULL, CDP_SINGLETON + POLICY_##p##_IX + OO }
 	PS("psk", PSK),
+	PS("intermediate", INTERMEDIATE),
 	/* These require more complicated settings now, done below
 	 * PS("rsasig", RSASIG),
 	 * PS("ecdsa", ECDSA),
@@ -668,8 +672,6 @@ static const struct option long_opts[] = {
 	PS("sha2_truncbug", SHA2_TRUNCBUG), /* backwards compatibility */
 	PS("aggressive", AGGRESSIVE),
 	PS("aggrmode", AGGRESSIVE), /*  backwards compatibility */
-
-	PS("disablearrivalcheck", DISABLEARRIVALCHECK),
 
 	{ "initiateontraffic", no_argument, NULL,
 		CDP_SHUNT +(POLICY_SHUNT_TRAP >> POLICY_SHUNT_SHIFT << AUX_SHIFT) + OO },
@@ -739,6 +741,7 @@ static const struct option long_opts[] = {
 	{ "vti-iface", required_argument, NULL, CD_VTI_IFACE + OO },
 	{ "vti-routing", no_argument, NULL, CD_VTI_ROUTING + OO },
 	{ "vti-shared", no_argument, NULL, CD_VTI_SHARED + OO },
+	{ "ipsec-interface", required_argument, NULL, CD_IPSEC_IFACE + OO + NUMERIC_ARG },
 	{ "sendcert", required_argument, NULL, END_SENDCERT + OO },
 	{ "sendca", required_argument, NULL, CD_SEND_CA + OO },
 	{ "ipv4", no_argument, NULL, CD_CONNIPV4 + OO },
@@ -757,7 +760,7 @@ static const struct option long_opts[] = {
 	{ "ikealg", required_argument, NULL, CD_IKE + OO },
 	{ "pfsgroup", required_argument, NULL, CD_PFSGROUP + OO },
 	{ "esp", required_argument, NULL, CD_ESP + OO },
-	{ "remote_peer_type", required_argument, NULL, CD_REMOTEPEERTYPE + OO },
+	{ "remote-peer-type", required_argument, NULL, CD_REMOTEPEERTYPE + OO },
 	{ "nic-offload", required_argument, NULL, CD_NIC_OFFLOAD + OO},
 
 	{ "rsasig", no_argument, NULL, ALGO_RSASIG + OO },
@@ -773,17 +776,16 @@ static const struct option long_opts[] = {
 	{ "rsa-sha2_512", no_argument, NULL, ALGO_RSA_SHA2_512 + OO },
 
 
-	PS("ikev1-allow", IKEV1_ALLOW),
-	PS("ikev2-allow", IKEV2_ALLOW),
-	PS("ikev2-propose", IKEV2_ALLOW), /* map onto allow */
+	PS("ikev1", IKEV1_ALLOW),
+	PS("ikev1-allow", IKEV1_ALLOW), /* obsolete name */
+	PS("ikev2", IKEV2_ALLOW),
+	PS("ikev2-allow", IKEV2_ALLOW), /* obsolete name */
+	PS("ikev2-propose", IKEV2_ALLOW), /* obsolete, map onto allow */
 
 	PS("allow-narrowing", IKEV2_ALLOW_NARROWING),
 #ifdef XAUTH_HAVE_PAM
 	PS("ikev2-pam-authorize", IKEV2_PAM_AUTHORIZE),
 #endif
-	PS("sareftrack", SAREF_TRACK),
-	PS("sarefconntrack", SAREF_TRACK_CONNTRACK),
-
 	PS("ikefrag-allow", IKE_FRAG_ALLOW),
 	PS("ikefrag-force", IKE_FRAG_FORCE),
 	PS("no-ikepad", NO_IKEPAD),
@@ -795,6 +797,9 @@ static const struct option long_opts[] = {
 	PS("ms-dh-downgrade", MSDH_DOWNGRADE),
 	PS("dns-match-id", DNS_MATCH_ID),
 #undef PS
+
+	{ "tcp", required_argument, NULL, CD_IKE_TCP + OO },
+	{ "tcp-remote-port", required_argument, NULL, CD_IKE_TCP_REMOTE_PORT + OO + NUMERIC_ARG},
 
 #ifdef HAVE_NM
 	{ "nm_configured", no_argument, NULL, CD_NMCONFIGURED + OO }, /* backwards compat */
@@ -833,7 +838,7 @@ static void check_life_time(deltatime_t life, time_t raw_limit,
 	deltatime_t limit = deltatime(raw_limit);
 	deltatime_t mint = deltatimescale(100 + msg->sa_rekey_fuzz, 100, msg->sa_rekey_margin);
 
-	if (deltaless(limit, life)) {
+	if (deltatime_cmp(limit, <, life)) {
 		char buf[200];	/* arbitrary limit */
 
 		snprintf(buf, sizeof(buf),
@@ -843,7 +848,7 @@ static void check_life_time(deltatime_t life, time_t raw_limit,
 			 (long)deltasecs(limit));
 		diag(buf);
 	}
-	if ((msg->policy & POLICY_DONT_REKEY) == LEMPTY && !deltaless(mint, life)) {
+	if ((msg->policy & POLICY_DONT_REKEY) == LEMPTY && !deltatime_cmp(mint, <, life)) {
 		char buf[200];	/* arbitrary limit */
 
 		snprintf(buf, sizeof(buf),
@@ -854,22 +859,6 @@ static void check_life_time(deltatime_t life, time_t raw_limit,
 			 msg->sa_rekey_fuzz,
 			 (long)deltasecs(mint));
 		diag(buf);
-	}
-}
-
-static void update_ports(struct whack_message *m)
-{
-	int port;
-
-	if (m->left.port != 0) {
-		port = htons(m->left.port);
-		setportof(port, &m->left.host_addr);
-		setportof(port, &m->left.client.addr);
-	}
-	if (m->right.port != 0) {
-		port = htons(m->right.port);
-		setportof(port, &m->right.host_addr);
-		setportof(port, &m->right.client.addr);
 	}
 }
 
@@ -889,7 +878,7 @@ static void check_end(struct whack_end *this, struct whack_end *that,
 	}
 
 	/* check protocol */
-	if (this->protocol != that->protocol) {
+	if (this->protoport.protocol != that->protoport.protocol) {
 		diagq("the protocol for leftprotoport and rightprotoport must be the same",
 			NULL);
 	}
@@ -911,7 +900,7 @@ static void send_reply(int sock, char *buf, ssize_t len)
 
 int main(int argc, char **argv)
 {
-	tool_init_log(argv[0]);
+	struct logger *logger = tool_init_log(argv[0]);
 
 	struct whack_message msg;
 	struct whackpacker wp;
@@ -947,7 +936,6 @@ int main(int argc, char **argv)
 	assert(END_LAST - END_FIRST < LELEM_ROOF);
 	assert(CD_LAST - CD_FIRST < LELEM_ROOF);
 	assert(ALGO_LAST - ALGO_FIRST < LELEM_ROOF);
-	assert(IMPAIR_roof_IX <= LELEM_ROOF);
 
 	zero(&msg);	/* ??? pointer fields might not be NULLed */
 
@@ -993,11 +981,18 @@ int main(int argc, char **argv)
 	msg.r_timeout = deltatime(RETRANSMIT_TIMEOUT_DEFAULT);
 	msg.r_interval = deltatime_ms(RETRANSMIT_INTERVAL_DEFAULT_MS);
 
+	msg.active_redirect_dests = NULL;
+
 	msg.addr_family = AF_INET;
 	msg.tunnel_addr_family = AF_INET;
 
 	msg.right.updown = DEFAULT_UPDOWN;
 	msg.left.updown = DEFAULT_UPDOWN;
+
+	msg.iketcp = IKE_TCP_NO;
+	msg.remote_tcpport = NAT_IKE_UDP_PORT;
+
+	msg.xfrm_if_id = UINT32_MAX;
 
 	for (;;) {
 		int long_index;
@@ -1319,28 +1314,8 @@ int main(int argc, char **argv)
 			msg.whack_deleteuser = TRUE;
 			continue;
 
-		case OPT_ACTIVE_REDIRECT:	/* --redirect */
-			msg.active_redirect = TRUE;
-			continue;
-
-		case OPT_ACTIVE_REDIRECT_PEER:	/* --peer-ip */
-			if (!msg.active_redirect)
-				diag("missing --redirect before --peer-ip");
-			diagq(ttoaddr(optarg, 0, msg.addr_family,
-				      &msg.active_redirect_peer), optarg);
-			if (isanyaddr(&msg.active_redirect_peer)) {
-				diagq("peer address isn't valid",
-					optarg);
-			}
-			continue;
-
-		case OPT_ACTIVE_REDIRECT_GW:	/* --gateway */
-			diagq(ttoaddr(optarg, 0, msg.addr_family,
-				      &msg.active_redirect_gw), optarg);
-			if (isanyaddr(&msg.active_redirect_gw)) {
-				diagq("gateway address isn't valid",
-					optarg);
-			}
+		case OPT_ACTIVE_REDIRECT:	/* --redirect-to */
+			msg.active_redirect_dests = strdup(optarg);
 			continue;
 
 		case OPT_DDOS_BUSY:	/* --ddos-busy */
@@ -1369,6 +1344,7 @@ int main(int argc, char **argv)
 
 		case OPT_REREADSECRETS:	/* --rereadsecrets */
 		case OPT_REREADCRLS:    /* --rereadcrls */
+		case OPT_REREADCERTS:    /* --rereadcerts */
 		case OPT_FETCHCRLS:    /* --fetchcrls */
 			msg.whack_reread |= LELEM(c - OPT_REREADSECRETS);
 			continue;
@@ -1405,6 +1381,11 @@ int main(int argc, char **argv)
 			ignore_errors = TRUE;
 			continue;
 
+		case OPT_ADDRESSPOOL_STATUS:	/* --addresspoolstatus */
+			msg.whack_addresspool_status = TRUE;
+			ignore_errors = TRUE;
+			continue;
+
 		case OPT_FIPS_STATUS:	/* --fipsstatus */
 			msg.whack_fips_status = TRUE;
 			ignore_errors = TRUE;
@@ -1415,6 +1396,10 @@ int main(int argc, char **argv)
 			ignore_errors = TRUE;
 			continue;
 
+		case OPT_SHOW_STATES:	/* --showstates */
+			msg.whack_show_states = TRUE;
+			ignore_errors = TRUE;
+			continue;
 #ifdef HAVE_SECCOMP
 		case OPT_SECCOMP_CRASHTEST:	/* --seccomp-crashtest */
 			msg.whack_seccomp_crashtest = TRUE;
@@ -1512,7 +1497,7 @@ int main(int argc, char **argv)
 					 */
 				} else {
 					/*
-					 * We asssume that we have a DNS name.
+					 * We assume that we have a DNS name.
 					 * This logic matches confread.c.
 					 * ??? it would be kind to check
 					 * the syntax.
@@ -1579,20 +1564,18 @@ int main(int argc, char **argv)
 			continue;
 
 		case END_CERT:	/* --cert <path> */
-			if (msg.right.pubkey != NULL)
+			if (msg.right.ckaid != NULL)
 				diag("only one --cert <nickname> or --ckaid <ckaid> allowed");
-			msg.right.pubkey = optarg;	/* decoded by Pluto */
-			msg.right.pubkey_type = WHACK_PUBKEY_CERTIFICATE_NICKNAME;
+			msg.right.cert = optarg;	/* decoded by Pluto */
 			continue;
 
 		case END_CKAID:	/* --ckaid <ckaid> */
-			if (msg.right.pubkey != NULL)
+			if (msg.right.cert != NULL)
 				diag("only one --cert <nickname> or --ckaid <ckaid> allowed");
 			/* try parsing it; the error isn't the most specific */
 			const char *ugh = ttodata(optarg, 0, 16, NULL, 0, NULL);
 			diagq(ugh, optarg);
-			msg.right.pubkey = optarg;	/* decoded by Pluto */
-			msg.right.pubkey_type = WHACK_PUBKEY_CKAID;
+			msg.right.ckaid = optarg;	/* decoded by Pluto */
 			continue;
 
 		case END_CA:	/* --ca <distinguished name> */
@@ -1608,7 +1591,7 @@ int main(int argc, char **argv)
 				diagq("<port-number> must be a number between 1 and 65535",
 					optarg);
 			}
-			msg.right.host_port = opt_whole;
+			msg.right.host_ikeport = opt_whole;
 			continue;
 
 		case END_NEXTHOP:	/* --nexthop <ip-address> */
@@ -1629,14 +1612,8 @@ int main(int argc, char **argv)
 			continue;
 
 		case END_VTIIP:	/* --vtiip <ip-address/mask> */
-			if (strchr(optarg, '/') == NULL)
-				diag("vtiip needs an address/mask value");
-			diagq(ttosubnet(optarg, 0,
-					msg.tunnel_addr_family,
-					'0' /* ip/mask host bits on allowed */,
-					&msg.right.host_vtiip), optarg);
-			/* ttosubnet() sets to lowest subnet address, fixup needed */
-			diagq(tnatoaddr(optarg, strchr(optarg, '/') - optarg, AF_UNSPEC, &msg.right.host_vtiip.addr), optarg);
+			diagq(text_cidr_to_subnet(shunk1(optarg), aftoinfo(msg.tunnel_addr_family),
+						  &msg.right.host_vtiip), optarg);
 			continue;
 
 		/*
@@ -1646,13 +1623,13 @@ int main(int argc, char **argv)
 		case END_AUTHBY:
 			auth_specified = TRUE;
 			if (streq(optarg, "psk"))
-				msg.right.authby = AUTH_PSK;
+				msg.right.authby = AUTHBY_PSK;
 			else if (streq(optarg, "null"))
-				msg.right.authby = AUTH_NULL;
+				msg.right.authby = AUTHBY_NULL;
 			else if (streq(optarg, "rsasig"))
-				msg.right.authby = AUTH_RSASIG;
+				msg.right.authby = AUTHBY_RSASIG;
 			else if (streq(optarg, "ecdsa"))
-				msg.right.authby = AUTH_ECDSA;
+				msg.right.authby = AUTHBY_ECDSA;
 			else diag("authby option is not one of psk, ecdsa, rsasig or null");
 			continue;
 
@@ -1665,7 +1642,8 @@ int main(int argc, char **argv)
 			} else {
 				diagq(ttosubnet(optarg, 0,
 						msg.tunnel_addr_family,
-						'6', &msg.right.client),
+						'6', &msg.right.client,
+						logger),
 					optarg);
 				msg.right.has_client = TRUE;
 			}
@@ -1674,10 +1652,8 @@ int main(int argc, char **argv)
 
 		/* --clientprotoport <protocol>/<port> */
 		case END_CLIENTPROTOPORT:
-			diagq(ttoprotoport(optarg, 0, &msg.right.protocol,
-					   &msg.right.port,
-					   &msg.right.has_port_wildcard),
-			      optarg);
+			diagq(ttoprotoport(optarg, &msg.right.protoport),
+				optarg);
 			continue;
 
 		case END_DNSKEYONDEMAND:	/* --dnskeyondemand */
@@ -1686,10 +1662,6 @@ int main(int argc, char **argv)
 
 		case END_UPDOWN:	/* --updown <updown> */
 			msg.right.updown = optarg;
-			continue;
-
-		case END_TUNDEV:	/* --tundev <mast#> */
-			msg.right.tundev = opt_whole;
 			continue;
 
 		case CD_TO:	/* --to */
@@ -1716,8 +1688,6 @@ int main(int argc, char **argv)
 		case CDP_SINGLETON + POLICY_COMPRESS_IX:
 		case CDP_SINGLETON + POLICY_TUNNEL_IX:	/* --tunnel */
 		case CDP_SINGLETON + POLICY_PFS_IX:	/* --pfs */
-		/* --disablearrivalcheck */
-		case CDP_SINGLETON + POLICY_DISABLEARRIVALCHECK_IX:
 
 		/* --negopass */
 		case CDP_SINGLETON + POLICY_NEGO_PASS_IX:
@@ -1735,9 +1705,9 @@ int main(int argc, char **argv)
 		/* --overlapip */
 		case CDP_SINGLETON + POLICY_OVERLAPIP_IX:
 
-		/* --ikev1-allow */
+		/* --ikev1 */
 		case CDP_SINGLETON + POLICY_IKEV1_ALLOW_IX:
-		/* --ikev2-allow (now also --ikev2-propose) */
+		/* --ikev2 (now also --ikev2-propose) */
 		case CDP_SINGLETON + POLICY_IKEV2_ALLOW_IX:
 
 		/* --allow-narrowing */
@@ -1746,10 +1716,8 @@ int main(int argc, char **argv)
 		/* --mobike */
 		case CDP_SINGLETON + POLICY_MOBIKE_IX:
 
-		/* --sareftrack */
-		case CDP_SINGLETON + POLICY_SAREF_TRACK_IX:
-		/* --sarefconntrack */
-		case CDP_SINGLETON + POLICY_SAREF_TRACK_CONNTRACK_IX:
+		/* --intermediate */
+		case CDP_SINGLETON + POLICY_INTERMEDIATE_IX:
 
 		/* --ikefrag-allow */
 		case CDP_SINGLETON + POLICY_IKE_FRAG_ALLOW_IX:
@@ -1995,6 +1963,17 @@ int main(int argc, char **argv)
 			continue;
 #endif
 
+		case CD_IKE_TCP: /* --tcp */
+			if (streq(optarg, "yes"))
+				msg.iketcp = IKE_TCP_ONLY;
+			else if (streq(optarg, "no"))
+				msg.iketcp = IKE_TCP_NO;
+			else if (streq(optarg, "fallback"))
+				msg.iketcp = IKE_TCP_FALLBACK;
+			else
+				diag("--tcp-options are 'yes', 'no' or 'fallback'");
+			continue;
+
 #ifdef HAVE_LABELED_IPSEC
 		case CD_LABELED_IPSEC:	/* --labeledipsec */
 			msg.labeled_ipsec = TRUE;
@@ -2157,7 +2136,7 @@ int main(int argc, char **argv)
 			continue;
 
 		case END_ADDRESSPOOL:	/* --addresspool */
-			ttorange(optarg, NULL, &msg.right.pool_range);
+			diagq(ttorange(optarg, NULL, &msg.right.pool_range), optarg);
 			continue;
 
 		case CD_MODECFGDNS:	/* --modecfgdns */
@@ -2192,6 +2171,10 @@ int main(int argc, char **argv)
 			continue;
 		case CD_VTI_SHARED:	/* --vti-shared */
 			msg.vti_shared = TRUE;
+			continue;
+
+		case CD_IPSEC_IFACE:      /* --ipsec-interface */
+			msg.xfrm_if_id = opt_whole;
 			continue;
 
 		case CD_XAUTHBY:	/* --xauthby */
@@ -2287,7 +2270,6 @@ int main(int argc, char **argv)
 			 * defined by whack.
 			 */
 			msg.debugging = lmod_clr(msg.debugging, DBG_MASK);
-			msg.impairing = lmod_clr(msg.impairing, IMPAIR_MASK);
 			continue;
 
 		case DBGOPT_ALL:	/* --debug-all (obsolete) */
@@ -2307,7 +2289,6 @@ int main(int argc, char **argv)
 			 */
 			msg.debugging = lmod_clr(msg.debugging, DBG_MASK);
 			msg.debugging = lmod_set(msg.debugging, DBG_ALL);
-			msg.impairing = lmod_clr(msg.impairing, IMPAIR_MASK);
 			continue;
 
 		case DBGOPT_DEBUG:	/* --debug */
@@ -2318,18 +2299,20 @@ int main(int argc, char **argv)
 				fprintf(stderr, "debug options (* included in 'all'):\n");
 				for (long e = next_enum(&debug_names, -1);
 				     e != -1; e = next_enum(&debug_names, e)) {
-					LSWLOG_FILE(stdout, buf) {
+					JAMBUF(buf) {
 						if (LELEM(e) & DBG_ALL) {
-							lswlogs(buf, " *");
+							jam(buf, " *");
 						} else {
-							lswlogs(buf, "  ");
+							jam(buf, "  ");
 						}
-						lswlog_enum_short(buf, &debug_names, e);
+						jam_enum_short(buf, &debug_names, e);
 						const char *help = enum_name(&debug_help, e);
 						if (help != NULL) {
-							lswlogs(buf, ": ");
-							lswlogs(buf, help);
+							jam(buf, ": ");
+							jam_string(buf, help);
 						}
+						fprintf(stderr, PRI_SHUNK"\n",
+							pri_shunk(jambuf_as_shunk(buf)));
 					}
 				}
 				exit(1);
@@ -2344,36 +2327,20 @@ int main(int argc, char **argv)
 		case DBGOPT_NO_IMPAIR:	/* --no-impair */
 		{
 			bool enable = (c == DBGOPT_IMPAIR);
-			if (streq(optarg, "help") || streq(optarg, "?")) {
-				fprintf(stderr, "impair options:\n");
-				for (long e = next_enum(&impair_names, -1);
-				     e != -1; e = next_enum(&impair_names, e)) {
-					LSWLOG_FILE(stdout, buf) {
-						lswlogs(buf, "  ");
-						lswlog_enum_short(buf, &impair_names, e);
-						const char *help = enum_name(&impair_help, e);
-						if (help != NULL) {
-							lswlogs(buf, ": ");
-							lswlogs(buf, help);
-						}
-					}
-				}
-				help_impair("  ");
-				exit(1);
-			} else if (lmod_arg(&msg.impairing, &impair_lmod_info, optarg, enable)) {
-				if (lmod_is_set(msg.impairing, IMPAIR_FORCE_FIPS)) {
-					fprintf(stderr, "whack: invalid -%s-impair '%s' option; must be passed directly to pluto\n",
-						enable ? "" : "-no", optarg);
-					lmod_clr(msg.impairing, IMPAIR_FORCE_FIPS);
-				}
-				if (streq(optarg, "none")) {
-					/* hack to pass 'none' onto new code */
-					passert(parse_impair(optarg, &msg.impairment, enable));
-				}
-			} else if (!parse_impair(optarg, &msg.impairment, enable)) {
-				/* parse_impair() issued the error */
+			realloc_things(msg.impairments, msg.nr_impairments,
+				       msg.nr_impairments+1, "impairments");
+			switch (parse_impair(optarg, &msg.impairments[msg.nr_impairments],
+					     enable, logger)) {
+			case IMPAIR_OK:
+				break;
+			case IMPAIR_HELP:
+				/* parse_impair() printed help */
+				exit(0);
+			case IMPAIR_ERROR:
+				/* parse_impair() printed the error */
 				exit(1);
 			}
+			msg.nr_impairments++;
 			continue;
 		}
 
@@ -2385,7 +2352,7 @@ int main(int argc, char **argv)
 
 	if (msg.policy & POLICY_IKEV2_ALLOW) {
 		if (msg.policy & POLICY_IKEV1_ALLOW) {
-			diag("connection can no longer have --ikev1-allow and --ikev2-allow");
+			diag("connection can no longer have --ikev1 and --ikev2");
 		}
 	} else if (!(msg.policy & POLICY_IKEV1_ALLOW)) {
 		/* no ike version specified, default to IKEv2 */
@@ -2394,9 +2361,9 @@ int main(int argc, char **argv)
 
 	if (msg.policy & POLICY_IKEV1_ALLOW) {
 		if (msg.policy & POLICY_ECDSA)
-			diag("connection cannot specify --ecdsa and --ikev1-allow");
-		if (msg.sighash_policy != LEMPTY)
-			diag("connection cannot specify --ikev1-allow and --ecdsa-sha2 or --rsa-sha2");
+			diag("connection cannot specify --ecdsa and --ikev1");
+		/* delete any inherited sighash_poliyc from --rsasig including sha2 */
+		msg.sighash_policy = LEMPTY;
 	} else {
 		if (msg.policy & POLICY_AGGRESSIVE)
 			diag("connection cannot specify --ikev2 and --aggressive");
@@ -2484,7 +2451,7 @@ int main(int argc, char **argv)
 		} else {
 			/* not just a shunt: a real ipsec connection */
 			if ((msg.policy & POLICY_ID_AUTH_MASK) == LEMPTY &&
-				msg.left.authby == AUTH_NEVER && msg.right.authby == AUTH_NEVER)
+				msg.left.authby == AUTHBY_NEVER && msg.right.authby == AUTHBY_NEVER)
 				diag("must specify connection authentication, eg --rsasig, --psk or --auth-null for non-shunt connection");
 
 			/*
@@ -2534,7 +2501,7 @@ int main(int argc, char **argv)
 
 	if (!(msg.whack_connection || msg.whack_key ||
 	      msg.whack_delete ||msg.whack_deleteid || msg.whack_deletestate ||
-	      msg.whack_deleteuser || msg.active_redirect ||
+	      msg.whack_deleteuser || msg.active_redirect_dests != NULL ||
 	      msg.whack_initiate || msg.whack_oppo_initiate ||
 	      msg.whack_terminate ||
 	      msg.whack_route || msg.whack_unroute || msg.whack_listen ||
@@ -2542,38 +2509,16 @@ int main(int argc, char **argv)
 	      msg.whack_ddos != DDOS_undefined || msg.whack_ddns ||
 	      msg.whack_reread || msg.whack_crash || msg.whack_shunt_status ||
 	      msg.whack_status || msg.whack_global_status || msg.whack_traffic_status ||
+	      msg.whack_addresspool_status ||
 	      msg.whack_fips_status || msg.whack_brief_status || msg.whack_clear_stats || msg.whack_options ||
-	      msg.whack_shutdown || msg.whack_purgeocsp || msg.whack_seccomp_crashtest ||
+	      msg.whack_shutdown || msg.whack_purgeocsp || msg.whack_seccomp_crashtest || msg.whack_show_states ||
 	      msg.whack_rekey_ike || msg.whack_rekey_ipsec))
 		diag("no action specified; try --help for hints");
-
-	/* do the logic for --redirect command */
-	if (msg.active_redirect) {
-		bool redirect_peer_spec = address_is_specified(&msg.active_redirect_peer);
-		bool redirect_gw_spec = address_is_specified(&msg.active_redirect_gw);
-		msg.active_redirect = FALSE;	/* if we pass all the 'tests' we set it back to TRUE */
-		if (msg.name != NULL)
-			if (redirect_peer_spec)
-				diag("can not use both --name <connection_name> and --peer-ip <ip_address>");
-			else if (!redirect_gw_spec)
-				diag("missing --gateway <ip-address>");
-			else
-				msg.active_redirect = TRUE;
-		else
-			if (!redirect_peer_spec)
-				diag("missing [--name <connection_name> | --peer-ip <ip_address>]");
-			else if (!redirect_gw_spec)
-				diag("missing --gateway <ip-address>");
-			else
-				msg.active_redirect = TRUE;
-	}
 
 	if (msg.policy & POLICY_AGGRESSIVE) {
 		if (msg.ike == NULL)
 			diag("cannot specify aggressive mode without ike= to set algorithm");
 	}
-
-	update_ports(&msg);
 
 	/*
 	 * Check for wild values
@@ -2750,7 +2695,7 @@ int main(int argc, char **argv)
 				exit(RC_WHACK_PROBLEM);
 #endif
 			}
-			if (s == RC_PRINT) {
+			if (s == RC_RAW) {
 				ls = lpe + 1; /* skip NNN_ */
 			}
 
@@ -2765,7 +2710,7 @@ int main(int argc, char **argv)
 			switch (s) {
 			/* these logs are informational only */
 			case RC_COMMENT:
-			case RC_PRINT:
+			case RC_RAW:
 			case RC_INFORMATIONAL:
 			case RC_INFORMATIONAL_TRAFFIC:
 			case RC_LOG:

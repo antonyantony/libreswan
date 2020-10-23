@@ -29,11 +29,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include "libreswan/pfkeyv2.h"
-
 #include "sysdep.h"
 #include "constants.h"
-#include "lswlog.h"
 
 #include "defs.h"
 #include "id.h"
@@ -63,7 +60,7 @@
  *
  * XAUTH overloads the RSA/PSK types with four more types that
  * mean RSA or PSK, but also include whether one is negotiating
- * that the inititator will be the XAUTH client, or the responder will be
+ * that the initiator will be the XAUTH client, or the responder will be
  * XAUTH client. It seems unusual that the responder would be the one
  * to undergo XAUTH, since usually it is a roadwarrior to a gateway,
  * however, the gateway may decide it needs to do a new phase 1, for
@@ -393,27 +390,9 @@ static struct db_attr otrsasig1536aes256sha1_xauths[] = {
 	{ .type.oakley = OAKLEY_KEY_LENGTH, .val = 256 },
 };
 
-/* We won't accept this, but by proposing it, we get to test
- * our rejection.  We better not propose it to an IKE daemon
- * that will accept it!
- */
-#ifdef TEST_INDECENT_PROPOSAL
-static struct db_attr otpsk1024des3tiger[] = {
-	{ .type.oakley = OAKLEY_ENCRYPTION_ALGORITHM, .val = OAKLEY_3DES_CBC },
-	{ .type.oakley = OAKLEY_HASH_ALGORITHM, .val = OAKLEY_TIGER },
-	{ .type.oakley = OAKLEY_AUTHENTICATION_METHOD,
-		.val = OAKLEY_PRESHARED_KEY },
-	{ .type.oakley = OAKLEY_GROUP_DESCRIPTION,
-		.val = OAKLEY_GROUP_MODP1024 },
-};
-#endif /* TEST_INDECENT_PROPOSAL */
-
 /* tables of transforms, in preference order (select based on AUTH) */
 
 static struct db_trans IKEv1_oakley_trans_psk[] = {
-#ifdef TEST_INDECENT_PROPOSAL
-	{ AD_TR(KEY_IKE, otpsk1024des3tiger) },
-#endif
 	{ AD_TR(KEY_IKE, otpsk2048aes256sha1) },
 	{ AD_TR(KEY_IKE, otpsk2048aes128sha1) },
 	{ AD_TR(KEY_IKE, otpsk2048des3sha1) },
@@ -479,9 +458,6 @@ static struct db_trans IKEv1_oakley_trans_rsasig_xauths[] = {
  * The order matters, but I don't know what would be best.
  */
 static struct db_trans IKEv1_oakley_trans_pskrsasig[] = {
-#ifdef TEST_INDECENT_PROPOSAL
-	{ AD_TR(KEY_IKE, otpsk1024des3tiger) },
-#endif
 	{ AD_TR(KEY_IKE, otrsasig2048des3sha1) },
 	{ AD_TR(KEY_IKE, otpsk2048des3sha1) },
 	{ AD_TR(KEY_IKE, otrsasig1536des3sha1) },

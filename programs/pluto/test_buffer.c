@@ -14,17 +14,16 @@
 
 #include <stdlib.h>
 
-#include "defs.h"
 #include "constants.h"
 #include "lswalloc.h"
-#include "lswlog.h"
-
-#include "nss.h"
 #include "pk11pub.h"
 
 #include "crypt_symkey.h"
 #include "test_buffer.h"
 #include "ike_alg.h"
+
+#include "defs.h"		/* for so_serial_t */
+#include "log.h"
 
 static chunk_t zalloc_chunk(size_t length, const char *name)
 {
@@ -44,8 +43,8 @@ static chunk_t zalloc_chunk(size_t length, const char *name)
  */
 chunk_t decode_to_chunk(const char *prefix, const char *original)
 {
-	DBG(DBG_CRYPT, DBG_log("decode_to_chunk: %s: input \"%s\"",
-			       prefix, original));
+	DBGF(DBG_CRYPT, "decode_to_chunk: %s: input \"%s\"",
+	     prefix, original);
 	chunk_t chunk;
 	if (startswith(original, "0x")) {
 		chunk = chunk_from_hex(original + strlen("0x"), original);
@@ -53,15 +52,18 @@ chunk_t decode_to_chunk(const char *prefix, const char *original)
 		chunk = zalloc_chunk(strlen(original), original);
 		memcpy(chunk.ptr, original, chunk.len);
 	}
-	DBG(DBG_CRYPT, DBG_dump_hunk("decode_to_chunk: output: ", chunk));
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump_hunk("decode_to_chunk: output: ", chunk);
+	}
 	return chunk;
 }
 
-PK11SymKey *decode_hex_to_symkey(const char *prefix, const char *string)
+PK11SymKey *decode_hex_to_symkey(const char *prefix, const char *string,
+				 struct logger *logger)
 {
 	chunk_t chunk = chunk_from_hex(string, prefix);
-	PK11SymKey *symkey = symkey_from_hunk(prefix, chunk);
-	freeanychunk(chunk);
+	PK11SymKey *symkey = symkey_from_hunk(prefix, chunk, logger);
+	free_chunk_content(&chunk);
 	return symkey;
 }
 
@@ -74,9 +76,8 @@ bool verify_bytes(const char *desc,
 		  const void *actual, size_t actual_size)
 {
 	if (expected_size != actual_size) {
-		DBG(DBG_CRYPT,
-		    DBG_log("verify_chunk: %s: expected length %zd but got %zd",
-			    desc, expected_size, actual_size));
+		DBGF(DBG_CRYPT, "verify_chunk: %s: expected length %zd but got %zd",
+		     desc, expected_size, actual_size);
 		return false;
 	}
 
@@ -86,26 +87,27 @@ bool verify_bytes(const char *desc,
 		uint8_t a = ((const uint8_t*)actual)[i];
 		if (e != a) {
 			/* Caller should issue the real log message.  */
-			DBG(DBG_CRYPT, DBG_log("verify_chunk_data: %s: bytes at %zd differ, expected %02x found %02x",
-					       desc, i, e, a));
+			DBGF(DBG_CRYPT, "verify_chunk_data: %s: bytes at %zd differ, expected %02x found %02x",
+			     desc, i, e, a);
 			return false;
 		}
 	}
-	DBG(DBG_CRYPT, DBG_log("verify_chunk_data: %s: ok", desc));
+	DBGF(DBG_CRYPT, "verify_chunk_data: %s: ok", desc);
 	return true;
 }
 
 /* verify that expected is the same as actual */
-bool verify_symkey(const char *desc, chunk_t expected, PK11SymKey *actual)
+bool verify_symkey(const char *desc, chunk_t expected, PK11SymKey *actual,
+		   struct logger *logger)
 {
 	if (expected.len != sizeof_symkey(actual)) {
 		DBGF(DBG_CRYPT, "%s: expected length %zd but got %zd",
 		     desc, expected.len, sizeof_symkey(actual));
 		return FALSE;
 	}
-	chunk_t chunk = chunk_from_symkey(desc, actual);
+	chunk_t chunk = chunk_from_symkey(desc, actual, logger);
 	bool ok = verify_hunk(desc, expected, chunk);
-	freeanychunk(chunk);
+	free_chunk_content(&chunk);
 	return ok;
 }
 
@@ -113,10 +115,10 @@ bool verify_symkey(const char *desc, chunk_t expected, PK11SymKey *actual)
  * Turn the raw key into SymKey.
  */
 PK11SymKey *decode_to_key(const struct encrypt_desc *encrypt_desc,
-			  const char *encoded_key)
+			  const char *encoded_key, struct logger *logger)
 {
 	chunk_t raw_key = decode_to_chunk("raw_key", encoded_key);
-	PK11SymKey *symkey = encrypt_key_from_hunk("symkey", encrypt_desc, raw_key);
-	freeanychunk(raw_key);
+	PK11SymKey *symkey = encrypt_key_from_hunk("symkey", encrypt_desc, raw_key, logger);
+	free_chunk_content(&raw_key);
 	return symkey;
 }

@@ -20,7 +20,7 @@
 #include "ike_alg_integ.h"
 #include "ike_alg_dh.h"
 #include "ike_alg_dh_ops.h"
-#include "sadb.h"
+#include "lsw-pfkeyv2.h"	/* for SADB_*ALG_* */
 
 /*
  * References for NULL.
@@ -31,7 +31,6 @@
 const struct encrypt_desc ike_alg_encrypt_null =
 {
 	.common = {
-		.name = "null",
 		.fqn = "NULL",
 		.names = "null",
 		.algo_type = IKE_ALG_ENCRYPT,
@@ -61,7 +60,6 @@ const struct encrypt_desc ike_alg_encrypt_null =
  */
 const struct integ_desc ike_alg_integ_none = {
 	.common = {
-		.name = "none",
 		.fqn = "NONE",
 		.names = "none,null",
 		.algo_type = IKE_ALG_INTEG,
@@ -106,7 +104,6 @@ const struct integ_desc ike_alg_integ_none = {
  */
 const struct dh_desc ike_alg_dh_none = {
 	.common = {
-		.name = "NONE",
 		.fqn = "NONE",
 		.names = "none,null,dh0",
 		.algo_type = IKE_ALG_DH,

@@ -11,6 +11,8 @@
  * Copyright (C) 2013-2018 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013-2016 Antony Antony <antony@phenome.org>
  * Copyright (C) 2016, Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2017 Mayank Totale <mtotale@gmail.com>
+ * Copyright (C) 2020, Yulia Kuzovkova <ukuzovkova@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -72,19 +74,15 @@ enum keyword_string_config_field {
  * Indices for .setup.option[], .setup.options_set[]
  */
 enum keyword_numeric_config_field {
-	KBF_FRAGICMP,
-	KBF_HIDETOS,
 	KBF_UNIQUEIDS,
 	KBF_DO_DNSSEC,
 	KBF_LOGTIME,
 	KBF_LOGAPPEND,
 	KBF_LOGIP,
 	KBF_AUDIT_LOG,
-	KBF_IKEPORT,
 	KBF_IKEBUF,
 	KBF_IKE_ERRQUEUE,
 	KBF_PERPEERLOG,
-	KBF_OVERRIDEMTU,
 	KBF_XFRMLIFETIME,
 	KBF_CRL_STRICT,
 	KBF_CRL_CHECKINTERVAL,
@@ -96,11 +94,9 @@ enum keyword_numeric_config_field {
 	KBF_OCSP_CACHE_MAX,
 	KBF_OCSP_METHOD,
 	KBF_CURLTIMEOUT,
-	KBF_NATIKEPORT,
 	KBF_SEEDBITS,
 	KBF_DROP_OPPO_NULL,
 	KBF_KEEPALIVE,
-	KBF_KLIPSDEBUG,
 	KBF_PLUTODEBUG,
 	KBF_NHELPERS,
 	KBF_SHUNTLIFETIME,
@@ -111,6 +107,10 @@ enum keyword_numeric_config_field {
 	KBF_NFLOG_ALL,		/* Enable global nflog device */
 	KBF_DDOS_MODE,		/* set DDOS mode */
 	KBF_SECCOMP,		/* set SECCOMP mode */
+
+	KBF_LISTEN_TCP,		/* listen on TCP port 4500 - default no */
+	KBF_LISTEN_UDP,		/* listen on UDP port 500/4500 - default yes */
+
 	KBF_ROOF
 };
 
@@ -128,8 +128,7 @@ enum keyword_numeric_config_field {
 enum keyword_string_conn_field {
 	KSCF_IP,	/* loose_enum */ /* left/right */
 	KSCF_NEXTHOP,	/* loose_enum */ /* left/right */
-	KSCF_RSAKEY1,	/* loose_enum */ /* left/right */
-	KSCF_RSAKEY2,	/* loose_enum */ /* left/right */
+	KSCF_RSASIGKEY,	/* loose_enum */ /* left/right */
 	KSCF_XFRM_IF_ID,
 		KSCF_last_loose = KSCF_XFRM_IF_ID,
 
@@ -182,8 +181,7 @@ enum keyword_string_conn_field {
 enum keyword_numeric_conn_field {
 	KNCF_IP		= KSCF_IP,	/* loose_enum */ /* left/right */
 	KNCF_NEXTHOP	= KSCF_NEXTHOP,	/* loose_enum */ /* left/right */
-	KNCF_RSAKEY1	= KSCF_RSAKEY1,	/* loose_enum */ /* left/right */
-	KNCF_RSAKEY2	= KSCF_RSAKEY2,	/* loose_enum */ /* left/right */
+	KNCF_RSASIGKEY	= KSCF_RSASIGKEY,	/* loose_enum */ /* left/right */
 	KNCF_XFRM_IF_ID =  KSCF_XFRM_IF_ID,
 
 	KNCF_XAUTHSERVER,	/* left/right */
@@ -192,7 +190,9 @@ enum keyword_numeric_conn_field {
 	KNCF_MODECONFIGCLIENT,	/* left/right */
 	KNCF_CAT,	/* left/right */
 	KNCF_SENDCERT,	/* left/right */
+	KNCF_IKEPORT,		/* left/right: IKE Port that must be used */
 	KNCF_AUTH,	/* left/right */
+
 		KNCF_last_leftright = KNCF_AUTH,
 
 	KNCF_FIREWALL,
@@ -231,7 +231,6 @@ enum keyword_numeric_conn_field {
 	KNCF_COMPRESS,
 	KNCF_KEYINGTRIES,
 	KNCF_REPLAY_WINDOW,
-	KNCF_ARRIVALCHECK,
 	KNCF_IKELIFETIME,
 	KNCF_RETRANSMIT_TIMEOUT,
 	KNCF_RETRANSMIT_INTERVAL_MS,
@@ -240,6 +239,7 @@ enum keyword_numeric_conn_field {
 	KNCF_ENCAPS,
 	KNCF_IKEv2,
 	KNCF_PPK,
+	KNCF_INTERMEDIATE,	/* enable support for Intermediate Exchange */
 	KNCF_ESN,
 	KNCF_DECAP_DSCP,
 	KNCF_NOPMTUDISC,
@@ -269,6 +269,8 @@ enum keyword_numeric_conn_field {
 	KNCF_VTI_ROUTING,	/* let updown do routing into VTI device */
 	KNCF_VTI_SHARED,	/* VTI device is shared - enable checks and disable cleanup */
 	KNCF_NIC_OFFLOAD,	/* xfrm offload to network device */
+	KNCF_TCP,		/* TCP (yes/no/fallback) */
+	KNCF_REMOTE_TCPPORT,	/* TCP remote port - default 4500  */
 
 	KNCF_ROOF
 };
@@ -355,7 +357,7 @@ enum keyword_type {
 	kt_list,                /* a set of values from a set of key words */
 	kt_lset,		/* a set of values from an enum name */
 	kt_loose_enum,          /* either a string, or a %-prefixed enum */
-	kt_rsakey,              /* a key, or set of values */
+	kt_rsasigkey,           /* a public key, or set of values */
 	kt_number,              /* an integer */
 	kt_time,                /* a number representing time */
 	kt_percent,             /* a number representing percentage */

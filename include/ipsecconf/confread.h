@@ -5,7 +5,7 @@
  * Copyright (C) 2003-2006 Michael Richardson <mcr@xelerance.com>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013 Antony Antony <antony@phenome.org>
- * Coprright (C) 2016, Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2016, Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2019 D. Hugh Redelmeier <hugh@mimosa.com>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -30,12 +30,10 @@
 #include "err.h"
 #include "ip_range.h"
 #include "ip_subnet.h"
+#include "ip_protoport.h"
 #include "lswcdefs.h"
 
-#ifndef _LIBRESWAN_H
-#include <libreswan.h>
-#include "constants.h"
-#endif
+struct logger;
 
 /* define an upper limit to number of times also= can be used */
 #define ALSO_LIMIT 32
@@ -56,25 +54,25 @@ typedef enum keyword_set int_set[KEY_NUMERIC_ROOF];
  */
 
 struct starter_end {
-	sa_family_t addr_family;
+	const struct ip_info *host_family;
 	enum keyword_host addrtype;
 	enum keyword_host nexttype;
-	ip_address addr, nexthop, sourceip;
+	ip_address addr;
+	ip_address nexthop;
+	ip_address sourceip;
 	bool has_client;
-	ip_subnet subnet, vti_ip;
-	ip_subnet  ifaceip;
+	ip_subnet subnet;
+	ip_subnet vti_ip;
+	ip_subnet ifaceip;
 	char *iface;
 	char *id;
 	enum keyword_authby authby;
 
-	enum keyword_pubkey rsakey1_type, rsakey2_type;
-	char *rsakey1;
-	char *rsakey2;
-	uint16_t port;
-	uint8_t protocol;
-	bool has_client_wildcard;
+	ip_protoport protoport;
+
+	enum keyword_pubkey rsasigkey_type;
+	char *rsasigkey;
 	bool key_from_DNS_on_demand;
-	bool has_port_wildcard;
 	char *virt;
 	char *certx;
 	char *ckaid;
@@ -176,7 +174,8 @@ extern void parser_free_conf(struct config_parsed *cfg);
 extern struct starter_config *confread_load(const char *file,
 					    starter_errors_t *perrl,
 					    const char *ctlsocket,
-					    bool setuponly);
+					    bool setuponly,
+					    struct logger *logger);
 
 extern void confread_free(struct starter_config *cfg);
 

@@ -18,7 +18,6 @@
 #include <signal.h>		/* for kill() and signals in general */
 
 #include "constants.h"
-#include "lswlog.h"
 #include "defs.h"
 #include "log.h"
 #include "xauth.h"
@@ -67,8 +66,9 @@ void xauth_pam_abort(struct state *st)
 	struct xauth *xauth = st->st_xauth;
 
 	if (xauth == NULL) {
-		PEXPECT_LOG("PAM: #%lu: main-process: no process to abort (already aborted?)",
-			    st->st_serialno);
+		pexpect_fail(st->st_logger, HERE,
+			     "PAM: #%lu: main-process: no process to abort (already aborted?)",
+			     st->st_serialno);
 	} else {
 		st->st_xauth = NULL; /* aborted */
 		pstats_xauth_aborted++;
@@ -99,7 +99,7 @@ void xauth_pam_abort(struct state *st)
 static pluto_fork_cb pam_callback; /* type assertion */
 
 static void pam_callback(struct state *st,
-			 struct msg_digest **mdp,
+			 struct msg_digest *md,
 			 int status, void *arg)
 {
 	struct xauth *xauth = arg;
@@ -107,18 +107,15 @@ static void pam_callback(struct state *st,
 	pstats_xauth_stopped++;
 
 	bool success = WIFEXITED(status) && WEXITSTATUS(status) == 0;
-	LSWDBGP(DBG_XAUTH, buf) {
-		lswlogf(buf, "PAM: #%lu: main-process cleaning up PAM-process for user '%s' result %s time elapsed ",
-			xauth->serialno,
-			xauth->ptarg.name,
-			success ? "SUCCESS" : "FAILURE");
-		lswlog_deltatime(buf, monotimediff(mononow(), xauth->start_time));
-		if (st == NULL) {
-			lswlogs(buf, " (state deleted)");
-		} else if (st->st_xauth == NULL) {
-			lswlogs(buf, " (aborted)");
-		}
-	}
+	deltatime_buf db;
+	dbg("PAM: #%lu: main-process cleaning up PAM-process for user '%s' result %s time elapsed %s seconds%s",
+	    xauth->serialno,
+	    xauth->ptarg.name,
+	    success ? "SUCCESS" : "FAILURE",
+	    str_deltatime(monotimediff(mononow(), xauth->start_time), &db),
+	    (st == NULL ? " (state deleted)" :
+	     st->st_xauth == NULL ? " (aborted)" :
+	     ""));
 
 	/*
 	 * Try to find the corresponding state.
@@ -128,10 +125,11 @@ static void pam_callback(struct state *st,
 	 */
 	if (st != NULL) {
 		st->st_xauth = NULL; /* all done */
-		libreswan_log("PAM: #%lu: completed for user '%s' with status %s",
-			      xauth->serialno, xauth->ptarg.name,
-			      success ? "SUCCESSS" : "FAILURE");
-		xauth->callback(st, mdp, xauth->ptarg.name, success);
+		log_state(RC_LOG, st,
+			  "PAM: #%lu: completed for user '%s' with status %s",
+			  xauth->serialno, xauth->ptarg.name,
+			  success ? "SUCCESS" : "FAILURE");
+		xauth->callback(st, md, xauth->ptarg.name, success);
 	}
 
 	pfree_xauth(xauth);
@@ -144,15 +142,13 @@ static int pam_child(void *arg)
 {
 	struct xauth *xauth = arg;
 
-	DBG(DBG_XAUTH,
-	    DBG_log("PAM: #%lu: PAM-process authenticating user '%s'",
-		    xauth->serialno,
-		    xauth->ptarg.name));
+	dbg("PAM: #%lu: PAM-process authenticating user '%s'",
+	    xauth->serialno,
+	    xauth->ptarg.name);
 	bool success = do_pam_authentication(&xauth->ptarg);
-	DBG(DBG_XAUTH,
-	    DBG_log("PAM: #%lu: PAM-process completed for user '%s' with result %s",
-		    xauth->serialno, xauth->ptarg.name,
-		    success ? "SUCCESS" : "FAILURE"));
+	dbg("PAM: #%lu: PAM-process completed for user '%s' with result %s",
+	    xauth->serialno, xauth->ptarg.name,
+	    success ? "SUCCESS" : "FAILURE");
 	return success ? 0 : 1;
 }
 
@@ -185,9 +181,8 @@ void xauth_fork_pam_process(struct state *st,
 	xauth->ptarg.c_instance_serial = st->st_connection->instance_serial;
 	xauth->ptarg.atype = atype;
 
-	DBG(DBG_XAUTH,
-	    DBG_log("PAM: #%lu: main-process starting PAM-process for authenticating user '%s'",
-		    xauth->serialno, xauth->ptarg.name));
+	dbg("PAM: #%lu: main-process starting PAM-process for authenticating user '%s'",
+	    xauth->serialno, xauth->ptarg.name);
 	xauth->child = pluto_fork("xauth", xauth->serialno,
 				  pam_child, pam_callback, xauth);
 	if (xauth->child < 0) {

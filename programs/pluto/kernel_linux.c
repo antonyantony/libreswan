@@ -38,9 +38,7 @@
 
 
 #include "sysdep.h"
-#include "socketwrapper.h"
 #include "constants.h"
-#include "lswlog.h"
 
 #include "defs.h"
 #include "rnd.h"
@@ -50,8 +48,6 @@
 #include "timer.h"
 #include "kernel.h"
 #include "kernel_xfrm.h"
-#include "kernel_pfkey.h"
-#include "kernel_nokernel.h"
 #include "packet.h"
 #include "x509.h"
 #include "log.h"
@@ -59,7 +55,9 @@
 #include "whack.h"      /* for RC_LOG_SERIOUS */
 #include "keys.h"
 #include "ip_address.h"
+#include "ip_sockaddr.h"
 #include "ip_info.h"
+#include "iface.h"
 
 #ifdef HAVE_BROKEN_POPEN
 /*
@@ -105,159 +103,6 @@
 static const char *pluto_ifn[10];
 static int pluto_ifn_roof = 0;
 
-struct raw_iface *find_raw_ifaces4(void)
-{
-	int j;	/* index into buf */
-	struct ifconf ifconf;
-	struct ifreq *buf = NULL;	/* for list of interfaces -- arbitrary limit */
-	struct raw_iface *rifaces = NULL;
-	int master_sock = safe_socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);        /* Get a UDP socket */
-	static const int on = TRUE;     /* by-reference parameter; constant, we hope */
-
-	/*
-	 * Current upper bound on number of interfaces.
-	 * Tricky: because this is a static, we won't have to start from
-	 * 64 in subsequent calls.
-	 */
-	static int num = 64;
-
-	/* get list of interfaces with assigned IPv4 addresses from system */
-
-	if (master_sock == -1)
-		EXIT_LOG_ERRNO(errno, "socket() failed in find_raw_ifaces4()");
-
-	/*
-	 * Without SO_REUSEADDR, bind() of master_sock will cause
-	 * 'address already in use?
-	 */
-	if (setsockopt(master_sock, SOL_SOCKET, SO_REUSEADDR,
-			(const void *)&on, sizeof(on)) < 0)
-		EXIT_LOG_ERRNO(errno, "setsockopt(SO_REUSEADDR) in find_raw_ifaces4()");
-
-	/* bind the socket */
-	{
-		ip_address any = address_any(&ipv4_info);
-		ip_endpoint any_ep = endpoint(&any, pluto_port);
-		ip_sockaddr any_sa;
-		size_t any_sa_size = endpoint_to_sockaddr(&any_ep, &any_sa);
-		if (bind(master_sock, &any_sa.sa, any_sa_size) < 0)
-			EXIT_LOG_ERRNO(errno, "bind() failed in %s()", __func__);
-	}
-
-	/* a million interfaces is probably the maximum, ever... */
-	for (; num < (1024 * 1024); num *= 2) {
-		/* Get num local interfaces.  See netdevice(7). */
-		ifconf.ifc_len = num * sizeof(struct ifreq);
-
-		struct ifreq *tmpbuf = realloc(buf, ifconf.ifc_len);
-
-		if (tmpbuf == NULL) {
-			free(buf);
-			EXIT_LOG_ERRNO(errno,
-				       "realloc of %d in find_raw_ifaces4()",
-				       ifconf.ifc_len);
-		}
-		buf = tmpbuf;
-		memset(buf, 0xDF, ifconf.ifc_len);	/* stomp */
-		ifconf.ifc_buf = (void *) buf;
-
-		if (ioctl(master_sock, SIOCGIFCONF, &ifconf) == -1)
-			EXIT_LOG_ERRNO(errno,
-				       "ioctl(SIOCGIFCONF) in find_raw_ifaces4()");
-
-		/* if we got back less than we asked for, we have them all */
-		if (ifconf.ifc_len < (int)(sizeof(struct ifreq) * num))
-			break;
-	}
-
-	/* Add an entry to rifaces for each interesting interface. */
-	for (j = 0; (j + 1) * sizeof(struct ifreq) <= (size_t)ifconf.ifc_len;
-	     j++) {
-		struct raw_iface ri;
-		const struct sockaddr_in *rs =
-			(struct sockaddr_in *) &buf[j].ifr_addr;
-		struct ifreq auxinfo;
-
-		/* build a NUL-terminated copy of the rname field */
-		memcpy(ri.name, buf[j].ifr_name, IFNAMSIZ-1);
-		ri.name[IFNAMSIZ-1] = '\0';
-		DBG(DBG_CONTROLMORE,
-		    DBG_log("Inspecting interface %s ", ri.name));
-
-		/* ignore all but AF_INET interfaces */
-		if (rs->sin_family != AF_INET) {
-			DBG(DBG_CONTROLMORE,
-			    DBG_log("Ignoring non AF_INET interface %s ",
-				    ri.name));
-			continue; /* not interesting */
-		}
-
-		/* ignore if our interface names were specified, and this isn't one - for KLIPS/MAST only */
-		if (pluto_ifn_roof != 0 &&
-		    kern_interface == USE_KLIPS) {
-			int i;
-
-			DBG(DBG_CONTROLMORE,
-			    DBG_log("interfaces= specified, applying filter"));
-
-			for (i = 0; i != pluto_ifn_roof; i++)
-				if (streq(ri.name, pluto_ifn[i])) {
-					DBG(DBG_CONTROLMORE,
-					    DBG_log("interface name '%s' found in interfaces= line",
-						    ri.name));
-					break;
-				}
-
-			if (i == pluto_ifn_roof) {
-				DBG(DBG_CONTROLMORE,
-				    DBG_log("interface name '%s' not present in interfaces= line - skipped",
-					    ri.name));
-				continue; /* not found -- skip */
-			}
-		}
-		/* Find out stuff about this interface.  See netdevice(7). */
-		zero(&auxinfo); /* paranoia */
-		memcpy(auxinfo.ifr_name, buf[j].ifr_name, IFNAMSIZ-1);
-		/* auxinfo.ifr_name[IFNAMSIZ-1] already '\0' */
-		if (ioctl(master_sock, SIOCGIFFLAGS, &auxinfo) == -1) {
-			LOG_ERRNO(errno,
-				       "Ignored interface %s - ioctl(SIOCGIFFLAGS) failed in find_raw_ifaces4()",
-				       ri.name);
-			continue; /* happens when using device with label? */
-		}
-		if (!(auxinfo.ifr_flags & IFF_UP)) {
-			DBG(DBG_CONTROLMORE,
-			    DBG_log("Ignored interface %s - it is not up",
-				    ri.name));
-			continue; /* ignore an interface that isn't UP */
-		}
-		if (auxinfo.ifr_flags & IFF_SLAVE) {
-			DBG(DBG_CONTROLMORE,
-			    DBG_log("Ignored interface %s - it is a slave interface",
-				    ri.name));
-			continue; /* ignore slave interfaces; they share IPs with their master */
-		}
-
-		/* ignore unconfigured interfaces */
-		if (rs->sin_addr.s_addr == 0) {
-			DBG(DBG_CONTROLMORE,
-			    DBG_log("Ignored interface %s - it is unconfigured",
-				    ri.name));
-			continue;
-		}
-
-		ri.addr = address_from_in_addr(&rs->sin_addr);
-		ipstr_buf b;
-		dbg("found %s with address %s", ri.name, ipstr(&ri.addr, &b));
-		ri.next = rifaces;
-		rifaces = clone_thing(ri, "struct raw_iface");
-	}
-
-	free(buf);	/* was allocated via realloc() */
-	close(master_sock);
-	return rifaces;
-}
-
 static int cmp_iface(const void *lv, const void *rv)
 {
 	const struct raw_iface *const *ll = lv;
@@ -272,9 +117,9 @@ static int cmp_iface(const void *lv, const void *rv)
 		return i;
 	}
 	/* loopback=0 < addr=1 < any=2 < invalid */
-#define SCORE(I) (address_is_loopback(&I->addr) ? 0			\
+#define SCORE(I) (address_eq_loopback(&I->addr) ? 0			\
 		  : address_is_specified(&I->addr) ? 1			\
-		  : address_is_any(&I->addr) ? 2			\
+		  : address_eq_any(&I->addr) ? 2			\
 		  : 3/*invalid*/)
 	i = SCORE(l) - SCORE(r);
 	if (i != 0) {
@@ -336,13 +181,6 @@ struct raw_iface *find_raw_ifaces6(void)
 	 * RTFS: linux-2.2.16/net/ipv6/addrconf.c:iface_proc_info()
 	 *       linux-2.4.9-13/net/ipv6/addrconf.c:iface_proc_info()
 	 *
-	 * Sample from Gerhard's laptop:
-	 *	00000000000000000000000000000001 01 80 10 80       lo
-	 *	30490009000000000000000000010002 02 40 00 80   ipsec0
-	 *	30490009000000000000000000010002 07 40 00 80     eth0
-	 *	fe80000000000000025004fffefd5484 02 0a 20 80   ipsec0
-	 *	fe80000000000000025004fffefd5484 07 0a 20 80     eth0
-	 *
 	 * Each line contains:
 	 * - IPv6 address: 16 bytes, in hex, no punctuation
 	 * - ifindex: 1-4 bytes, in hex
@@ -356,7 +194,7 @@ struct raw_iface *find_raw_ifaces6(void)
 	FILE *proc_sock = fopen(proc_name, "r");
 
 	if (proc_sock == NULL) {
-		DBG(DBG_CONTROL, DBG_log("could not open %s", proc_name));
+		dbg("could not open %s", proc_name);
 	} else {
 		for (;; ) {
 			struct raw_iface ri;

@@ -7,7 +7,7 @@
 #include "lswnss.h"
 #include "lswfips.h"
 #include "lswconf.h"
-
+#include "crypt_symkey.h"		/* for init_crypt_symkey() */
 #include "ike_alg.h"
 #include "proposals.h"
 
@@ -15,7 +15,7 @@ static bool test_proposals = false;
 static bool test_algs = false;
 static bool verbose = false;
 static bool debug = false;
-static bool impair = false;
+static bool impaired = false;
 static enum ike_version ike_version = IKEv2;
 static unsigned parser_version = 0;
 static bool ignore_parser_errors = false;
@@ -32,12 +32,13 @@ enum expect { FAIL = false, PASS = true, COUNT, };
 			.parser_version = parser_version,		\
 			.alg_is_ok = OK,				\
 			.pfs = pfs,					\
-			.warning = warning,				\
+			.logger_rc_flags = ERROR_STREAM|RC_LOG,		\
+			.logger = logger,				\
 			.check_pfs_vs_dh = CHECK,			\
 			.ignore_parser_errors = ignore_parser_errors,	\
 		};							\
 		printf("algparse ");					\
-		if (impair) {						\
+		if (impaired) {						\
 			printf("-impair ");				\
 		}							\
 		if (parser_version > 0) {				\
@@ -65,11 +66,13 @@ enum expect { FAIL = false, PASS = true, COUNT, };
 		struct proposals *proposals =				\
 			proposals_from_str(parser, algstr);		\
 		if (proposals != NULL) {				\
-			pexpect(parser->error[0] == '\0');		\
+			pexpect(parser->diag == NULL);			\
 			FOR_EACH_PROPOSAL(proposals, proposal) {	\
-				LSWLOG_FILE(stdout, log) {		\
-					lswlogf(log, "\t");		\
-					fmt_proposal(log, proposal);	\
+				JAMBUF(buf) {				\
+					jam(buf, "\t");			\
+					jam_proposal(buf, proposal);	\
+					fprintf(stdout, PRI_SHUNK"\n",	\
+						pri_shunk(jambuf_as_shunk(buf))); \
 				}					\
 			}						\
 			proposals_delref(&proposals);			\
@@ -82,8 +85,8 @@ enum expect { FAIL = false, PASS = true, COUNT, };
 					algstr == NULL ? "" : algstr);	\
 			}						\
 		} else {						\
-			pexpect(parser->error[0]);			\
-			printf("\tERROR: %s\n", parser->error);		\
+			pexpect(parser->diag != NULL);			\
+			printf("\tERROR: %s\n", str_diag(parser->diag)); \
 			if (expected == PASS) {				\
 				failures++;				\
 				fprintf(stderr,				\
@@ -100,20 +103,6 @@ enum expect { FAIL = false, PASS = true, COUNT, };
 	}
 
 /*
- * Dump warnings to stdout.
- */
-static int warning(const char *fmt, ...)
-{
-	printf("\tWARNING: ");
-	va_list ap;
-	va_start(ap, fmt);
-	vprintf(fmt, ap);
-	va_end(ap);
-	printf("\n");
-	return 0;
-}
-
-/*
  * Kernel not available so fake it.
  */
 static bool kernel_alg_is_ok(const struct ike_alg *alg)
@@ -127,22 +116,25 @@ static bool kernel_alg_is_ok(const struct ike_alg *alg)
 	}
 }
 
-static void esp(enum expect expected, const char *algstr)
+#define esp(EXPECTED, ALGSTR) test_esp(EXPECTED, ALGSTR, logger)
+static void test_esp(enum expect expected, const char *algstr, struct logger *logger)
 {
 	CHECK(true, esp, kernel_alg_is_ok);
 }
 
-static void ah(enum expect expected, const char *algstr)
+#define ah(EXPECTED, ALGSTR) test_ah(EXPECTED, ALGSTR, logger)
+static void test_ah(enum expect expected, const char *algstr, struct logger *logger)
 {
 	CHECK(true, ah, kernel_alg_is_ok);
 }
 
-static void ike(enum expect expected, const char *algstr)
+#define ike(EXPECTED, ALGSTR) test_ike(EXPECTED, ALGSTR, logger)
+static void test_ike(enum expect expected, const char *algstr, struct logger *logger)
 {
 	CHECK(false, ike, ike_alg_is_ike);
 }
 
-typedef void (protocol_t)(enum expect expected, const char *);
+typedef void (protocol_t)(enum expect expected, const char *, struct logger *logger);
 
 struct protocol {
 	const char *name;
@@ -150,33 +142,33 @@ struct protocol {
 };
 
 const struct protocol protocols[] = {
-	{ "ike", ike, },
-	{ "ah", ah, },
-	{ "esp", esp, },
+	{ "ike", test_ike, },
+	{ "ah", test_ah, },
+	{ "esp", test_esp, },
 };
 
-static void all(const char *algstr)
+static void all(const char *algstr, struct logger *logger)
 {
 	for (const struct protocol *protocol = protocols;
 	     protocol < protocols + elemsof(protocols);
 	     protocol++) {
-		protocol->parser(COUNT, algstr);
+		protocol->parser(COUNT, algstr, logger);
 	}
 }
 
-static void test_proposal(const char *arg)
+static void test_proposal(const char *arg, struct logger *logger)
 {
 	const char *eq = strchr(arg, '=');
 	for (const struct protocol *protocol = protocols;
 	     protocol < protocols + elemsof(protocols);
 	     protocol++) {
 		if (streq(arg, protocol->name)) {
-			protocol->parser(COUNT, NULL);
+			protocol->parser(COUNT, NULL, logger);
 			return;
 		}
 		if (startswith(arg, protocol->name) &&
 		    arg + strlen(protocol->name) == eq) {
-			protocol->parser(COUNT, eq + 1);
+			protocol->parser(COUNT, eq + 1, logger);
 			return;
 		}
 	}
@@ -184,10 +176,10 @@ static void test_proposal(const char *arg)
 		fprintf(stderr, "unrecognized PROTOCOL in '%s'", arg);
 		exit(1);
 	}
-	all(arg);
+	all(arg, logger);
 }
 
-static void test(void)
+static void test(struct logger *logger)
 {
 	/*
 	 * esp=
@@ -342,8 +334,8 @@ static void test(void)
 	esp(true, "null_auth_aes_gmac_256-null;modp8192"); /* long */
 #ifdef USE_3DES
 # ifdef USE_SHA1
-	esp(true, "3des-sha1;modp8192"); /* allow ';' when unambigious */
-	esp(true, "3des-sha1-modp8192"); /* allow '-' when unambigious */
+	esp(true, "3des-sha1;modp8192"); /* allow ';' when unambiguous */
+	esp(true, "3des-sha1-modp8192"); /* allow '-' when unambiguous */
 # endif
 #endif
 #ifdef USE_AES
@@ -374,19 +366,19 @@ static void test(void)
 	/* ESP tests that should fail */
 	/* So these do not require ifdef's to prevent bad exit code */
 
-	esp(impair, "3des168-sha1"); /* wrong keylen */
-	esp(impair, "3des-null"); /* non-null integ */
-	esp(impair, "aes128-null"); /* non-null-integ */
-	esp(impair, "aes224-sha1"); /* wrong keylen */
-	esp(impair, "aes-224-sha1"); /* wrong keylen */
+	esp(impaired, "3des168-sha1"); /* wrong keylen */
+	esp(impaired, "3des-null"); /* non-null integ */
+	esp(impaired, "aes128-null"); /* non-null-integ */
+	esp(impaired, "aes224-sha1"); /* wrong keylen */
+	esp(impaired, "aes-224-sha1"); /* wrong keylen */
 	esp(false, "aes0-sha1"); /* wrong keylen */
 	esp(false, "aes-0-sha1"); /* wrong keylen */
-	esp(impair, "aes512-sha1"); /* wrong keylen */
+	esp(impaired, "aes512-sha1"); /* wrong keylen */
 	esp(false, "aes-sha1555"); /* unknown integ */
-	esp(impair, "camellia666-sha1"); /* wrong keylen */
+	esp(impaired, "camellia666-sha1"); /* wrong keylen */
 	esp(false, "blowfish"); /* obsoleted */
 	esp(false, "des-sha1"); /* obsoleted */
-	esp(impair, "aes_ctr666"); /* bad key size */
+	esp(impaired, "aes_ctr666"); /* bad key size */
 	esp(false, "aes128-sha2_128"); /* _128 does not exist */
 	esp(false, "aes256-sha2_256-4096"); /* double keysize */
 	esp(false, "aes256-sha2_256-128"); /* now what?? */
@@ -395,9 +387,9 @@ static void test(void)
 	esp(false, "aes-sah1"); /* should get rejected */
 	esp(false, "id3"); /* should be rejected; idXXX removed */
 	esp(false, "aes-id3"); /* should be rejected; idXXX removed */
-	esp(impair, "aes_gcm-md5"); /* AEAD must have auth null */
+	esp(impaired, "aes_gcm-md5"); /* AEAD must have auth null */
 	esp(false, "mars"); /* support removed */
-	esp(impair, "aes_gcm-16"); /* don't parse as aes_gcm_16 */
+	esp(impaired, "aes_gcm-16"); /* don't parse as aes_gcm_16 */
 	esp(false, "aes_gcm-0"); /* invalid keylen */
 	esp(false, "aes_gcm-123456789012345"); /* huge keylen */
 	esp(false, "3des-sha1;dh22"); /* support for dh22 removed */
@@ -443,21 +435,20 @@ static void test(void)
 #endif
 #ifdef USE_SHA1
 	ah(true, "sha1-modp8192,sha1-modp8192,sha1-modp8192"); /* suppress duplicates */
-
-	ah(impair, "aes-sha1");
+	ah(impaired, "aes-sha1");
 #endif
 	ah(false, "vanityhash1");
 #ifdef USE_AES
-	ah(impair, "aes_gcm_c-256");
+	ah(impaired, "aes_gcm_c-256");
 #endif
 	ah(false, "id3"); /* should be rejected; idXXX removed */
 #ifdef USE_3DES
-	ah(impair, "3des");
+	ah(impaired, "3des");
 #endif
-	ah(impair, "null");
+	ah(impaired, "null");
 #ifdef USE_AES
-	ah(impair, "aes_gcm");
-	ah(impair, "aes_ccm");
+	ah(impaired, "aes_gcm");
+	ah(impaired, "aes_ccm");
 #endif
 	ah(false, "ripemd"); /* support removed */
 
@@ -473,15 +464,73 @@ static void test(void)
 	ike(true, "3des;dh21");
 	ike(true, "3des-sha1;dh21");
 	ike(true, "3des-sha1-ecp_521");
-	ike(ike_version == IKEv2, "aes_gcm");
-	ike(true, "aes-sha1-modp8192,aes-sha1-modp8192,aes-sha1-modp8192"); /* suppress duplicates */
+	ike(ike_version == IKEv2, "3des+aes");
 	ike(false, "aes;none");
 	ike(false, "id2"); /* should be rejected; idXXX removed */
 	ike(false, "3des-id2"); /* should be rejected; idXXX removed */
 	ike(false, "aes_ccm"); /* ESP/AH only */
-	ike(impair, "aes_gcm-sha1-none-modp2048");
-	ike(impair, "aes_gcm+aes_gcm-sha1-none-modp2048");
+
+	/* quads */
+
+	ike(false, "aes-sha1-sha2-ecp_521");
+	ike(false, "aes-sha2-sha2;ecp_521");
+	/* fqn */
+	ike(ike_version == IKEv2, "aes-sha1_96-sha2-ecp_521");
+	ike(ike_version == IKEv2, "aes-sha1_96-sha2;ecp_521");
+
+	/* toss duplicates */
+
+	ike(ike_version == IKEv2, "aes+aes-sha1+sha1-modp8192+modp8192");
+	/* cycle through 3des-sha2-modp4096 */
+	ike(ike_version == IKEv2, "3des+aes+aes-sha2+sha1+sha1-modp4096+modp8192+modp8192");
+	ike(ike_version == IKEv2, "aes+3des+aes-sha1+sha2+sha1-modp8192+modp4096+modp8192");
+	ike(ike_version == IKEv2, "aes+aes+3des-sha1+sha1+sha2-modp8192+modp8192+modp4096");
+	/* keys */
+	ike(ike_version == IKEv2, "aes+aes128+aes256"); /* toss 128/256 */
+	ike(ike_version == IKEv2, "aes128+aes+aes256"); /* toss 256 */
+	ike(ike_version == IKEv2, "aes128+aes256+aes");
+	/* proposals */
+	ike(true, "aes-sha1-modp8192,aes-sha1-modp8192,aes-sha1-modp8192");
+	ike(true, "aes-sha1-modp8192,aes-sha2-modp8192,aes-sha1-modp8192"); /* almost middle */
+
+	/* aead */
+
+	ike(ike_version == IKEv2, "aes_gcm");
+	ike(ike_version == IKEv2, "aes_gcm-sha2");
+	ike(ike_version == IKEv2, "aes_gcm-sha2-modp2048");
+	ike(ike_version == IKEv2, "aes_gcm-sha2;modp2048");
+	ike(false, "aes_gcm-modp2048"); /* ';' required - PRF */
+	ike(ike_version == IKEv2, "aes_gcm;modp2048");
+	ike(ike_version == IKEv2, "aes_gcm-none");
+	ike(ike_version == IKEv2, "aes_gcm-none-sha2");
+	ike(ike_version == IKEv2, "aes_gcm-none-sha2-modp2048");
+	ike(ike_version == IKEv2, "aes_gcm-none-sha2;modp2048");
+	ike(false, "aes_gcm-none-modp2048");  /* ';' required - INTEG */
+	ike(ike_version == IKEv2, "aes_gcm-none;modp2048");
+	ike(false, "aes_gcm-sha1-none-modp2048"); /* old syntax */
+	ike(false, "aes_gcm-sha1-none;modp2048"); /* old syntax */
 	ike(false, "aes+aes_gcm"); /* mixing AEAD and NORM encryption */
+
+	/* syntax */
+
+	ike(false, ","); /* empty algorithm */
+	ike(false, "aes,"); /* empty algorithm */
+	ike(false, "aes,,aes"); /* empty algorithm */
+	ike(false, ",aes"); /* empty algorithm */
+
+	ike(false, "-"); /* empty algorithm */
+	ike(false, "+"); /* empty algorithm */
+	ike(false, ";"); /* empty algorithm */
+
+	ike(false, "aes-"); /* empty algorithm */
+	ike(false, "aes+"); /* empty algorithm */
+	ike(false, "aes;"); /* empty algorithm */
+	ike(false, "-aes"); /* empty algorithm */
+	ike(false, "+aes"); /* empty algorithm */
+	ike(false, ";aes"); /* empty algorithm */
+	ike(false, "aes+-"); /* empty algorithm */
+	ike(false, "aes+;"); /* empty algorithm */
+	ike(false, "aes++"); /* empty algorithm */
 }
 
 static void usage(void)
@@ -514,8 +563,6 @@ static void usage(void)
 		"         default: no\n"
 		"    -fips | -fips=yes | -fips=no: force NSS's FIPS mode\n"
 		"         default: determined by system environment\n"
-		"    -d <dir> | -nssdir <dir>: directory containing crypto database\n"
-		"         default: '"IPSEC_NSSDIR"'\n"
 		"    -P <password> | -nsspw <password> | -password <password>:\n"
 		"        <password> to unlock crypto database\n"
 		"    -v --verbose: be more verbose\n"
@@ -538,7 +585,7 @@ static void usage(void)
 int main(int argc, char *argv[])
 {
 	log_to_stderr = false;
-	tool_init_log(argv[0]);
+	struct logger *logger = tool_init_log(argv[0]);
 
 	if (argc == 1) {
 		usage();
@@ -586,14 +633,7 @@ int main(int argc, char *argv[])
 		} else if (streq(arg, "ignore")) {
 			ignore_parser_errors = true;
 		} else if (streq(arg, "impair")) {
-			impair = true;
-		} else if (streq(arg, "d") || streq(arg, "nssdir")) {
-			char *nssdir = *++argp;
-			if (nssdir == NULL) {
-				fprintf(stderr, "missing nss directory\n");
-				exit(ERROR);
-			}
-			lsw_conf_nssdir(nssdir);
+			impaired = true;
 		} else if (streq(arg, "P") || streq(arg, "nsspw") || streq(arg, "password")) {
 			char *nsspw = *++argp;
 			if (nsspw == NULL) {
@@ -607,25 +647,17 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	NSS_NoDB_Init("."); /* or else fips mode detection fails */
-	fips = libreswan_fipsmode();
-
 	/*
 	 * Need to ensure that NSS is initialized before calling
 	 * ike_alg_init().  Sanity checks and algorithm testing
 	 * require a working NSS.
-	 *
-	 * When testing the algorithms in FIPS mode (i.e., executing
-	 * crypto code) NSS needs to be pointed at a real FIPS mode
-	 * NSS directory.
 	 */
-	lsw_nss_buf_t err;
-	bool nss_ok = lsw_nss_setup((fips && test_algs) ? lsw_init_options()->nssdir : NULL,
-				    LSW_NSS_READONLY, lsw_nss_get_password, err);
-	if (!nss_ok) {
-		fprintf(stderr, "unexpected %s\n", err);
+	if (!lsw_nss_setup(NULL, LSW_NSS_READONLY, logger)) {
+		/* already logged */
 		exit(ERROR);
 	}
+	init_crypt_symkey(logger);
+	fips = libreswan_fipsmode();
 
 	/*
 	 * Only be verbose after NSS has started.  Otherwise fake and
@@ -633,7 +665,7 @@ int main(int argc, char *argv[])
 	 */
 	log_to_stderr = verbose;
 
-	init_ike_alg();
+	init_ike_alg(logger);
 
 	/*
 	 * Only enabling debugging and impairing after things have
@@ -642,12 +674,12 @@ int main(int argc, char *argv[])
 	if (debug) {
 		cur_debugging |= DBG_PROPOSAL_PARSER | DBG_CRYPT;
 	}
-	if (impair) {
-		cur_debugging |= IMPAIR_PROPOSAL_PARSER;
+	if (impaired) {
+		impair.proposal_parser = true;
 	}
 
 	if (test_algs) {
-		test_ike_alg();
+		test_ike_alg(logger);
 	}
 
 	if (*argp) {
@@ -656,16 +688,16 @@ int main(int argc, char *argv[])
 			exit(ERROR);
 		}
 		for (; *argp != NULL; argp++) {
-			test_proposal(*argp);
+			test_proposal(*argp, logger);
 		}
 	} else if (test_proposals) {
-		test();
+		test(logger);
 		if (failures > 0) {
 			fprintf(stderr, "%d FAILURES\n", failures);
 		}
 	}
 
-	report_leaks();
+	report_leaks(logger);
 
 	lsw_nss_shutdown();
 

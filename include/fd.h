@@ -25,10 +25,12 @@
 #define FD_H
 
 #include <stdbool.h>
+#include <stdlib.h>		/* for ssize_t */
 
 #include "where.h"
 
 struct msghdr;
+struct logger;
 
 /* opaque and reference counted */
 struct fd;
@@ -38,7 +40,7 @@ struct fd;
  */
 #define null_fd ((struct fd *) NULL)
 
-struct fd *fd_accept(int socket, where_t where);
+struct fd *fd_accept(int socket, where_t where, struct logger *logger);
 
 #define dup_any(FD) dup_any_fd((FD), HERE)
 struct fd *dup_any_fd(struct fd *fd, where_t where);
@@ -48,10 +50,9 @@ void close_any_fd(struct fd **fd, where_t where);
 
 void fd_leak(struct fd **fd, where_t where);
 
-ssize_t fd_sendmsg(struct fd *fd, const struct msghdr *msg,
-		   int flags, where_t where);
-ssize_t fd_read(struct fd *fd, void *buf, size_t nbytes,
-		where_t where);
+/* return nr-bytes, or -ERRNO */
+ssize_t fd_sendmsg(const struct fd *fd, const struct msghdr *msg, int flags);
+ssize_t fd_read(const struct fd *fd, void *buf, size_t nbytes);
 
 /*
  * Is FD valid (as in something non-negative)?
@@ -59,9 +60,9 @@ ssize_t fd_read(struct fd *fd, void *buf, size_t nbytes,
  * Use fd_p() to check the wrapped return value from functions like
  * open(2) (which return -1 on failure).
  */
-bool fd_p(struct fd *fd);
+bool fd_p(const struct fd *fd);
 
-bool same_fd(struct fd *l, struct fd *r);
+bool same_fd(const struct fd *l, const struct fd *r);
 
 /*
  * dbg("fd "PRI_FD, pri_fd(whackfd))

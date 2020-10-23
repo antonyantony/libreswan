@@ -83,7 +83,7 @@ static void confwrite_int(FILE *out,
 		case kt_appendlist:
 		case kt_filename:
 		case kt_dirname:
-		case kt_rsakey:
+		case kt_rsasigkey:
 
 		case kt_percent:
 		case kt_ipaddr:
@@ -153,11 +153,12 @@ static void confwrite_int(FILE *out,
 				unsigned long val = options[k->field];
 
 				if (val != 0) {
-					LSWLOG_FILE(out, buf) {
-						lswlogf(buf, "\t%s%s=\"", side, k->keyname);
-						lswlog_enum_lset_short(buf, k->info->names,
-								       ",", val);
-						lswlogf(buf, "\"");
+					JAMBUF(buf) {
+						jam_enum_lset_short(buf, k->info->names,
+								    ",", val);
+						fprintf(out, "\t%s%s=\""PRI_SHUNK"\"\n",
+							side, k->keyname,
+							pri_shunk(jambuf_as_shunk(buf)));
 					}
 				}
 			}
@@ -220,7 +221,7 @@ static void confwrite_str(FILE *out,
 			}
 			break;
 
-		case kt_rsakey:
+		case kt_rsasigkey:
 		case kt_ipaddr:
 		case kt_range:
 		case kt_subnet:
@@ -348,24 +349,13 @@ static void confwrite_side(FILE *out,
 			str_subnet(&end->ifaceip, &as));
 	}
 
-	if (end->rsakey1 != NULL && end->rsakey1[0] != '\0')
-		fprintf(out, "\t%srsasigkey=%s\n", side, end->rsakey1);
+	if (end->rsasigkey != NULL && end->rsasigkey[0] != '\0')
+		fprintf(out, "\t%srsasigkey=%s\n", side, end->rsasigkey);
 
-	if (end->rsakey2 != NULL && end->rsakey2[0] != '\0')
-		fprintf(out, "\t%srsasigkey2=%s\n", side, end->rsakey2);
-
-	if (end->port != 0 || end->protocol != 0) {
-		/* it is hoped that any number fits within 32 characters */
-		char portstr[32] = "%any";
-		char protostr[32] = "%any";
-
-		if (end->port != 0)
-			snprintf(portstr, sizeof(portstr), "%u", end->port);
-		if (end->protocol != 0)
-			snprintf(protostr, sizeof(protostr), "%u", end->protocol);
-
-		fprintf(out, "\t%sprotoport=%s/%s\n", side,
-			protostr, portstr);
+	if (protoport_is_set(&end->protoport)) {
+		protoport_buf buf;
+		fprintf(out, "\t%sprotoport=%s\n", side,
+			str_protoport(&end->protoport, &buf));
 	}
 
 	if (end->certx != NULL)

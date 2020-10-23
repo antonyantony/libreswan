@@ -25,24 +25,18 @@
 #ifndef _X509_H
 #define _X509_H
 
-#include <nss.h>
 #include <cert.h>
 
 #include "deltatime.h"
 #include "chunk.h"
 #include "err.h"
 #include "constants.h"
-#include "jambuf.h"
+#include "jambuf.h"		/* for typedef jam_bytes_fn */
 
+struct logger;
 struct pubkey_list;
 struct fd;
-
-typedef enum {
-	LSW_CERT_NONE = 0,
-	LSW_CERT_BAD = 1,
-	LSW_CERT_MISMATCHED_ID = 2,
-	LSW_CERT_ID_OK = 3
-} lsw_cert_ret;
+struct show;
 
 /*
  * NSS can actually support a much larger path length
@@ -86,8 +80,8 @@ extern int dn_count_wildcards(chunk_t dn);
 extern err_t atodn(const char *src, chunk_t *dn);
 extern void free_generalNames(generalName_t *gn, bool free_name);
 extern void load_crls(void);
-extern void list_authcerts(struct fd *whackfd);
-extern void list_crls(struct fd *whackfd);
+extern void list_authcerts(struct show *s);
+extern void list_crls(const struct fd *whackfd);
 extern void clear_ocsp_cache(void);
 
 /*
@@ -99,9 +93,10 @@ extern generalName_t *gndp_from_nss_cert(CERTCertificate *cert);
 extern void select_nss_cert_id(CERTCertificate *cert, struct id *end_id);
 extern bool add_pubkey_from_nss_cert(struct pubkey_list **pubkey_db,
 				     const struct id *keyid,
-				     CERTCertificate *cert);
+				     CERTCertificate *cert,
+				     struct logger *logger);
 extern bool trusted_ca_nss(chunk_t a, chunk_t b, int *pathlen);
-extern CERTCertList *get_all_certificates(void);
+extern CERTCertList *get_all_certificates(struct logger *logger);
 
 /*
  * Formatting.
@@ -135,10 +130,11 @@ typedef struct {
 const char *str_dn(chunk_t dn, dn_buf *buf);
 const char *str_dn_or_null(chunk_t dn, const char *null_dn, dn_buf *buf);
 
-void jam_dn_or_null(struct lswlog *buf, chunk_t dn, const char *null_dn,
+void jam_dn_or_null(struct jambuf *buf, chunk_t dn, const char *null_dn,
 		    jam_bytes_fn *jam_bytes);
-void jam_dn(struct lswlog *buf, chunk_t dn, jam_bytes_fn *jam_bytes);
-void jam_raw_dn(struct lswlog *buf, chunk_t dn, jam_bytes_fn *jam_bytes,
+void jam_dn(struct jambuf *buf, chunk_t dn, jam_bytes_fn *jam_bytes);
+void jam_raw_dn(struct jambuf *buf, chunk_t dn, jam_bytes_fn *jam_bytes,
 		bool nss_compatible);
+err_t parse_dn(chunk_t dn);
 
 #endif /* _X509_H */

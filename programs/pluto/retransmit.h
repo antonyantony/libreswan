@@ -29,6 +29,7 @@ typedef struct {
 	unsigned long nr_retransmits;
 	unsigned long nr_duplicate_replies;
 	unsigned long limit;
+	so_serial_t who_for;
 } retransmit_t;
 
 unsigned long retransmit_count(struct state *st);
@@ -50,6 +51,6 @@ enum retransmit_status {
 
 enum retransmit_status retransmit(struct state *st);
 
-size_t lswlog_retransmit_prefix(struct lswlog *buf, struct state *st);
+size_t lswlog_retransmit_prefix(struct jambuf *buf, struct state *st);
 
 #endif

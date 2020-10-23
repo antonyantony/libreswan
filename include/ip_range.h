@@ -1,4 +1,5 @@
-/*
+/* address range, for libreswan
+ *
  * header file for Libreswan library functions
  * Copyright (C) 1998, 1999, 2000  Henry Spencer.
  * Copyright (C) 1999, 2000, 2001  Richard Guy Briggs
@@ -33,7 +34,7 @@ ip_range range(const ip_address *start, const ip_address *end);
 
 ip_range range_from_subnet(const ip_subnet *subnet);
 
-extern err_t ttorange(const char *src, const struct ip_info *afi, ip_range *dst);
+err_t ttorange(const char *src, const struct ip_info *afi, ip_range *dst) MUST_USE_RESULT;
 
 /*
  * Formatting
@@ -43,15 +44,26 @@ typedef struct {
 	char buf[sizeof(address_buf) + 1/*"-"*/ + sizeof(address_buf)];
 } range_buf;
 
-void jam_range(struct lswlog *buf, const ip_range *range);
+void jam_range(struct jambuf *buf, const ip_range *range);
 const char *str_range(const ip_range *range, range_buf *buf);
 
 /*
- * Extract internals.
+ * Magic values.
+ *
+ * XXX: While the headers call the all-zero address "ANY" (INADDR_ANY,
+ * IN6ADDR_ANY_INIT), the headers also refer to the IPv6 value as
+ * unspecified (for instance IN6_IS_ADDR_UNSPECIFIED()) leaving the
+ * term "unspecified" underspecified.
+ *
+ * Consequently an AF_UNSPEC address (i.e., uninitialized or unset),
+ * is identified by *_type() returning NULL.
  */
 
+extern const ip_range unset_range;
+
 const struct ip_info *range_type(const ip_range *r);
-#define range_is_invalid(R) (range_type(R) == NULL)
+
+bool range_is_set(const ip_range *r);
 bool range_is_specified(const ip_range *r);
 
 /*

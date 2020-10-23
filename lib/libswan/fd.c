@@ -54,64 +54,48 @@ static void free_fd(struct fd **fdp, where_t where)
 	pfree(fd);
 }
 
-void close_any_fd(struct fd **fdp, where_t where)
+void close_any_fd(struct fd **fd, where_t where)
 {
-	ref_delete(fdp, free_fd, where);
+	ref_delete(fd, free_fd, where);
 }
 
-void fd_leak(struct fd **fdp, where_t where)
+void fd_leak(struct fd **fd, where_t where)
 {
 	dbg("leaking "PRI_FD"'s FD; will be closed when pluto exits "PRI_WHERE"",
-	    pri_fd(*fdp), pri_where(where));
+	    pri_fd(*fd), pri_where(where));
 	/* leave the old fd hanging */
-	(*fdp)->fd = dup((*fdp)->fd);
-	ref_delete(fdp, free_fd, where);
+	(*fd)->fd = dup((*fd)->fd);
+	ref_delete(fd, free_fd, where);
 }
 
-ssize_t fd_sendmsg(struct fd *fd, const struct msghdr *msg,
-		   int flags, where_t where)
+ssize_t fd_sendmsg(const struct fd *fd, const struct msghdr *msg, int flags)
 {
-	if (fd == NULL) {
+	if (fd == NULL || fd->magic != FD_MAGIC) {
 		/*
-		 * XXX: passert() / pexpect() / ... would be recursive
-		 * - they write to whack using fd_sendsmg(), fake it.
+		 * XXX: passert() / pexpect() would be recursive -
+		 * they will call this function when trying to write
+		 * to whack.
 		 */
-		LSWBUF(buf) {
-			jam(buf, "EXPECTATION FAILED: fd is NULL "PRI_WHERE"",
-			    pri_where(where));
-			log_jambuf(LOG_STREAM, null_fd, buf);
-		}
-		return -1;
+		return -EFAULT;
 	}
-	if (fd->magic != FD_MAGIC) {
-		/*
-		 * XXX: passert() / pexpect() / ... would be recursive
-		 * - they write to whack using fd_sendmsg(), fake it.
-		 */
-		LSWBUF(buf) {
-			jam(buf, "EXPECTATION FAILED: fd is not magic "PRI_WHERE"",
-			    pri_where(where));
-			log_jambuf(LOG_STREAM, null_fd, buf);
-		}
-		return -1;
-	}
-	return sendmsg(fd->fd, msg, flags);
+	ssize_t s = sendmsg(fd->fd, msg, flags);
+	return s < 0 ? -errno : s;
 }
 
-struct fd *fd_accept(int socket, where_t where)
+struct fd *fd_accept(int socket, where_t where, struct logger *logger)
 {
 	struct sockaddr_un addr;
 	socklen_t addrlen = sizeof(addr);
 
 	int fd = accept(socket, (struct sockaddr *)&addr, &addrlen);
 	if (fd < 0) {
-		LOG_ERRNO(errno, "accept() failed in "PRI_WHERE"",
+		log_errno(logger, errno, "accept() failed in "PRI_WHERE"",
 			  pri_where(where));
 		return NULL;
 	}
 
 	if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
-		LOG_ERRNO(errno, "failed to set CLOEXEC in "PRI_WHERE"",
+		log_errno(logger, errno, "failed to set CLOEXEC in "PRI_WHERE"",
 			  pri_where(where));
 		close(fd);
 		return NULL;
@@ -126,20 +110,16 @@ struct fd *fd_accept(int socket, where_t where)
 	return fdt;
 }
 
-ssize_t fd_read(struct fd *fd, void *buf, size_t nbytes, where_t where)
+ssize_t fd_read(const struct fd *fd, void *buf, size_t nbytes)
 {
-	if (fd == NULL) {
-		log_pexpect(where, "null "PRI_FD"", pri_fd(fd));
-		return -1;
+	if (fd == NULL || fd->magic != FD_MAGIC) {
+		return -EFAULT;
 	}
-	if (fd->magic != FD_MAGIC) {
-		log_pexpect(where, "wrong magic for "PRI_FD"", pri_fd(fd));
-		return -1;
-	}
-	return read(fd->fd, buf, nbytes);
+	ssize_t s = read(fd->fd, buf, nbytes);
+	return s < 0 ? -errno : s;
 }
 
-bool fd_p(struct fd *fd)
+bool fd_p(const struct fd *fd)
 {
 	if (fd == NULL) {
 		return false;
@@ -151,7 +131,7 @@ bool fd_p(struct fd *fd)
 	return true;
 }
 
-bool same_fd(struct fd *l, struct fd *r)
+bool same_fd(const struct fd *l, const struct fd *r)
 {
 	return fd_p(l) && fd_p(r) && l == r;
 }

@@ -35,6 +35,8 @@
 #include "crypt_hash.h"
 #include "ikev2_send.h"
 #include "log.h"
+#include "state.h"
+#include "ikev2.h"
 
 /*
  * That the cookie size of 32-bytes happens to match
@@ -49,8 +51,9 @@ static v2_cookie_t v2_cookie_secret;
 void refresh_v2_cookie_secret(void)
 {
 	get_rnd_bytes(&v2_cookie_secret, sizeof(v2_cookie_secret));
-	DBG(DBG_PRIVATE,
-	    DBG_dump_thing("v2_cookie_secret", v2_cookie_secret));
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump_thing("v2_cookie_secret", v2_cookie_secret);
+	}
 }
 
 /*
@@ -66,7 +69,8 @@ static bool compute_v2_cookie_from_md(v2_cookie_t *cookie,
 				      shunk_t Ni)
 {
 	struct crypt_hash *ctx = crypt_hash_init("IKEv2 COOKIE",
-						 &ike_alg_hash_sha2_256);
+						 &ike_alg_hash_sha2_256,
+						 md->md_logger);
 
 	crypt_hash_digest_hunk(ctx, "Ni", Ni);
 
@@ -104,6 +108,7 @@ bool v2_rejected_initiator_cookie(struct msg_digest *md,
 	    pexpect(md->chain[ISAKMP_NEXT_v2N] != NULL) &&
 	    md->chain[ISAKMP_NEXT_v2N]->payload.v2n.isan_type == v2N_COOKIE) {
 		cookie_digest = md->chain[ISAKMP_NEXT_v2N];
+		pexpect(&cookie_digest->pbs == md->pbs[PBS_v2N_COOKIE]);
 	}
 	if (!me_want_cookie && cookie_digest == NULL) {
 		dbg("DDOS disabled and no cookie sent, continuing");
@@ -140,7 +145,7 @@ bool v2_rejected_initiator_cookie(struct msg_digest *md,
 	if (!compute_v2_cookie_from_md(&my_cookie, md, Ni)) {
 		return true; /* reject cookie */
 	}
-	chunk_t local_cookie = chunk(&my_cookie, sizeof(my_cookie));
+	chunk_t local_cookie = chunk2(&my_cookie, sizeof(my_cookie));
 
 	/* No cookie? demand one */
 	if (me_want_cookie && cookie_digest == NULL) {
@@ -183,4 +188,82 @@ bool v2_rejected_initiator_cookie(struct msg_digest *md,
 	dbg("cookies match");
 
 	return false; /* love the cookie */
+}
+
+static stf_status resume_IKE_SA_INIT_with_cookie(struct ike_sa *ike)
+{
+	if (!record_v2_IKE_SA_INIT_request(ike)) {
+		return STF_INTERNAL_ERROR;
+	}
+	return STF_OK;
+}
+
+stf_status process_IKE_SA_INIT_v2N_COOKIE_response(struct ike_sa *ike,
+						   struct child_sa *child,
+						   struct msg_digest *md)
+{
+	pexpect(child == NULL);
+	const struct pbs_in *cookie_pbs = md->pbs[PBS_v2N_COOKIE];
+	if (!pexpect(cookie_pbs != NULL)) {
+		return STF_INTERNAL_ERROR;
+	}
+
+	/*
+	 * Responder replied with N(COOKIE) for DOS avoidance.  See
+	 * rfc5996bis-04 2.6.
+	 *
+	 * Responder SPI ought to have been 0 (but might not be).  Our
+	 * state should not advance.  Instead we should send our I1
+	 * packet with the same cookie.
+	 */
+
+	/*
+	 * RFC-7296 Section 2.6: The data associated with this
+	 * notification MUST be between 1 and 64 octets in length
+	 * (inclusive)
+	 */
+	shunk_t cookie = pbs_in_left_as_shunk(cookie_pbs);
+	if (cookie.len > IKEv2_MAX_COOKIE_SIZE) {
+		/* XXX: cumbersom */
+		if (suppress_log(ike->sa.st_logger)) {
+			dbg("IKEv2 COOKIE notify payload too big - packet dropped");
+		} else {
+			log_state(RC_LOG, &ike->sa, "IKEv2_COOKIE notify payload too big - packet dropped");
+		}
+		return STF_IGNORE;
+	}
+	if (cookie.len < 1) {
+		/* XXX: cumbersom */
+		if (suppress_log(ike->sa.st_logger)) {
+			dbg("IKEv2 COOKIE notify payload too small - packet dropped");
+		} else {
+			log_state(RC_LOG, &ike->sa, "IKEv2 COOKIE notify payload too small - packet dropped");
+		}
+		return STF_IGNORE;
+	}
+
+	/*
+	 * There's at least this notify payload, is there more than
+	 * one?
+	 */
+	if (md->chain[ISAKMP_NEXT_v2N]->next != NULL) {
+		dbg("ignoring other notify payloads");
+	}
+
+	free_chunk_content(&ike->sa.st_dcookie);
+	ike->sa.st_dcookie = clone_hunk(cookie, "DDOS cookie");
+	if (DBGP(DBG_BASE)) {
+		DBG_dump_hunk("IKEv2 cookie received", ike->sa.st_dcookie);
+	}
+
+	if (!suppress_log(ike->sa.st_logger)) {
+		log_state(RC_LOG, &ike->sa,
+			  "received anti-DDOS COOKIE response, resending IKE_SA_INIT request with COOKIE payload");
+	}
+
+	/*
+	 * restart the IKE SA with new information
+	 */
+	schedule_reinitiate_v2_ike_sa_init(ike, resume_IKE_SA_INIT_with_cookie);
+	return STF_OK;
 }

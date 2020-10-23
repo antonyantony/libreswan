@@ -14,6 +14,8 @@
  * Copyright (C) 2015-2019 Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2017 Sahana Prasad <sahana.prasad07@gmail.com>
  * Copyright (C) 2017 Vukasin Karadzic <vukasin.karadzic@gmail.com>
+ * Copyright (C) 2017 Mayank Totale <mtotale@gmail.com>
+ * Copyright (C) 2020 Yulia Kuzovkova <ukuzovkova@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -29,11 +31,11 @@
 
 #include "defs.h"
 
+#include "log.h"
 #include "ikev2_message.h"
 #include "server.h"
 #include "state.h"
 #include "connections.h"
-#include "lswlog.h"
 #include "ike_alg.h"
 #include "ike_alg_encrypt_ops.h"	/* XXX: oops */
 #include "pluto_stats.h"
@@ -42,6 +44,9 @@
 #include "crypt_prf.h"
 #include "send.h"	/* record_outbound_ike_message() */
 #include "ip_info.h"
+#include "iface.h"
+#include "ip_protocol.h"
+#include "ikev2_send.h"
 
 /*
  * Determine the IKE version we will use for the IKE packet
@@ -59,22 +64,22 @@
 static uint8_t build_ikev2_version(void)
 {
 	/* TODO: if bumping, we should also set the Version flag in the ISAKMP header */
-	return ((IKEv2_MAJOR_VERSION + (IMPAIR(MAJOR_VERSION_BUMP) ? 1 : 0))
+	return ((IKEv2_MAJOR_VERSION + (impair.major_version_bump ? 1 : 0))
 			<< ISA_MAJ_SHIFT) |
-	       (IKEv2_MINOR_VERSION + (IMPAIR(MINOR_VERSION_BUMP) ? 1 : 0));
+	       (IKEv2_MINOR_VERSION + (impair.minor_version_bump ? 1 : 0));
 }
 
-uint8_t build_ikev2_critical(bool impair)
+uint8_t build_ikev2_critical(bool impaired)
 {
 	uint8_t octet = 0;
-	if (impair) {
+	if (impaired) {
 		/* flip the expected bit */
 		libreswan_log("IMPAIR: setting (should be off) critical payload bit");
 		octet = ISAKMP_PAYLOAD_CRITICAL;
 	} else {
 		octet = ISAKMP_PAYLOAD_NONCRITICAL;
 	}
-	if (IMPAIR(SEND_BOGUS_PAYLOAD_FLAG)) {
+	if (impair.send_bogus_payload_flag) {
 		libreswan_log("IMPAIR: adding bogus bit to critical octet");
 		octet |= ISAKMP_PAYLOAD_LIBRESWAN_BOGUS;
 	}
@@ -101,11 +106,10 @@ pb_stream open_v2_message(pb_stream *reply,
 	passert(ike != NULL || md != NULL);
 
 	struct isakmp_hdr hdr = {
-		.isa_flags = IMPAIR(SEND_BOGUS_ISAKMP_FLAG) ? ISAKMP_FLAGS_RESERVED_BIT6 : LEMPTY,
+		.isa_flags = impair.send_bogus_isakmp_flag ? ISAKMP_FLAGS_RESERVED_BIT6 : LEMPTY,
 		.isa_version = build_ikev2_version(),
 		.isa_xchg = exchange_type,
 		.isa_length = 0, /* filled in when PBS is closed */
-		.isa_np = ISAKMP_NEXT_v2NONE, /* filled in when next payload is added */
 	};
 
 	/*
@@ -123,24 +127,16 @@ pb_stream open_v2_message(pb_stream *reply,
 	 * to flip MD's I bit, but since this is IKEv++, there may not
 	 * even be an I bit.
 	 */
-	if (ike != NULL) {
-		/* easy */
-		switch (ike->sa.st_sa_role) {
-		case SA_INITIATOR:
-			hdr.isa_flags |= ISAKMP_FLAGS_v2_IKE_I;
-			break;
-		case SA_RESPONDER:
-			break;
-		default:
-			bad_case(ike->sa.st_sa_role);
-		}
+	enum sa_role sa_role = (ike != NULL ? ike->sa.st_sa_role : SA_RESPONDER);
+	if (sa_role == SA_INITIATOR) {
+		hdr.isa_flags |= ISAKMP_FLAGS_v2_IKE_I;
 	}
 
 	/*
 	 * R (Response) flag
 	 *
-	 * If there's no MD, then this must be a new request -
-	 * R(Responder) flag clear.
+	 * If there's no MD, then this must be a new exchange request
+	 * - R(Responder) flag clear.
 	 *
 	 * If there is an MD, then this must be a response -
 	 * R(Responder) flag set.
@@ -151,7 +147,8 @@ pb_stream open_v2_message(pb_stream *reply,
 	 * Informational Messages outside of an IKE SA - where the
 	 * response is forced.
 	 */
-	if (md != NULL) {
+	enum message_role message_role = (md != NULL ? MESSAGE_RESPONSE : MESSAGE_REQUEST);
+	if (message_role == MESSAGE_RESPONSE) {
 		hdr.isa_flags |= ISAKMP_FLAGS_v2_MSG_R;
 	}
 
@@ -179,36 +176,48 @@ pb_stream open_v2_message(pb_stream *reply,
 
 	/*
 	 * Message ID
-	 *
-	 * If there's a message digest (MD) (presumably containing a
-	 * message request) then this must be a response - use the
-	 * message digest's message ID.  A better choice should be
-	 * .st_msgid_lastrecv (or .st_msgid_lastrecv+1), but it isn't
-	 * clear if/when that value is updated and the IKE SA isn't
-	 * always available.
-	 *
-	 * If it isn't a response then use the IKE SA's
-	 * .st_msgid_nextuse.  The caller still needs to both
-	 * increment .st_msgid_nextuse (can't do this until the packet
-	 * is finished) and update .st_msgid (only caller knows if
-	 * this is for the IKE SA or a CHILD SA).
 	 */
 	if (md != NULL) {
+		/*
+		 * Since there is a message digest (MD) it is assumed
+		 * to contain a message request.  Presumably this open
+		 * is for the message response - use the Message ID
+		 * from the request.  A better choice would be
+		 * .st_v2_msgid_windows.responder.recv+1, but it isn't
+		 * clear if/when that value is updated and the IKE SA
+		 * isn't always available.
+		 */
 		hdr.isa_msgid = md->hdr.isa_msgid;
 	} else {
+		/*
+		 * If it isn't a response then use the IKE SA's
+		 * .st_v2_msgid_windows.initiator.sent+1.  The field
+		 * will be updated as part of finishing the state
+		 * transition and sending the message.
+		 */
 		passert(ike != NULL);
 		hdr.isa_msgid = ike->sa.st_v2_msgid_windows.initiator.sent + 1;
 	}
 
-	if (IMPAIR(BAD_IKE_AUTH_XCHG)) {
+	if (impair.bad_ike_auth_xchg) {
 		libreswan_log("IMPAIR: Instead of replying with IKE_AUTH, forging an INFORMATIONAL reply");
 		if ((hdr.isa_flags & ISAKMP_FLAGS_v2_MSG_R) && exchange_type == ISAKMP_v2_IKE_AUTH) {
 			hdr.isa_xchg = ISAKMP_v2_INFORMATIONAL;
-			hdr.isa_np = ISAKMP_NEXT_v2SK;
 		}
 	}
 
-	return open_output_struct_pbs(reply, &hdr, &isakmp_hdr_desc);
+	struct pbs_out rbody;
+	diag_t d = pbs_out_struct(reply, &isakmp_hdr_desc, &hdr, sizeof(hdr), &rbody);
+	if (d != NULL) {
+		log_diag(RC_LOG_SERIOUS, ike->sa.st_logger, &d, "%s", "");
+		return empty_pbs;
+	}
+	if (impair.add_unknown_v2_payload_to == exchange_type &&
+	    !emit_v2UNKNOWN("request", exchange_type, &rbody)) {
+		return empty_pbs;
+	}
+
+	return rbody;
 }
 
 /*
@@ -220,9 +229,11 @@ pb_stream open_v2_message(pb_stream *reply,
 static bool emit_v2SK_iv(v2SK_payload_t *sk)
 {
 	/* compute location/size */
-	sk->iv = chunk(sk->pbs.cur, sk->ike->sa.st_oakley.ta_encrypt->wire_iv_size);
+	sk->iv = chunk2(sk->pbs.cur, sk->ike->sa.st_oakley.ta_encrypt->wire_iv_size);
 	/* make space */
-	if (!out_zero(sk->iv.len, &sk->pbs, "IV")) {
+	diag_t d = pbs_out_zero(&sk->pbs, sk->iv.len, "IV");
+	if (d != NULL) {
+		log_diag(RC_LOG_SERIOUS, sk->logger, &d, "%s", "");
 		return false;
 	}
 	/* scribble on it */
@@ -230,11 +241,13 @@ static bool emit_v2SK_iv(v2SK_payload_t *sk)
 	return true;
 }
 
-v2SK_payload_t open_v2SK_payload(pb_stream *container,
+v2SK_payload_t open_v2SK_payload(struct logger *logger,
+				 pb_stream *container,
 				 struct ike_sa *ike)
 {
 	static const v2SK_payload_t empty_sk;
 	v2SK_payload_t sk = {
+		.logger = logger,
 		.ike = ike,
 		.payload = {
 		    .ptr = container->cur,
@@ -249,16 +262,18 @@ v2SK_payload_t open_v2SK_payload(pb_stream *container,
 		.isag_critical = build_ikev2_critical(false),
 	};
 	if (!out_struct(&e, &ikev2_sk_desc, container, &sk.pbs)) {
-		libreswan_log("error initializing SK header for encrypted %s message",
-			      container->name);
+		log_message(RC_LOG, logger,
+			    "error initializing SK header for encrypted %s message",
+			    container->name);
 		return empty_sk;
 	}
 
 	/* emit IV and save location */
 
 	if (!emit_v2SK_iv(&sk)) {
-		libreswan_log("error initializing IV for encrypted %s message",
-			      container->name);
+		log_message(RC_LOG, logger,
+			    "error initializing IV for encrypted %s message",
+			    container->name);
 		return empty_sk;
 	}
 
@@ -266,7 +281,8 @@ v2SK_payload_t open_v2SK_payload(pb_stream *container,
 
 	sk.cleartext.ptr = sk.pbs.cur;
 	passert(sk.iv.ptr <= sk.cleartext.ptr);
-	passert(sk.pbs.container->name == container->name);
+	/* XXX: coverity thinks .container (set to E by out_struct() above) can be NULL. */
+	passert(sk.pbs.container != NULL && sk.pbs.container->name == container->name);
 
 	return sk;
 }
@@ -289,13 +305,14 @@ bool close_v2SK_payload(v2SK_payload_t *sk)
 	} else {
 		padding = 1;
 	}
-	DBG(DBG_EMITTING,
-	    DBG_log("adding %zd bytes of padding (including 1 byte padding-length)",
-		    padding));
+	dbg("adding %zd bytes of padding (including 1 byte padding-length)",
+	    padding);
 	for (unsigned i = 0; i < padding; i++) {
-		if (!out_repeated_byte(i, 1, &sk->pbs, "padding and length")) {
-			libreswan_log("error initializing padding for encrypted %s payload",
-				      sk->pbs.container->name);
+		diag_t d = pbs_out_repeated_byte(&sk->pbs, i, 1, "padding and length");
+		if (d != NULL) {
+			log_diag(RC_LOG_SERIOUS, sk->logger, &d,
+				 "error initializing padding for encrypted %s payload: ",
+				 sk->pbs.container->name);
 			return false;
 		}
 	}
@@ -306,12 +323,15 @@ bool close_v2SK_payload(v2SK_payload_t *sk)
 			     ? sk->ike->sa.st_oakley.ta_encrypt->aead_tag_size
 			     : sk->ike->sa.st_oakley.ta_integ->integ_output_size);
 	if (integ_size == 0) {
-		PEXPECT_LOG("error initializing integrity checksum for encrypted %s payload",
-			    sk->pbs.container->name);
+		pexpect_fail(sk->logger, HERE,
+			     "error initializing integrity checksum for encrypted %s payload",
+			     sk->pbs.container->name);
 		return false;
 	}
-	sk->integrity = chunk(sk->pbs.cur, integ_size);
-	if (!out_zero(integ_size, &sk->pbs, "length of truncated HMAC/KEY")) {
+	sk->integrity = chunk2(sk->pbs.cur, integ_size);
+	diag_t d = pbs_out_zero(&sk->pbs, integ_size, "length of truncated HMAC/KEY");
+	if (d != NULL) {
+		log_diag(RC_LOG_SERIOUS, sk->logger, &d, "%s", "");
 		return false;
 	}
 
@@ -330,19 +350,19 @@ bool close_v2SK_payload(v2SK_payload_t *sk)
  * note: no iv is longer than MAX_CBC_BLOCK_SIZE
  */
 static void construct_enc_iv(const char *name,
-			     u_char enc_iv[],
-			     u_char *wire_iv, chunk_t salt,
+			     uint8_t enc_iv[],
+			     uint8_t *wire_iv, chunk_t salt,
 			     const struct encrypt_desc *encrypter)
 {
-	DBG(DBG_CRYPT, DBG_log("construct_enc_iv: %s: salt-size=%zd wire-IV-size=%zd block-size %zd",
-			       name, encrypter->salt_size, encrypter->wire_iv_size,
-			       encrypter->enc_blocksize));
+	DBGF(DBG_CRYPT, "construct_enc_iv: %s: salt-size=%zd wire-IV-size=%zd block-size %zd",
+	     name, encrypter->salt_size, encrypter->wire_iv_size,
+	     encrypter->enc_blocksize);
 	passert(salt.len == encrypter->salt_size);
 	passert(encrypter->enc_blocksize <= MAX_CBC_BLOCK_SIZE);
 	passert(encrypter->enc_blocksize >= encrypter->salt_size + encrypter->wire_iv_size);
 	size_t counter_size = encrypter->enc_blocksize - encrypter->salt_size - encrypter->wire_iv_size;
-	DBG(DBG_CRYPT, DBG_log("construct_enc_iv: %s: computed counter-size=%zd",
-			       name, counter_size));
+	DBGF(DBG_CRYPT, "construct_enc_iv: %s: computed counter-size=%zd",
+	     name, counter_size);
 
 	memcpy(enc_iv, salt.ptr, salt.len);
 	memcpy(enc_iv + salt.len, wire_iv, encrypter->wire_iv_size);
@@ -351,7 +371,9 @@ static void construct_enc_iv(const char *name,
 		       counter_size - 1);
 		enc_iv[encrypter->enc_blocksize - 1] = 1;
 	}
-	DBG(DBG_CRYPT, DBG_dump(name, enc_iv, encrypter->enc_blocksize));
+	if (DBGP(DBG_CRYPT)) {
+		DBG_dump(name, enc_iv, encrypter->enc_blocksize);
+	}
 }
 
 
@@ -360,9 +382,11 @@ stf_status encrypt_v2SK_payload(v2SK_payload_t *sk)
 	struct ike_sa *ike = sk->ike;
 	uint8_t *auth_start = sk->pbs.container->start;
 	uint8_t *wire_iv_start = sk->iv.ptr;
+	size_t wire_iv_size = ike->sa.st_oakley.ta_encrypt->wire_iv_size;
 	uint8_t *enc_start = sk->cleartext.ptr;
 	uint8_t *integ_start = sk->integrity.ptr;
 	size_t integ_size = sk->integrity.len;
+	uint8_t exchange_type = *(auth_start + EXCH_TYPE_OFFSET);
 
 	passert(auth_start <= wire_iv_start);
 	passert(wire_iv_start <= enc_start);
@@ -371,17 +395,20 @@ stf_status encrypt_v2SK_payload(v2SK_payload_t *sk)
 	chunk_t salt;
 	PK11SymKey *cipherkey;
 	PK11SymKey *authkey;
+	PK11SymKey *intermediatekey;
 	/* encrypt with our end's key */
 	switch (ike->sa.st_sa_role) {
 	case SA_INITIATOR:
 		cipherkey = ike->sa.st_skey_ei_nss;
 		authkey = ike->sa.st_skey_ai_nss;
 		salt = ike->sa.st_skey_initiator_salt;
+		intermediatekey = ike->sa.st_skey_pi_nss;
 		break;
 	case SA_RESPONDER:
 		cipherkey = ike->sa.st_skey_er_nss;
 		authkey = ike->sa.st_skey_ar_nss;
 		salt = ike->sa.st_skey_responder_salt;
+		intermediatekey = ike->sa.st_skey_pr_nss;
 		break;
 	default:
 		bad_case(ike->sa.st_sa_role);
@@ -389,6 +416,8 @@ stf_status encrypt_v2SK_payload(v2SK_payload_t *sk)
 
 	/* size of plain or cipher text.  */
 	size_t enc_size = integ_start - enc_start;
+	chunk_t intermediate_auth = NULL_HUNK;
+	chunk_t sk_data = NULL_HUNK;
 
 	/* encrypt and authenticate the block */
 	if (encrypt_desc_is_aead(ike->sa.st_oakley.ta_encrypt)) {
@@ -403,7 +432,18 @@ stf_status encrypt_v2SK_payload(v2SK_payload_t *sk)
 		unsigned char *aad_start = auth_start;
 		size_t aad_size = enc_start - aad_start - wire_iv_size;
 
-		DBG(DBG_CRYPT,
+		if (exchange_type == ISAKMP_v2_IKE_INTERMEDIATE) {
+			/* save contents of IntAuth_*_A in a chunk */
+			/*
+			 * ??? do these need to be copies?
+			 * Are these chunks of memory mutated before the copy is used?
+			 */
+			intermediate_auth = clone_bytes_as_chunk(aad_start, aad_size, "IntAuth_*_A");
+			sk_data = clone_hunk(sk->cleartext, "IntAuth_*_P");
+		}
+
+		/* now, encrypt */
+		if (DBGP(DBG_CRYPT)) {
 		    DBG_dump_hunk("Salt before authenticated encryption:", salt);
 		    DBG_dump("IV before authenticated encryption:",
 			     wire_iv_start, wire_iv_size);
@@ -412,21 +452,26 @@ stf_status encrypt_v2SK_payload(v2SK_payload_t *sk)
 		    DBG_dump("data before authenticated encryption:",
 			     enc_start, enc_size);
 		    DBG_dump("integ before authenticated encryption:",
-			     integ_start, integ_size));
+			     integ_start, integ_size);
+		}
 		if (!ike->sa.st_oakley.ta_encrypt->encrypt_ops
 		    ->do_aead(ike->sa.st_oakley.ta_encrypt,
 			      salt.ptr, salt.len,
 			      wire_iv_start, wire_iv_size,
 			      aad_start, aad_size,
 			      enc_start, enc_size, integ_size,
-			      cipherkey, TRUE)) {
+			      cipherkey, true, sk->logger)) {
+			free_chunk_content(&intermediate_auth);
+			free_chunk_content(&sk_data);
 			return STF_FAIL;
 		}
-		DBG(DBG_CRYPT,
+		if (DBGP(DBG_CRYPT)) {
 		    DBG_dump("data after authenticated encryption:",
 			     enc_start, enc_size);
 		    DBG_dump("integ after authenticated encryption:",
-			     integ_start, integ_size));
+			     integ_start, integ_size);
+		}
+
 	} else {
 		/* note: no iv is longer than MAX_CBC_BLOCK_SIZE */
 		unsigned char enc_iv[MAX_CBC_BLOCK_SIZE];
@@ -434,35 +479,76 @@ stf_status encrypt_v2SK_payload(v2SK_payload_t *sk)
 				 wire_iv_start, salt,
 				 ike->sa.st_oakley.ta_encrypt);
 
-		DBG(DBG_CRYPT,
-		    DBG_dump("data before encryption:", enc_start, enc_size));
-
 		/* now, encrypt */
+		if (DBGP(DBG_CRYPT)) {
+			DBG_dump("data before encryption:", enc_start, enc_size);
+		}
 		ike->sa.st_oakley.ta_encrypt->encrypt_ops
 			->do_crypt(ike->sa.st_oakley.ta_encrypt,
 				   enc_start, enc_size,
 				   cipherkey,
-				   enc_iv, TRUE);
+				   enc_iv, TRUE,
+				   sk->logger);
+		if (DBGP(DBG_CRYPT)) {
+			DBG_dump("data after encryption:", enc_start, enc_size);
+		}
 
-		DBG(DBG_CRYPT,
-		    DBG_dump("data after encryption:", enc_start, enc_size));
 		/* note: saved_iv's updated value is discarded */
 
 		/* okay, authenticate from beginning of IV */
 		struct crypt_prf *ctx = crypt_prf_init_symkey("integ", ike->sa.st_oakley.ta_integ->prf,
-							      "authkey", authkey);
+							      "authkey", authkey, sk->logger);
 		crypt_prf_update_bytes(ctx, "message", auth_start, integ_start - auth_start);
 		passert(integ_size == ike->sa.st_oakley.ta_integ->integ_output_size);
 		struct crypt_mac mac = crypt_prf_final_mac(&ctx, ike->sa.st_oakley.ta_integ);
 		memcpy_hunk(integ_start, mac, integ_size);
 
-		DBG(DBG_CRYPT, {
-			    DBG_dump("data being hmac:", auth_start,
-				     integ_start - auth_start);
-			    DBG_dump("out calculated auth:", integ_start, integ_size);
-		    });
+		if (DBGP(DBG_CRYPT)) {
+			DBG_dump("data being hmac:", auth_start,
+				 integ_start - auth_start);
+			DBG_dump("out calculated auth:", integ_start, integ_size);
+		}
 	}
 
+	/*
+	 * For Intermediate Exchange, apply PRF to the peer's messages and store in state for
+	 * further authentication.
+	 */
+	if (exchange_type == ISAKMP_v2_IKE_INTERMEDIATE) {
+		/*
+		 * Set Adjusted Payload Length to the length of IntAuth_*_P plus the size
+		 * of the Payload header (four octets)
+		 */
+		uint8_t *adj_payload_len_start = intermediate_auth.ptr + intermediate_auth.len - ADJ_PAYLOAD_LENGTH_SIZE;
+		uint16_t adj_payload_len = sk_data.len + SK_HEADER_SIZE;
+		DBG(DBG_CRYPT, DBG_log("adjusted payload length: %u", adj_payload_len));
+		uint16_t adj_payload_len_no = htons(adj_payload_len);
+		memcpy(adj_payload_len_start, &adj_payload_len_no, sizeof(adj_payload_len_no));
+		/*
+		 * Set the Adjusted Length field to the sum of length of IntAuth_*_A and
+		 * IntAuth_*_P
+		 */
+		uint8_t *adj_len_start = intermediate_auth.ptr + ADJ_LENGTH_OFFSET;
+		uint32_t adj_len = (enc_start - auth_start - wire_iv_size) + (sk_data.len);
+		DBG(DBG_CRYPT, DBG_log("adjusted length: %u", adj_len));
+		uint32_t adj_len_no = htonl(adj_len);	/* network order */
+		memcpy(adj_len_start, &adj_len_no, sizeof(adj_len_no));
+		/*
+		 * If P(SK) not empty, append its decrypted contents IntAuth_*_A | IntAuth_*_P
+		 */
+		if (sk_data.len > 0) {
+			chunk_t both = clone_chunk_chunk(intermediate_auth, sk_data, "IntAuth_*_A | IntAuth_*_P");
+			free_chunk_content(&intermediate_auth);
+			intermediate_auth = both;
+		}
+		struct crypt_prf *prf = crypt_prf_init_symkey("prf(IntAuth_*_A [| IntAuth_*_P])", ike->sa.st_oakley.ta_prf,
+							 "SK_p", intermediatekey, ike->sa.st_logger);
+		crypt_prf_update_bytes(prf, "IntAuth", intermediate_auth.ptr, intermediate_auth.len);
+		struct crypt_mac int_mac = crypt_prf_final_mac(&prf, NULL/*no-truncation*/);
+		ike->sa.st_intermediate_packet_me = clone_hunk(int_mac, "IntAuth");
+	}
+	free_chunk_content(&intermediate_auth);
+	free_chunk_content(&sk_data);
 	return STF_OK;
 }
 
@@ -486,13 +572,14 @@ static bool ikev2_verify_and_decrypt_sk_payload(struct ike_sa *ike,
 {
 	if (!ike->sa.hidden_variables.st_skeyid_calculated) {
 		endpoint_buf b;
-		PEXPECT_LOG("received encrypted packet from %s  but no exponents for state #%lu to decrypt it",
-			    str_endpoint(&md->sender, &b),
-			    ike->sa.st_serialno);
+		pexpect_fail(ike->sa.st_logger, HERE,
+			     "received encrypted packet from %s  but no exponents for state #%lu to decrypt it",
+			     str_endpoint(&md->sender, &b),
+			     ike->sa.st_serialno);
 		return false;
 	}
 
-	u_char *wire_iv_start = chunk->ptr + iv;
+	uint8_t *wire_iv_start = chunk->ptr + iv;
 	size_t wire_iv_size = ike->sa.st_oakley.ta_encrypt->wire_iv_size;
 	size_t integ_size = (encrypt_desc_is_aead(ike->sa.st_oakley.ta_encrypt)
 			     ? ike->sa.st_oakley.ta_encrypt->aead_tag_size
@@ -505,17 +592,18 @@ static bool ikev2_verify_and_decrypt_sk_payload(struct ike_sa *ike,
 	 * - at least one padding-length byte
 	 * - truncated integrity digest / tag
 	 */
-	u_char *payload_end = chunk->ptr + chunk->len;
+	uint8_t *payload_end = chunk->ptr + chunk->len;
 	if (payload_end < (wire_iv_start + wire_iv_size + 1 + integ_size)) {
 		libreswan_log("encrypted payload impossibly short (%tu)",
 			      payload_end - wire_iv_start);
 		return false;
 	}
 
-	u_char *auth_start = chunk->ptr;
-	u_char *enc_start = wire_iv_start + wire_iv_size;
-	u_char *integ_start = payload_end - integ_size;
+	uint8_t *auth_start = chunk->ptr;
+	uint8_t *enc_start = wire_iv_start + wire_iv_size;
+	uint8_t *integ_start = payload_end - integ_size;
 	size_t enc_size = integ_start - enc_start;
+	uint8_t exchange_type = *(auth_start + EXCH_TYPE_OFFSET);
 
 	/*
 	 * Check that the payload is block-size aligned.
@@ -541,23 +629,27 @@ static bool ikev2_verify_and_decrypt_sk_payload(struct ike_sa *ike,
 	chunk_t salt;
 	PK11SymKey *cipherkey;
 	PK11SymKey *authkey;
+	PK11SymKey *intermediatekey;
 	switch (ike->sa.st_sa_role) {
 	case SA_INITIATOR:
 		/* need responders key */
 		cipherkey = ike->sa.st_skey_er_nss;
 		authkey = ike->sa.st_skey_ar_nss;
 		salt = ike->sa.st_skey_responder_salt;
+		intermediatekey = ike->sa.st_skey_pr_nss;
 		break;
 	case SA_RESPONDER:
 		/* need initiators key */
 		cipherkey = ike->sa.st_skey_ei_nss;
 		authkey = ike->sa.st_skey_ai_nss;
 		salt = ike->sa.st_skey_initiator_salt;
+		intermediatekey = ike->sa.st_skey_pi_nss;
 		break;
 	default:
 		bad_case(ike->sa.st_sa_role);
 	}
 
+	chunk_t intermediate_auth = NULL_HUNK;
 	/* authenticate and decrypt the block. */
 	if (encrypt_desc_is_aead(ike->sa.st_oakley.ta_encrypt)) {
 		/*
@@ -569,35 +661,47 @@ static bool ikev2_verify_and_decrypt_sk_payload(struct ike_sa *ike,
 		unsigned char *aad_start = auth_start;
 		size_t aad_size = enc_start - auth_start - wire_iv_size;
 
-		DBG(DBG_CRYPT,
-		    DBG_dump_hunk("Salt before authenticated decryption:", salt);
-		    DBG_dump("IV before authenticated decryption:",
-			     wire_iv_start, wire_iv_size);
-		    DBG_dump("AAD before authenticated decryption:",
-			     aad_start, aad_size);
-		    DBG_dump("data before authenticated decryption:",
-			     enc_start, enc_size);
-		    DBG_dump("integ before authenticated decryption:",
-			     integ_start, integ_size));
+		if (exchange_type == ISAKMP_v2_IKE_INTERMEDIATE) {
+			/* save contents of IntAuth_*_A in a chunk */
+			/* ??? does this need to be a copy? */
+			/* ??? if so, does sk_data need to be a copy? */
+			intermediate_auth = clone_bytes_as_chunk(aad_start, aad_size, "IntAuth_*_A");
+		}
+
+		/* decrypt */
+		if (DBGP(DBG_CRYPT)) {
+			DBG_dump_hunk("Salt before authenticated decryption:", salt);
+			DBG_dump("IV before authenticated decryption:",
+				 wire_iv_start, wire_iv_size);
+			DBG_dump("AAD before authenticated decryption:",
+				 aad_start, aad_size);
+			DBG_dump("data before authenticated decryption:",
+				 enc_start, enc_size);
+			DBG_dump("integ before authenticated decryption:",
+				 integ_start, integ_size);
+		}
 		if (!ike->sa.st_oakley.ta_encrypt->encrypt_ops
 		    ->do_aead(ike->sa.st_oakley.ta_encrypt,
 			      salt.ptr, salt.len,
 			      wire_iv_start, wire_iv_size,
 			      aad_start, aad_size,
 			      enc_start, enc_size, integ_size,
-			      cipherkey, FALSE)) {
+			      cipherkey, false, ike->sa.st_logger)) {
+			free_chunk_content(&intermediate_auth);
 			return false;
 		}
-		DBG(DBG_CRYPT,
-		    DBG_dump("data after authenticated decryption:",
-			     enc_start, enc_size + integ_size));
+		if (DBGP(DBG_CRYPT)) {
+			DBG_dump("data after authenticated decryption:",
+				 enc_start, enc_size + integ_size);
+		}
+
 	} else {
 		/*
 		 * check authenticator.  The last INTEG_SIZE bytes are
 		 * the truncated digest.
 		 */
 		struct crypt_prf *ctx = crypt_prf_init_symkey("auth", ike->sa.st_oakley.ta_integ->prf,
-							      "authkey", authkey);
+							      "authkey", authkey, ike->sa.st_logger);
 		crypt_prf_update_bytes(ctx, "message", auth_start, integ_start - auth_start);
 		struct crypt_mac td = crypt_prf_final_mac(&ctx, ike->sa.st_oakley.ta_integ);
 
@@ -606,9 +710,7 @@ static bool ikev2_verify_and_decrypt_sk_payload(struct ike_sa *ike,
 			return false;
 		}
 
-		DBG(DBG_PARSING, DBG_log("authenticator matched"));
-
-		/* decrypt */
+		dbg("authenticator matched");
 
 		/* note: no iv is longer than MAX_CBC_BLOCK_SIZE */
 		unsigned char enc_iv[MAX_CBC_BLOCK_SIZE];
@@ -616,15 +718,19 @@ static bool ikev2_verify_and_decrypt_sk_payload(struct ike_sa *ike,
 				 wire_iv_start, salt,
 				 ike->sa.st_oakley.ta_encrypt);
 
-		DBG(DBG_CRYPT,
-		    DBG_dump("payload before decryption:", enc_start, enc_size));
+		/* decrypt */
+		if (DBGP(DBG_CRYPT)) {
+			DBG_dump("payload before decryption:", enc_start, enc_size);
+		}
 		ike->sa.st_oakley.ta_encrypt->encrypt_ops
 			->do_crypt(ike->sa.st_oakley.ta_encrypt,
 				   enc_start, enc_size,
 				   cipherkey,
-				   enc_iv, FALSE);
-		DBG(DBG_CRYPT,
-		    DBG_dump("payload after decryption:", enc_start, enc_size));
+				   enc_iv, FALSE,
+				   ike->sa.st_logger);
+		if (DBGP(DBG_CRYPT)) {
+			DBG_dump("payload after decryption:", enc_start, enc_size);
+		}
 	}
 
 	/*
@@ -643,21 +749,20 @@ static bool ikev2_verify_and_decrypt_sk_payload(struct ike_sa *ike,
 	if (padlen > enc_size) {
 		libreswan_log("discarding invalid packet: padding-length %u (octet 0x%02x) is larger than %zu octet payload length",
 			      padlen, padlen - 1, enc_size);
+		free_chunk_content(&intermediate_auth);
 		return false;
 	}
 	if (pad_to_blocksize) {
 		if (padlen > enc_blocksize) {
 			/* probably racoon */
-			DBG(DBG_CRYPT,
-			    DBG_log("payload contains %zu blocks of extra padding (padding-length: %d (octet 0x%2x), encryption block-size: %zu)",
-				    (padlen - 1) / enc_blocksize,
-				    padlen, padlen - 1, enc_blocksize));
+			DBGF(DBG_CRYPT, "payload contains %zu blocks of extra padding (padding-length: %d (octet 0x%2x), encryption block-size: %zu)",
+			     (padlen - 1) / enc_blocksize,
+			     padlen, padlen - 1, enc_blocksize);
 		}
 	} else {
 		if (padlen > 1) {
-			DBG(DBG_CRYPT,
-			    DBG_log("payload contains %u octets of extra padding (padding-length: %u (octet 0x%2x))",
-				    padlen - 1, padlen, padlen - 1));
+			DBGF(DBG_CRYPT, "payload contains %u octets of extra padding (padding-length: %u (octet 0x%2x))",
+			     padlen - 1, padlen, padlen - 1);
 		}
 	}
 
@@ -665,9 +770,50 @@ static bool ikev2_verify_and_decrypt_sk_payload(struct ike_sa *ike,
 	 * Don't check the contents of the pad octets; racoon, for
 	 * instance, sets them to random values.
 	 */
-	DBG(DBG_CRYPT, DBG_log("stripping %u octets as pad", padlen));
-	setchunk(*chunk, enc_start, enc_size - padlen);
+	DBGF(DBG_CRYPT, "stripping %u octets as pad", padlen);
+	*chunk = chunk2(enc_start, enc_size - padlen);
 
+	/*
+	 * For Intermediate Exchange, apply PRF to the peer's messages and store in state for
+	 * further authentication.
+	 */
+	if (exchange_type == ISAKMP_v2_IKE_INTERMEDIATE) {
+		/*
+		 * Set Adjusted Payload Length to the length of IntAuth_*_P plus the size
+		 * of the Payload header (four octets)
+		 */
+		uint8_t *adj_payload_len_start = intermediate_auth.ptr + intermediate_auth.len - ADJ_PAYLOAD_LENGTH_SIZE;
+		uint16_t adj_payload_len = enc_size - padlen + SK_HEADER_SIZE;
+		DBG(DBG_CRYPT, DBG_log("adjusted payload length: %u", adj_payload_len));
+		uint16_t adj_payload_len_no = htons(adj_payload_len);
+		memcpy(adj_payload_len_start, &adj_payload_len_no, sizeof(adj_payload_len_no));
+		/*
+		 * Set the Adjusted Length field to the sum of length of IntAuth_*_A and
+		 * IntAuth_*_P
+		 */
+		uint8_t *adj_len_start = intermediate_auth.ptr + ADJ_LENGTH_OFFSET;
+		uint32_t adj_len = (enc_start - auth_start - wire_iv_size) + (enc_size - padlen);
+		DBG(DBG_CRYPT, DBG_log("adjusted length: %u", adj_len));
+		uint32_t adj_len_no = htonl(adj_len);	/* network order */
+		memcpy(adj_len_start, &adj_len_no, sizeof(adj_len_no));
+		/*
+		 * If P(SK) not empty, append its decrypted contents IntAuth_*_A | IntAuth_*_P
+		 */
+		if (enc_size - padlen > 0) {
+			chunk_t both = clone_chunk_chunk(intermediate_auth,
+							 chunk2(enc_start, enc_size - padlen),
+							 "IntAuth_*_A | IntAuth_*_P");
+			free_chunk_content(&intermediate_auth);
+			intermediate_auth = both;
+		}
+
+		struct crypt_prf *prf = crypt_prf_init_symkey("prf(IntAuth_*_A [| IntAuth_*_P])", ike->sa.st_oakley.ta_prf,
+							 "SK_p", intermediatekey, ike->sa.st_logger);
+		crypt_prf_update_bytes(prf, "IntAuth", intermediate_auth.ptr, intermediate_auth.len);
+		struct crypt_mac mac = crypt_prf_final_mac(&prf, NULL/*no-truncation*/);
+		ike->sa.st_intermediate_packet_peer = clone_hunk(mac, "IntAuth");
+	}
+	free_chunk_content(&intermediate_auth);
 	return true;
 }
 
@@ -679,8 +825,9 @@ static bool ikev2_reassemble_fragments(struct state *st,
 				       struct msg_digest *md)
 {
 	if (md->chain[ISAKMP_NEXT_v2SK] != NULL) {
-		PEXPECT_LOG("state #%lu has both SK ans SKF payloads",
-			    st->st_serialno);
+		pexpect_fail(st->st_logger, HERE,
+			     "state #%lu has both SK ans SKF payloads",
+			     st->st_serialno);
 		return false;
 	}
 
@@ -689,24 +836,25 @@ static bool ikev2_reassemble_fragments(struct state *st,
 		return false;
 	}
 
-	passert(st->st_v2_rfrags != NULL);
+	struct v2_incomming_fragments **frags = &st->st_v2_incomming[v2_msg_role(md)];
+	passert(*frags != NULL);
 
 	chunk_t plain[MAX_IKE_FRAGMENTS + 1];
-	passert(elemsof(plain) == elemsof(st->st_v2_rfrags->frags));
+	passert(elemsof(plain) == elemsof((*frags)->frags));
 	unsigned int size = 0;
-	for (unsigned i = 1; i <= st->st_v2_rfrags->total; i++) {
-		struct v2_ike_rfrag *frag = &st->st_v2_rfrags->frags[i];
+	for (unsigned i = 1; i <= (*frags)->total; i++) {
+		struct v2_incomming_fragment *frag = &(*frags)->frags[i];
 		/*
 		 * Point PLAIN at the encrypted fragment and then
 		 * decrypt in-place.  After the decryption, PLAIN will
 		 * have been adjusted to just point at the data.
 		 */
 		plain[i] = frag->cipher;
-		if (!ikev2_verify_and_decrypt_sk_payload(ike_sa(st), md,
+		if (!ikev2_verify_and_decrypt_sk_payload(ike_sa(st, HERE), md,
 							 &plain[i], frag->iv)) {
 			loglog(RC_LOG_SERIOUS, "fragment %u of %u invalid",
-			       i, st->st_v2_rfrags->total);
-			release_fragments(st);
+			       i, (*frags)->total);
+			free_v2_incomming_fragments(frags);
 			return false;
 		}
 		size += plain[i].len;
@@ -719,7 +867,7 @@ static bool ikev2_reassemble_fragments(struct state *st,
 	pexpect(md->raw_packet.ptr == NULL); /* empty */
 	md->raw_packet = alloc_chunk(size, "IKEv2 fragments buffer");
 	unsigned int offset = 0;
-	for (unsigned i = 1; i <= st->st_v2_rfrags->total; i++) {
+	for (unsigned i = 1; i <= (*frags)->total; i++) {
 		passert(offset + plain[i].len <= size);
 		memcpy(md->raw_packet.ptr + offset, plain[i].ptr,
 		       plain[i].len);
@@ -735,14 +883,14 @@ static bool ikev2_reassemble_fragments(struct state *st,
 	struct payload_digest sk = {
 		.pbs = same_chunk_as_in_pbs(md->raw_packet, "decrypted SFK payloads"),
 		.payload_type = ISAKMP_NEXT_v2SK,
-		.payload.generic.isag_np = st->st_v2_rfrags->first_np,
+		.payload.generic.isag_np = (*frags)->first_np,
 	};
 	struct payload_digest *skf = md->chain[ISAKMP_NEXT_v2SKF];
 	md->chain[ISAKMP_NEXT_v2SKF] = NULL;
 	md->chain[ISAKMP_NEXT_v2SK] = skf;
 	*skf = sk; /* scribble */
 
-	release_fragments(st);
+	free_v2_incomming_fragments(frags);
 
 	return true;
 }
@@ -768,28 +916,27 @@ bool ikev2_decrypt_msg(struct state *st, struct msg_digest *md)
 		 * If so impaired, clone the encrypted message before
 		 * it gets decrypted in-place (but only once).
 		 */
-		if (IMPAIR(REPLAY_ENCRYPTED) && !md->fake_clone) {
+		if (impair.replay_encrypted && !md->fake_clone) {
 			libreswan_log("IMPAIR: cloning incoming encrypted message and scheduling its replay");
 			schedule_md_event("replay encrypted message",
 					  clone_raw_md(md, "copy of encrypted message"));
 		}
-		if (IMPAIR(CORRUPT_ENCRYPTED) && !md->fake_clone) {
+		if (impair.corrupt_encrypted && !md->fake_clone) {
 			libreswan_log("IMPAIR: corrupting incoming encrypted message's SK payload's first byte");
 			*e_pbs->cur = ~(*e_pbs->cur);
 		}
 
-		chunk_t c = chunk(md->packet_pbs.start,
+		chunk_t c = chunk2(md->packet_pbs.start,
 				  e_pbs->roof - md->packet_pbs.start);
-		ok = ikev2_verify_and_decrypt_sk_payload(ike_sa(st), md, &c,
+		ok = ikev2_verify_and_decrypt_sk_payload(ike_sa(st, HERE), md, &c,
 							 e_pbs->cur - md->packet_pbs.start);
 		md->chain[ISAKMP_NEXT_v2SK]->pbs = same_chunk_as_in_pbs(c, "decrypted SK payload");
 	}
 
-	DBG(DBG_CONTROLMORE,
-	    DBG_log("#%lu ikev2 %s decrypt %s",
-		    st->st_serialno,
-		    enum_name(&ikev2_exchange_names, md->hdr.isa_xchg),
-		    ok ? "success" : "failed"));
+	dbg("#%lu ikev2 %s decrypt %s",
+	    st->st_serialno,
+	    enum_name(&ikev2_exchange_names, md->hdr.isa_xchg),
+	    ok ? "success" : "failed");
 
 	return ok;
 }
@@ -819,27 +966,27 @@ bool ikev2_decrypt_msg(struct state *st, struct msg_digest *md)
  *
  */
 
-static stf_status v2_record_outbound_fragment(struct ike_sa *ike,
-					      const struct isakmp_hdr *hdr,
-					      enum next_payload_types_ikev2 skf_np,
-					      struct v2_ike_tfrag **fragp,
-					      chunk_t *fragment,	/* read-only */
-					      unsigned int number, unsigned int total,
-					      const char *desc)
+static bool record_outbound_fragment(struct logger *logger,
+				     struct ike_sa *ike,
+				     const struct isakmp_hdr *hdr,
+				     enum next_payload_types_ikev2 skf_np,
+				     struct v2_outgoing_fragment **fragp,
+				     chunk_t *fragment,	/* read-only */
+				     unsigned int number, unsigned int total,
+				     const char *desc)
 {
-	pb_stream frag_stream;
-	unsigned char frag_buffer[PMAX(MIN_MAX_UDP_DATA_v4, MIN_MAX_UDP_DATA_v6)];
-
 	/* make sure HDR is at start of a clean buffer */
-	init_out_pbs(&frag_stream, frag_buffer, sizeof(frag_buffer),
-		     "reply frag packet");
+	unsigned char frag_buffer[PMAX(MIN_MAX_UDP_DATA_v4, MIN_MAX_UDP_DATA_v6)];
+	struct pbs_out frag_stream = open_pbs_out("reply frag packet",
+						  frag_buffer, sizeof(frag_buffer),
+						  logger);
 
 	/* HDR out */
 
 	pb_stream rbody;
 	if (!out_struct(hdr, &isakmp_hdr_desc, &frag_stream,
 			&rbody))
-		return STF_INTERNAL_ERROR;
+		return false;
 
 	/*
 	 * Fake up an SK payload description sufficient to fool the
@@ -852,29 +999,36 @@ static stf_status v2_record_outbound_fragment(struct ike_sa *ike,
 
 	v2SK_payload_t skf = {
 		.ike = ike,
+		.logger = logger,
 		.payload = {
 		    .ptr = rbody.cur,
 		    .len = 0 /* computed at end; set here to silence GCC 4.8.5 */
 		}
 	};
 
-	/* emit SKF header, save location */
+	/*
+	 * emit SKF header, save location.
+	 *
+	 * In the first fragment, .NP is set to the SK payload's next
+	 * payload type.
+	 */
 
 	const struct ikev2_skf e = {
-		.isaskf_np = skf_np,
+		.isaskf_np = skf_np, /* needed */
 		.isaskf_critical = build_ikev2_critical(false),
 		.isaskf_number = number,
 		.isaskf_total = total,
 	};
 	if (!out_struct(&e, &ikev2_skf_desc, &rbody, &skf.pbs))
-		return STF_INTERNAL_ERROR;
+		return false;
 
 	/* emit IV and save location */
 
 	if (!emit_v2SK_iv(&skf)) {
-		libreswan_log("error initializing IV for encrypted %s message",
-			      desc);
-		return STF_INTERNAL_ERROR;
+		log_message(RC_LOG, logger,
+			    "error initializing IV for encrypted %s message",
+			    desc);
+		return false;
 	}
 
 	/* save cleartext start */
@@ -883,12 +1037,12 @@ static stf_status v2_record_outbound_fragment(struct ike_sa *ike,
 
 	/* output the fragment */
 
-	if (!out_chunk(*fragment, &skf.pbs,
-		       "cleartext fragment"))
-		return STF_INTERNAL_ERROR;
+	if (!pbs_out_hunk(*fragment, &skf.pbs,
+			  "cleartext fragment"))
+		return false;
 
 	if (!close_v2SK_payload(&skf)) {
-		return STF_INTERNAL_ERROR;
+		return false;
 	}
 
 	close_output_pbs(&rbody);
@@ -896,25 +1050,21 @@ static stf_status v2_record_outbound_fragment(struct ike_sa *ike,
 
 	stf_status ret = encrypt_v2SK_payload(&skf);
 	if (ret != STF_OK) {
-		return ret;
+		log_message(RC_LOG, logger, "error encrypting fragment %u", number);
+		return false;
 	}
 
-	*fragp = alloc_thing(struct v2_ike_tfrag, "v2_ike_tfrag");
-	(*fragp)->next = NULL;
-	(*fragp)->cipher = clone_out_pbs_as_chunk(&frag_stream, desc);
-
-	return STF_OK;
+	dbg("recording fragment %u", number);
+	record_v2_outgoing_fragment(&frag_stream, desc, fragp);
+	return true;
 }
 
-static stf_status v2_record_outbound_fragments(struct state *st,
-					       const pb_stream *rbody,
-					       v2SK_payload_t *sk,
-					       const char *desc)
+static bool record_outbound_fragments(const pb_stream *rbody,
+				      v2SK_payload_t *sk,
+				      const char *desc,
+				      struct v2_outgoing_fragment **frags)
 {
-	unsigned int len;
-
-	release_fragments(st);
-	freeanychunk(st->st_tpacket);
+	free_v2_outgoing_fragments(frags);
 
 	/*
 	 * fragment contents:
@@ -931,9 +1081,14 @@ static stf_status v2_record_outbound_fragments(struct state *st,
 	 * function above be left to do the computation on-the-fly?
 	 */
 
-	len = endpoint_type(&sk->ike->sa.st_remote_endpoint)->ikev2_max_fragment_size;
+	unsigned int len = endpoint_type(&sk->ike->sa.st_remote_endpoint)->ikev2_max_fragment_size;
 
-	if (sk->ike->sa.st_interface != NULL && sk->ike->sa.st_interface->ike_float)
+	/*
+	 * If we are doing NAT, so that the other end doesn't mistake
+	 * this message for ESP, each message needs a non-ESP_Marker
+	 * prefix.
+	 */
+	if (sk->ike->sa.st_interface != NULL && sk->ike->sa.st_interface->esp_encapsulation_enabled)
 		len -= NON_ESP_MARKER_SIZE;
 
 	len -= NSIZEOF_isakmp_hdr + NSIZEOF_ikev2_skf;
@@ -952,9 +1107,10 @@ static stf_status v2_record_outbound_fragments(struct state *st,
 	unsigned int nfrags = (sk->cleartext.len + len - 1) / len;
 
 	if (nfrags > MAX_IKE_FRAGMENTS) {
-		loglog(RC_LOG_SERIOUS, "Fragmenting this %zu byte message into %u byte chunks leads to too many frags",
-		       sk->cleartext.len, len);
-		return STF_INTERNAL_ERROR;
+		log_message(RC_LOG_SERIOUS, sk->logger,
+			    "fragmenting this %zu byte message into %u byte chunks leads to too many frags",
+			    sk->cleartext.len, len);
+		return false;
 	}
 
 	/*
@@ -966,10 +1122,10 @@ static stf_status v2_record_outbound_fragments(struct state *st,
 		pb_stream pbs;
 		init_pbs(&pbs, rbody->start, pbs_offset(rbody), "sk hdr");
 		if (!in_struct(&hdr, &isakmp_hdr_desc, &pbs, NULL)) {
-			return STF_INTERNAL_ERROR;
+			return false;
 		}
 	}
-	hdr.isa_np = ISAKMP_NEXT_v2NONE;
+	hdr.isa_np = ISAKMP_NEXT_v2NONE; /* clear NP */
 
 	/*
 	 * Extract the SK's next payload field from the original
@@ -981,32 +1137,35 @@ static stf_status v2_record_outbound_fragments(struct state *st,
 		pb_stream pbs = same_chunk_as_in_pbs(sk->payload, "sk");
 		struct ikev2_generic e;
 		if (!in_struct(&e, &ikev2_sk_desc, &pbs, NULL)) {
-			return STF_INTERNAL_ERROR;
+			return false;
 		}
 		skf_np = e.isag_np;
 	}
 
 	unsigned int number = 1;
 	unsigned int offset = 0;
-	struct v2_ike_tfrag **fragp = &st->st_v2_tfrags;
 
-	while (offset < sk->cleartext.len) {
-		passert(*fragp == NULL);
-		chunk_t fragment = chunk(sk->cleartext.ptr + offset,
-					 PMIN(sk->cleartext.len - offset, len));
-		stf_status ret = v2_record_outbound_fragment(sk->ike, &hdr, skf_np, fragp,
-							     &fragment, number, nfrags, desc);
-		if (ret != STF_OK) {
-			return ret;
+	struct v2_outgoing_fragment **frag = frags;
+	while (true) {
+		passert(*frag == NULL);
+		chunk_t fragment = chunk2(sk->cleartext.ptr + offset,
+					  PMIN(sk->cleartext.len - offset, len));
+		if (!record_outbound_fragment(sk->logger, sk->ike, &hdr, skf_np, frag,
+					      &fragment, number, nfrags, desc)) {
+			return false;
 		}
+		frag = &(*frag)->next;
 
 		offset += fragment.len;
 		number++;
 		skf_np = ISAKMP_NEXT_v2NONE;
-		fragp = &(*fragp)->next;
+
+		if (offset >= sk->cleartext.len) {
+			break;
+		}
 	}
 
-	return STF_OK;
+	return true;
 }
 
 /*
@@ -1018,38 +1177,55 @@ static stf_status v2_record_outbound_fragments(struct state *st,
  * children trying to exchange messages.
  */
 
-stf_status record_outbound_v2SK_msg(struct state *msg_sa,
-				    pb_stream *msg,
-				    v2SK_payload_t *sk,
-				    const char *what)
+stf_status record_v2SK_message(pb_stream *msg,
+			       v2SK_payload_t *sk,
+			       const char *what,
+			       enum message_role message)
 {
 	size_t len = pbs_offset(msg);
+
+	/*
+	 * If we are doing NAT, so that the other end doesn't mistake
+	 * this message for ESP, each message needs a non-ESP_Marker
+	 * prefix.
+	 */
 	if (!pexpect(sk->ike->sa.st_interface != NULL) &&
-	    sk->ike->sa.st_interface->ike_float)
+	    sk->ike->sa.st_interface->esp_encapsulation_enabled)
 		len += NON_ESP_MARKER_SIZE;
 
-	stf_status ret;
 	/* IPv4 and IPv6 have different fragment sizes */
-	if (LIN(POLICY_IKE_FRAG_ALLOW, sk->ike->sa.st_connection->policy) &&
-	    sk->ike->sa.st_seen_fragvid &&
+	if (sk->ike->sa.st_interface->protocol == &ip_protocol_udp &&
+	    LIN(POLICY_IKE_FRAG_ALLOW, sk->ike->sa.st_connection->policy) &&
+	    sk->ike->sa.st_seen_fragmentation_supported &&
 	    len >= endpoint_type(&sk->ike->sa.st_remote_endpoint)->ikev2_max_fragment_size) {
-		ret = v2_record_outbound_fragments(msg_sa, msg, sk, what);
-	} else {
-		ret = encrypt_v2SK_payload(sk);
-		if (ret != STF_OK) {
-			libreswan_log("error encrypting %s message", what);
-			return ret;
+		struct v2_outgoing_fragment **frags = &sk->ike->sa.st_v2_outgoing[message];
+		if (!record_outbound_fragments(msg, sk, what, frags)) {
+			dbg("record outbound fragments failed");
+			return STF_INTERNAL_ERROR;
 		}
-		record_outbound_ike_msg(msg_sa, &reply_stream, what);
+	} else {
+		if (encrypt_v2SK_payload(sk) != STF_OK) {
+			log_message(RC_LOG, sk->logger,
+				    "error encrypting %s message", what);
+			return STF_INTERNAL_ERROR;
+		}
+		dbg("recording outgoing fragment failed");
+		record_v2_message(sk->ike, msg, what, message);
 	}
-	return ret;
+	return STF_OK;
 }
 
-struct ikev2_id build_v2_id_payload(const struct end *end, shunk_t *body)
+struct ikev2_id build_v2_id_payload(const struct end *end, shunk_t *body,
+				    const char *what, struct logger *logger)
 {
 	struct ikev2_id id_header = {
 		.isai_type = id_to_payload(&end->id, &end->host_addr, body),
 		.isai_critical = build_ikev2_critical(false),
 	};
+	if (impair.send_nonzero_reserved_id) {
+		log_message(RC_LOG, logger, "IMPAIR: setting reserved byte 3 of %s to 0x%02x",
+			    what, ISAKMP_PAYLOAD_LIBRESWAN_BOGUS);
+		id_header.isai_res3 = ISAKMP_PAYLOAD_LIBRESWAN_BOGUS;
+	}
 	return id_header;
 }

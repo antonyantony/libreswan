@@ -20,16 +20,18 @@
 
 #include "nss_cert_load.h"
 
-CERTCertificate *get_cert_by_nickname_from_nss(const char *nickname)
+CERTCertificate *get_cert_by_nickname_from_nss(const char *nickname,
+					       struct logger *logger)
 {
 	return nickname == NULL ? NULL :
 		PK11_FindCertFromNickname(nickname,
-			lsw_return_nss_password_file_info());
+					  lsw_nss_get_password_context(logger));
 }
 
 struct ckaid_match_arg {
 	SECItem ckaid;
 	CERTCertificate *cert;
+	struct logger *logger;
 };
 
 static SECStatus ckaid_match(CERTCertificate *cert, SECItem *ignore1 UNUSED, void *arg)
@@ -39,14 +41,13 @@ static SECStatus ckaid_match(CERTCertificate *cert, SECItem *ignore1 UNUSED, voi
 		return SECSuccess;
 	}
 	SECItem *ckaid = PK11_GetLowLevelKeyIDForCert(NULL, cert,
-						      lsw_return_nss_password_file_info());
+						      lsw_nss_get_password_context(ckaid_match_arg->logger));
 	if (ckaid == NULL) {
-		DBG(DBG_CONTROL,
-		    DBG_log("GetLowLevelID for cert %s failed", cert->nickname));
+		dbg("GetLowLevelID for cert %s failed", cert->nickname);
 		return SECSuccess;
 	}
 	if (SECITEM_ItemsAreEqual(ckaid, &ckaid_match_arg->ckaid)) {
-		DBG(DBG_CONTROLMORE, DBG_log("CKAID matched cert %s", cert->nickname));
+		dbg("CKAID matched cert %s", cert->nickname);
 		ckaid_match_arg->cert = CERT_DupCertificate(cert);
 		/* bail early, but how?  */
 	}
@@ -54,42 +55,14 @@ static SECStatus ckaid_match(CERTCertificate *cert, SECItem *ignore1 UNUSED, voi
 	return SECSuccess;
 }
 
-CERTCertificate *get_cert_by_ckaid_t_from_nss(ckaid_t ckaid)
+CERTCertificate *get_cert_by_ckaid_from_nss(const ckaid_t *ckaid, struct logger *logger)
 {
 	struct ckaid_match_arg ckaid_match_arg = {
 		.cert = NULL,
-		.ckaid = *ckaid.nss,
+		.ckaid = same_ckaid_as_secitem(ckaid),
+		.logger = logger,
 	};
 	PK11_TraverseSlotCerts(ckaid_match, &ckaid_match_arg,
-			       lsw_return_nss_password_file_info());
+			       lsw_nss_get_password_context(logger));
 	return ckaid_match_arg.cert;
-}
-
-CERTCertificate *get_cert_by_ckaid_from_nss(const char *ckaid)
-{
-	if (ckaid == NULL) {
-		return NULL;
-	}
-	/* convert hex string ckaid to binary bin */
-	size_t binlen = (strlen(ckaid) + 1) / 2;
-	char *bin = alloc_bytes(binlen, "ckaid");
-	const char *ugh = ttodata(ckaid, 0, 16, bin, binlen, &binlen);
-	if (ugh != NULL) {
-		pfree(bin);
-		/* should have been rejected by whack? */
-		libreswan_log("invalid hex CKAID '%s': %s", ckaid, ugh);
-		return NULL;
-	}
-
-	SECItem ckaid_nss = {
-		.type = siBuffer,
-		.data = (void*) bin,
-		.len = binlen,
-	};
-	ckaid_t ckaid_buf = {
-		.nss = &ckaid_nss,
-	};
-	CERTCertificate *cert = get_cert_by_ckaid_t_from_nss(ckaid_buf);
-	pfree(bin);
-	return cert;
 }

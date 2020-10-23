@@ -15,7 +15,6 @@
 
 #include <stdint.h>
 
-#include "lswlog.h"
 
 #include "defs.h"
 #include "hash_table.h"
@@ -25,11 +24,12 @@ const hash_t zero_hash = { 0 };
 void init_hash_table(struct hash_table *table)
 {
 	for (unsigned i = 0; i < table->nr_slots; i++) {
-		init_list(&table->info, &table->slots[i]);
+		struct list_head *slot = &table->slots[i];
+		*slot = (struct list_head) INIT_LIST_HEAD(slot, &table->info);
 	}
 }
 
-hash_t hasher(shunk_t data, hash_t hash)
+hash_t hash_table_hasher(shunk_t data, hash_t hash)
 {
 	/*
 	 * 251 is a prime close to 256 (so like <<8).

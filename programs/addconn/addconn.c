@@ -34,7 +34,7 @@
 #include "ipsecconf/confread.h"
 #include "ipsecconf/confwrite.h"
 #include "ipsecconf/starterwhack.h"
-#ifdef NETKEY_SUPPORT
+#ifdef XFRM_SUPPORT
 #include "addr_lookup.h"
 #endif
 #ifdef USE_DNSSEC
@@ -67,21 +67,28 @@ static char *environlize(const char *str)
  * XXX: why not let pluto resolve all this like it is already doing?
  * because of MOBIKE.
  */
-static void resolve_defaultroute(struct starter_conn *conn UNUSED)
+static void resolve_defaultroute(struct starter_conn *conn UNUSED, struct logger *logger)
 {
-#ifdef NETKEY_SUPPORT
-	if (resolve_defaultroute_one(&conn->left, &conn->right, verbose != 0) == 1)
-		resolve_defaultroute_one(&conn->left, &conn->right, verbose != 0);
-	if (resolve_defaultroute_one(&conn->right, &conn->left, verbose != 0) == 1)
-		resolve_defaultroute_one(&conn->right, &conn->left, verbose != 0);
-#else /* !defined(NETKEY_SUPPORT) */
-	fprintf(stderr, "addcon: without XFRM/NETKEY, cannot resolve_defaultroute()\n");
-	exit(7);	/* random code */
+#ifdef XFRM_SUPPORT
+	if (resolve_defaultroute_one(&conn->left, &conn->right, verbose != 0, logger) == 1)
+		resolve_defaultroute_one(&conn->left, &conn->right, verbose != 0, logger);
+	if (resolve_defaultroute_one(&conn->right, &conn->left, verbose != 0, logger) == 1)
+		resolve_defaultroute_one(&conn->right, &conn->left, verbose != 0, logger);
+#else /* !defined(XFRM_SUPPORT) */
+	/* What kind of result are we seeking? */
+	bool seeking_src = (conn->left.addrtype == KH_DEFAULTROUTE ||
+			    conn->right.addrtype == KH_DEFAULTROUTE);
+	bool seeking_gateway = (conn->left.nexttype == KH_DEFAULTROUTE ||
+				conn->right.nexttype == KH_DEFAULTROUTE);
+	if (!seeking_src && !seeking_gateway)
+		return;	/* this end already figured out */
+
+	fatal(logger, "addcon: without XFRM/NETKEY, cannot resolve_defaultroute()");
 #endif
 }
 
 #ifdef HAVE_SECCOMP
-static void init_seccomp_addconn(uint32_t def_action)
+static void init_seccomp_addconn(uint32_t def_action, struct logger *logger)
 {
 	scmp_filter_ctx ctx = seccomp_init(def_action);
 	if (ctx == NULL) {
@@ -94,60 +101,62 @@ static void init_seccomp_addconn(uint32_t def_action)
 	 * here MUST also appear in the syscall list for "main" inside
 	 * pluto
 	 */
-	LSW_SECCOMP_ADD(ctx, access);
-	LSW_SECCOMP_ADD(ctx, arch_prctl);
-	LSW_SECCOMP_ADD(ctx, brk);
-	LSW_SECCOMP_ADD(ctx, bind);
-	LSW_SECCOMP_ADD(ctx, clone);
-	LSW_SECCOMP_ADD(ctx, clock_gettime);
-	LSW_SECCOMP_ADD(ctx, close);
-	LSW_SECCOMP_ADD(ctx, connect);
-	LSW_SECCOMP_ADD(ctx, epoll_create);
-	LSW_SECCOMP_ADD(ctx, epoll_ctl);
-	LSW_SECCOMP_ADD(ctx, epoll_wait);
-	LSW_SECCOMP_ADD(ctx, epoll_pwait);
-	LSW_SECCOMP_ADD(ctx, exit_group);
-	LSW_SECCOMP_ADD(ctx, fcntl);
-	LSW_SECCOMP_ADD(ctx, fstat);
-	LSW_SECCOMP_ADD(ctx, futex);
-	LSW_SECCOMP_ADD(ctx, getdents);
-	LSW_SECCOMP_ADD(ctx, getegid);
-	LSW_SECCOMP_ADD(ctx, getpid);
-	LSW_SECCOMP_ADD(ctx, getrlimit);
-	LSW_SECCOMP_ADD(ctx, geteuid);
-	LSW_SECCOMP_ADD(ctx, getgid);
-	LSW_SECCOMP_ADD(ctx, getrandom);
-	LSW_SECCOMP_ADD(ctx, getuid);
-	LSW_SECCOMP_ADD(ctx, ioctl);
-	LSW_SECCOMP_ADD(ctx, mmap);
-	LSW_SECCOMP_ADD(ctx, lseek);
-	LSW_SECCOMP_ADD(ctx, munmap);
-	LSW_SECCOMP_ADD(ctx, mprotect);
-	LSW_SECCOMP_ADD(ctx, open);
-	LSW_SECCOMP_ADD(ctx, openat);
-	LSW_SECCOMP_ADD(ctx, poll);
-	LSW_SECCOMP_ADD(ctx, prctl);
-	LSW_SECCOMP_ADD(ctx, read);
-	LSW_SECCOMP_ADD(ctx, readlink);
-	LSW_SECCOMP_ADD(ctx, recvfrom);
-	LSW_SECCOMP_ADD(ctx, rt_sigaction);
-	LSW_SECCOMP_ADD(ctx, rt_sigprocmask);
-	LSW_SECCOMP_ADD(ctx, sendto);
-	LSW_SECCOMP_ADD(ctx, setsockopt);
-	LSW_SECCOMP_ADD(ctx, set_robust_list);
-	LSW_SECCOMP_ADD(ctx, set_tid_address);
-	LSW_SECCOMP_ADD(ctx, sigreturn);
-	LSW_SECCOMP_ADD(ctx, socket);
-	LSW_SECCOMP_ADD(ctx, socketcall);
-	LSW_SECCOMP_ADD(ctx, socketpair);
-	LSW_SECCOMP_ADD(ctx, stat);
-	LSW_SECCOMP_ADD(ctx, statfs);
-	LSW_SECCOMP_ADD(ctx, uname);
-	LSW_SECCOMP_ADD(ctx, waitpid);
-	LSW_SECCOMP_ADD(ctx, write);
+	LSW_SECCOMP_ADD(access);
+	LSW_SECCOMP_ADD(arch_prctl);
+	LSW_SECCOMP_ADD(brk);
+	LSW_SECCOMP_ADD(bind);
+	LSW_SECCOMP_ADD(clone);
+	LSW_SECCOMP_ADD(clock_gettime);
+	LSW_SECCOMP_ADD(close);
+	LSW_SECCOMP_ADD(connect);
+	LSW_SECCOMP_ADD(epoll_create);
+	LSW_SECCOMP_ADD(epoll_create1);
+	LSW_SECCOMP_ADD(epoll_ctl);
+	LSW_SECCOMP_ADD(epoll_wait);
+	LSW_SECCOMP_ADD(epoll_pwait);
+	LSW_SECCOMP_ADD(exit_group);
+	LSW_SECCOMP_ADD(fcntl);
+	LSW_SECCOMP_ADD(fstat);
+	LSW_SECCOMP_ADD(futex);
+	LSW_SECCOMP_ADD(getdents);
+	LSW_SECCOMP_ADD(getegid);
+	LSW_SECCOMP_ADD(getpid);
+	LSW_SECCOMP_ADD(getrlimit);
+	LSW_SECCOMP_ADD(geteuid);
+	LSW_SECCOMP_ADD(getgid);
+	LSW_SECCOMP_ADD(getrandom);
+	LSW_SECCOMP_ADD(getuid);
+	LSW_SECCOMP_ADD(ioctl);
+	LSW_SECCOMP_ADD(mmap);
+	LSW_SECCOMP_ADD(lseek);
+	LSW_SECCOMP_ADD(munmap);
+	LSW_SECCOMP_ADD(mprotect);
+	LSW_SECCOMP_ADD(open);
+	LSW_SECCOMP_ADD(openat);
+	LSW_SECCOMP_ADD(pipe2);
+	LSW_SECCOMP_ADD(poll);
+	LSW_SECCOMP_ADD(prctl);
+	LSW_SECCOMP_ADD(read);
+	LSW_SECCOMP_ADD(readlink);
+	LSW_SECCOMP_ADD(recvfrom);
+	LSW_SECCOMP_ADD(rt_sigaction);
+	LSW_SECCOMP_ADD(rt_sigprocmask);
+	LSW_SECCOMP_ADD(sendto);
+	LSW_SECCOMP_ADD(setsockopt);
+	LSW_SECCOMP_ADD(set_robust_list);
+	LSW_SECCOMP_ADD(set_tid_address);
+	LSW_SECCOMP_ADD(sigreturn);
+	LSW_SECCOMP_ADD(socket);
+	LSW_SECCOMP_ADD(socketcall);
+	LSW_SECCOMP_ADD(socketpair);
+	LSW_SECCOMP_ADD(stat);
+	LSW_SECCOMP_ADD(statfs);
+	LSW_SECCOMP_ADD(uname);
+	LSW_SECCOMP_ADD(waitpid);
+	LSW_SECCOMP_ADD(write);
 
 #ifdef USE_EFENCE
-	LSW_SECCOMP_ADD(ctx, madvise);
+	LSW_SECCOMP_ADD(madvise);
 #endif
 
 	int rc = seccomp_load(ctx);
@@ -207,7 +216,7 @@ static const struct option longopts[] =
 
 int main(int argc, char *argv[])
 {
-	tool_init_log(argv[0]);
+	struct logger *logger = tool_init_log(argv[0]);
 
 	int opt;
 	bool autoall = FALSE;
@@ -226,7 +235,7 @@ int main(int argc, char *argv[])
 	const char *varprefix = "";
 	int exit_status = 0;
 	struct starter_conn *conn = NULL;
-	const char *ctlsocket = NULL;
+	char *ctlsocket = NULL;
 
 #if 0
 	/* efence settings */
@@ -316,14 +325,16 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if (ctlsocket == NULL)
+		ctlsocket = clone_str(DEFAULT_CTL_SOCKET, "default ctlsocket");
+
 	if (autoall) {
 		/* pluto forks us, we might have to wait on it to create the socket */
 		struct stat sb;
 		int ws = 5; /* somewhat arbitrary */
 
 		while (ws > 0) {
-			int ret = stat(ctlsocket == NULL ? DEFAULT_CTL_SOCKET :
-				ctlsocket, &sb);
+			int ret = stat(ctlsocket, &sb);
 
 			if (ret == -1) {
 				sleep(1);
@@ -348,20 +359,8 @@ int main(int argc, char *argv[])
 		yydebug = 1;
 	}
 
-	char *confdir = IPSEC_CONFDIR;
-
-	if (configfile == NULL) {
-		/* ??? see code clone in programs/readwriteconf/readwriteconf.c */
-		configfile = alloc_bytes(strlen(confdir) +
-					 sizeof("/ipsec.conf"),
-					 "conf file");
-
-		/* calculate default value for configfile */
-		strcpy(configfile, confdir);	/* safe: see allocation above */
-		if (configfile[0] != '\0' && configfile[strlen(configfile) - 1] != '/')
-			strcat(configfile, "/");	/* safe: see allocation above */
-		strcat(configfile, "ipsec.conf");	/* safe: see allocation above */
-	}
+	if (configfile == NULL)
+		configfile = clone_str(IPSEC_CONF, "default ipsec.conf file");
 
 	if (verbose > 0)
 		printf("opening file: %s\n", configfile);
@@ -373,7 +372,7 @@ int main(int argc, char *argv[])
 	{
 		starter_errors_t errl = { NULL };
 
-		cfg = confread_load(configfile, &errl, ctlsocket, configsetup);
+		cfg = confread_load(configfile, &errl, ctlsocket, configsetup, logger);
 
 		if (cfg == NULL) {
 			fprintf(stderr, "cannot load config '%s': %s\n",
@@ -395,10 +394,10 @@ int main(int argc, char *argv[])
 #ifdef HAVE_SECCOMP
 	switch (cfg->setup.options[KBF_SECCOMP]) {
 		case SECCOMP_ENABLED:
-		init_seccomp_addconn(SCMP_ACT_KILL);
+			init_seccomp_addconn(SCMP_ACT_KILL, logger);
 		break;
 	case SECCOMP_TOLERANT:
-		init_seccomp_addconn(SCMP_ACT_ERRNO(EACCES));
+		init_seccomp_addconn(SCMP_ACT_ERRNO(EACCES), logger);
 		break;
 	case SECCOMP_DISABLED:
 		break;
@@ -409,8 +408,9 @@ int main(int argc, char *argv[])
 
 #ifdef USE_DNSSEC
 	unbound_sync_init(cfg->setup.options[KBF_DO_DNSSEC],
-		cfg->setup.strings[KSF_PLUTO_DNSSEC_ROOTKEY_FILE],
-		cfg->setup.strings[KSF_PLUTO_DNSSEC_ANCHORS]);
+			  cfg->setup.strings[KSF_PLUTO_DNSSEC_ROOTKEY_FILE],
+			  cfg->setup.strings[KSF_PLUTO_DNSSEC_ANCHORS],
+			  logger);
 #endif
 
 	if (autoall) {
@@ -434,8 +434,8 @@ int main(int argc, char *argv[])
 			{
 				if (verbose > 0)
 					printf(" %s", conn->name);
-				resolve_defaultroute(conn);
-				starter_whack_add_conn(cfg, conn);
+				resolve_defaultroute(conn, logger);
+				starter_whack_add_conn(cfg, conn, logger);
 			}
 		}
 
@@ -454,7 +454,7 @@ int main(int argc, char *argv[])
 				if (verbose > 0)
 					printf(" %s", conn->name);
 				if (conn->desired_state == STARTUP_ONDEMAND)
-					starter_whack_route_conn(cfg, conn);
+					starter_whack_route_conn(cfg, conn, logger);
 			}
 		}
 
@@ -530,9 +530,8 @@ int main(int argc, char *argv[])
 						p1, p2, p3,
 						conn->name);
 				} else {
-					resolve_defaultroute(conn);
-					exit_status = starter_whack_add_conn(
-						cfg, conn);
+					resolve_defaultroute(conn, logger);
+					exit_status = starter_whack_add_conn(cfg, conn, logger);
 					conn->state = STATE_ADDED;
 				}
 			}
@@ -627,6 +626,8 @@ int main(int argc, char *argv[])
 		const struct keyword_def *kd;
 
 		printf("%s %sconfreadstatus=''\n", export, varprefix);
+		printf("%s configfile='%s'\n", export, configfile);
+		printf("%s ctlsocket='%s'\n", export, ctlsocket);
 		for (kd = ipsec_conf_keywords; kd->keyname != NULL; kd++) {
 			if ((kd->validity & kv_config) == 0)
 				continue;
@@ -686,6 +687,8 @@ int main(int argc, char *argv[])
 #ifdef USE_DNSSEC
 	unbound_ctx_free();
 #endif
+	pfreeany(ctlsocket);
+	pfreeany(configfile);
 	/*
 	 * Only RC_ codes between RC_EXIT_FLOOR (RC_DUPNAME) and
 	 * RC_EXIT_ROOF (RC_NEW_V1_STATE) are errors Some starter code

@@ -140,8 +140,7 @@ extern bool ikev1_out_sa(pb_stream *outs,
 		   const struct db_sa *sadb,
 		   struct state *st,
 		   bool oakley_mode,
-		   bool aggressive_mode,
-		   enum next_payload_types_ikev1 np);
+		   bool aggressive_mode);
 
 extern lset_t preparse_isakmp_sa_body(pb_stream sa_pbs /* by value! */);
 
@@ -172,12 +171,12 @@ extern void sa_log(struct db_sa *f);
 struct alg_info_ike;
 struct alg_info_esp;
 
-extern struct db_sa *oakley_alg_makedb(const struct ike_proposals proposals,
-				       enum ikev1_auth_method auth_method,
-				       bool single_dh);
+extern struct db_sa *v1_ike_alg_make_sadb(const struct ike_proposals proposals,
+					  enum ikev1_auth_method auth_method,
+					  bool single_dh, struct logger *logger);
 
 extern struct db_sa *kernel_alg_makedb(lset_t policy,
 				       const struct child_proposals proposals,
-				       bool logit);
+				       bool logit, struct logger *logger);
 
 #endif /*  _SPDB_H_ */

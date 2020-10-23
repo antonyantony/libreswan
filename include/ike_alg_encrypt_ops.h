@@ -16,13 +16,15 @@
 #ifndef IKE_ALG_ENCRYPT_OPS_H
 #define IKE_ALG_ENCRYPT_OPS_H
 
+struct logger;
+
 struct encrypt_ops {
 	const char *backend;
 
 	/*
 	 * Delegate responsibility for checking OPS specific fields.
 	 */
-	void (*const check)(const struct encrypt_desc *alg);
+	void (*const check)(const struct encrypt_desc *alg, struct logger *logger);
 
 	/*
 	 * Perform simple encryption.
@@ -34,7 +36,8 @@ struct encrypt_ops {
 			       size_t datasize,
 			       PK11SymKey *key,
 			       uint8_t *iv,
-			       bool enc);
+			       bool enc,
+			       struct logger *logger);
 
 	/*
 	 * Perform Authenticated Encryption with Associated Data
@@ -55,7 +58,8 @@ struct encrypt_ops {
 			      uint8_t *aad, size_t aad_size,
 			      uint8_t *text_and_tag,
 			      size_t text_size, size_t tag_size,
-			      PK11SymKey *key, bool enc);
+			      PK11SymKey *key, bool enc,
+			      struct logger *logger);
 };
 
 extern const struct encrypt_ops ike_alg_encrypt_nss_aead_ops;

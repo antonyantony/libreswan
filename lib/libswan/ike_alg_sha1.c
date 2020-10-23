@@ -31,18 +31,19 @@
 #include "ike_alg_prf_mac_ops.h"
 #include "ike_alg_prf_ikev1_ops.h"
 #include "ike_alg_prf_ikev2_ops.h"
-#include "sadb.h"
+#include "lsw-pfkeyv2.h"	/* for SADB_*ALG_* */
+
+static const uint8_t asn1_blob_ecdsa_sha1[] = { LEN_ECDSA_SHA1_BLOB, ECDSA_SHA1_BLOB };
 
 const struct hash_desc ike_alg_hash_sha1 = {
 	.common = {
-		.name = "sha",
 		.fqn = "SHA1",
 		.names = "sha,sha1",
 		.algo_type = IKE_ALG_HASH,
 		.id = {
 			[IKEv1_OAKLEY_ID] = OAKLEY_SHA1,
 			[IKEv1_ESP_ID] = -1,
-			[IKEv2_ALG_ID] = -1,
+			[IKEv2_ALG_ID] = IKEv2_HASH_ALGORITHM_SHA1,
 		},
 		.fips = true,
 	},
@@ -53,11 +54,12 @@ const struct hash_desc ike_alg_hash_sha1 = {
 	.hash_digest_size = SHA1_DIGEST_SIZE,
 	.hash_block_size = 64,	/* B from RFC 2104 */
 	.hash_ops = &ike_alg_hash_nss_ops,
+
+	.hash_asn1_blob_ecdsa = THING_AS_HUNK(asn1_blob_ecdsa_sha1),
 };
 
 const struct prf_desc ike_alg_prf_sha1 = {
 	.common = {
-		.name = "sha",
 		.fqn = "HMAC_SHA1",
 		.names = "sha,sha1,hmac_sha1",
 		.algo_type = IKE_ALG_PRF,
@@ -75,7 +77,7 @@ const struct prf_desc ike_alg_prf_sha1 = {
 	.prf_output_size = SHA1_DIGEST_SIZE,
 	.hasher = &ike_alg_hash_sha1,
 	.prf_mac_ops = &ike_alg_prf_mac_nss_ops,
-#ifdef USE_NSS_PRF
+#ifdef USE_NSS_KDF
 	.prf_ikev1_ops = &ike_alg_prf_ikev1_nss_ops,
 	.prf_ikev2_ops = &ike_alg_prf_ikev2_nss_ops,
 #else
@@ -87,7 +89,6 @@ const struct prf_desc ike_alg_prf_sha1 = {
 
 const struct integ_desc ike_alg_integ_sha1 = {
 	.common = {
-		.name = "sha",
 		.fqn = "HMAC_SHA1_96",
 		.names = "sha,sha1,sha1_96,hmac_sha1,hmac_sha1_96",
 		.algo_type = IKE_ALG_INTEG,
@@ -109,13 +110,4 @@ const struct integ_desc ike_alg_integ_sha1 = {
 	.integ_tcpdump_name = "sha1",
 	.integ_ike_audit_name = "sha1",
 	.integ_kernel_audit_name = "HMAC_SHA1",
-};
-
-static const uint8_t asn1_blob_ecdsa_sha1[ASN1_LEN_ALGO_IDENTIFIER + ASN1_SHA1_ECDSA_SIZE] =
-	{ LEN_ECDSA_SHA1_BLOB, ECDSA_SHA1_BLOB };
-
-const struct asn1_hash_blob asn1_ecdsa_sha1 = {
-	.hash_algo = IKEv2_AUTH_HASH_SHA1,
-	.blob = asn1_blob_ecdsa_sha1,
-	.blob_sz = sizeof(asn1_blob_ecdsa_sha1)
 };

@@ -1,6 +1,7 @@
 /* identity representation, as in IKE ID Payloads (RFC 2407 DOI 4.6.2.1)
+ *
  * Copyright (C) 1999-2001  D. Hugh Redelmeier
- * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2019-2020 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -20,7 +21,7 @@
 #include "chunk.h"
 #include "err.h"
 #include "ip_address.h"
-#include "jambuf.h"
+#include "jambuf.h"		/* for typedef jam_bytes_fn */
 
 struct id {
 	enum ike_id_type kind;
@@ -42,10 +43,11 @@ extern const struct id empty_id;	/* ID_NONE */
 /*
  * parsing.
  */
-extern err_t atoid(char *src, struct id *id, bool oe_only);
+
+err_t atoid(const char *src, struct id *id);
 
 /*
- * Formattting.
+ * Formatting.
  *
  * jam_id() only emits printable ASCII.  Non-printable characters, for
  * instance, are escaped using the RFC compliant sequence \<HEX><HEX>.
@@ -54,7 +56,7 @@ extern err_t atoid(char *src, struct id *id, bool oe_only);
  * JAM_BYTES to apply additional escaping.
  */
 
-void jam_id(struct lswlog *buf, const struct id *id, jam_bytes_fn *jam_bytes);
+void jam_id(struct jambuf *buf, const struct id *id, jam_bytes_fn *jam_bytes);
 
 typedef struct {
 	char buf[512];
@@ -79,8 +81,6 @@ extern int id_count_wildcards(const struct id *id);
 #define id_is_ipaddr(id) ((id)->kind == ID_IPV4_ADDR || (id)->kind == \
 			  ID_IPV6_ADDR)
 
-extern bool same_dn_any_order(chunk_t a, chunk_t b);
-
 /* returns ID Type; and points body at Identification Data */
 enum ike_id_type id_to_payload(const struct id *id, const ip_address *host, shunk_t *body);
 
@@ -88,7 +88,6 @@ enum ike_id_type id_to_payload(const struct id *id, const ip_address *host, shun
  * Old stuff.
  */
 
-void unshare_id_content(struct id *id); /* use clone_id() */
 void duplicate_id(struct id *dst, const struct id *src); /* use free_id_content; clone_id() */
 
 #endif

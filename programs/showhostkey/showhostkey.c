@@ -55,13 +55,12 @@
 #include "lswnss.h"
 #include "lswtool.h"
 
-#include <nss.h>
 #include <keyhi.h>
 #include <prerror.h>
 #include <prinit.h>
 
 char usage[] =
-	"Usage: showhostkey [ --verbose ]\n"
+	"Usage: showhostkey [ --verbose ] [ --debug ]\n"
 	"        { --version | --dump | --list | --left | --right |\n"
 	"                --ipseckey [ --precedence <precedence> ] \n"
 	"                [ --gateway <gateway> ] }\n"
@@ -74,10 +73,11 @@ char usage[] =
  * XXX: Can fix old options later.
  */
 enum opt {
-	OPT_CONFIGDIR,
+	OPT_CONFIGDIR = 256,
 	OPT_DUMP,
 	OPT_PASSWORD,
 	OPT_CKAID,
+	OPT_DEBUG,
 };
 
 struct option opts[] = {
@@ -85,6 +85,7 @@ struct option opts[] = {
 	{ "left",       no_argument,            NULL,   'l', },
 	{ "right",      no_argument,            NULL,   'r', },
 	{ "dump",       no_argument,            NULL,   OPT_DUMP, },
+	{ "debug",      no_argument,            NULL,   OPT_DEBUG, },
 	{ "list",       no_argument,            NULL,   'L', },
 	{ "ipseckey",   no_argument,            NULL,   'K', },
 	{ "gateway",    required_argument,      NULL,   'g', },
@@ -138,9 +139,9 @@ static void print(struct private_key_stuff *pks,
 		if (id) {
 			printf(" id: %s", idb);
 		}
-		char *ckaid = ckaid_as_string(pks->u.RSA_private_key.pub.ckaid);
-		printf(" ckaid: %s\n", ckaid);
-		pfree(ckaid);
+		ckaid_buf cb;
+		ckaid_t *ckaid = &pks->u.RSA_private_key.pub.ckaid;
+		printf(" ckaid: %s\n", str_ckaid(ckaid, &cb));
 		break;
 	}
 
@@ -222,7 +223,7 @@ static int pick_by_ckaid(struct secret *secret UNUSED,
 			 void *uservoid)
 {
 	char *start = (char *)uservoid;
-	if (pks->kind == PKK_RSA && ckaid_starts_with(pks->u.RSA_private_key.pub.ckaid, start)) {
+	if (pks->kind == PKK_RSA && ckaid_starts_with(&pks->u.RSA_private_key.pub.ckaid, start)) {
 		/* stop */
 		return 0;
 	} else {
@@ -323,12 +324,124 @@ static int show_confkey(struct private_key_stuff *pks,
 	return 0;
 }
 
-static struct private_key_stuff *foreach_secret(secret_eval func, void *uservoid)
+/*
+ * XXX: this code is broken:
+ *
+ * - it duplicates stuff in secrets.c
+ *
+ * - it doesn't support ECDSA
+ *
+ * - it doesn't pass a secret into the iterator
+ *
+ * Why not load the secret properly?
+ */
+
+static void fill_RSA_public_key(struct RSA_public_key *rsa, SECKEYPublicKey *pubkey)
 {
-	lsw_nss_buf_t err = {0};
-	struct private_key_stuff *pks = lsw_nss_foreach_private_key_stuff(func, uservoid, err);
-	if (err[0]) {
-		fprintf(stderr, "%s: %s\n", progname, err);
+	passert(SECKEY_GetPublicKeyType(pubkey) == rsaKey);
+	rsa->e = clone_secitem_as_chunk(pubkey->u.rsa.publicExponent, "e");
+	rsa->n = clone_secitem_as_chunk(pubkey->u.rsa.modulus, "n");
+	form_keyid(rsa->e, rsa->n, rsa->keyid, &rsa->k);
+}
+
+static struct private_key_stuff *lsw_nss_foreach_private_key_stuff(secret_eval func,
+								   void *uservoid,
+								   struct logger *logger)
+{
+	PK11SlotInfo *slot = lsw_nss_get_authenticated_slot(logger);
+	if (slot == NULL) {
+		/* already logged */
+		return NULL;
+	}
+
+	SECKEYPrivateKeyList *list = PK11_ListPrivateKeysInSlot(slot);
+	if (list == NULL) {
+		log_message(RC_LOG_SERIOUS|ERROR_STREAM, logger, "no list");
+		PK11_FreeSlot(slot);
+		return NULL;
+	}
+
+	int line = 1;
+
+	struct private_key_stuff *result = NULL;
+
+	SECKEYPrivateKeyListNode *node;
+	for (node = PRIVKEY_LIST_HEAD(list);
+	     !PRIVKEY_LIST_END(node, list);
+	     node = PRIVKEY_LIST_NEXT(node)) {
+
+		if (SECKEY_GetPrivateKeyType(node->key) != rsaKey) {
+			/* only rsa for now */
+			continue;
+		}
+
+		struct private_key_stuff pks = {
+			.kind = PKK_RSA,
+			.on_heap = TRUE,
+		};
+
+		{
+			SECItem *nss_ckaid
+				= PK11_GetLowLevelKeyIDForPrivateKey(node->key);
+			if (nss_ckaid == NULL) {
+				// fprintf(stderr, "ckaid not found\n");
+				continue;
+			}
+			pks.u.RSA_private_key.pub.ckaid = ckaid_from_secitem(nss_ckaid);
+			SECITEM_FreeItem(nss_ckaid, PR_TRUE);
+		}
+
+		{
+			SECKEYPublicKey *pubkey = SECKEY_ConvertToPublicKey(node->key);
+			if (pubkey != NULL) {
+				fill_RSA_public_key(&pks.u.RSA_private_key.pub, pubkey);
+				SECKEY_DestroyPublicKey(pubkey);
+			}
+		}
+
+		/*
+		 * Only count private keys that get processed.
+		 */
+		pks.line = line++;
+
+		int ret = func(NULL, &pks, uservoid);
+		if (ret == 0) {
+			/*
+			 * save/return the result.
+			 *
+			 * XXX: Potential Memory leak.
+			 *
+			 * lsw_foreach_secret() + lsw_get_pks()
+			 * returns an object that must not be freed
+			 * BUT lsw_nss_foreach_private_key_stuff()
+			 * returns an object that must be freed.
+			 *
+			 * For moment ignore this - as only caller is
+			 * showhostkey.c which quickly exits.
+			 */
+			result = clone_thing(pks, "pks");
+			break;
+		}
+
+		free_chunk_content(&pks.u.RSA_private_key.pub.e);
+		free_chunk_content(&pks.u.RSA_private_key.pub.n);
+
+		if (ret < 0) {
+			break;
+		}
+	}
+
+	SECKEY_DestroyPrivateKeyList(list);
+	PK11_FreeSlot(slot);
+
+	return result; /* could be NULL */
+}
+
+static struct private_key_stuff *foreach_secret(secret_eval func, void *uservoid, struct logger *logger)
+{
+	struct private_key_stuff *pks = lsw_nss_foreach_private_key_stuff(func, uservoid, logger);
+	if (pks == NULL) {
+		/* already logged any error */
 		return NULL;
 	}
 	return pks;
@@ -337,7 +450,7 @@ static struct private_key_stuff *foreach_secret(secret_eval func, void *uservoid
 int main(int argc, char *argv[])
 {
 	log_to_stderr = FALSE;
-	tool_init_log("ipsec showhostkey");
+	struct logger *logger = tool_init_log("ipsec showhostkey");
 
 	int opt;
 	bool left_flg = FALSE;
@@ -409,7 +522,7 @@ int main(int argc, char *argv[])
 
 		case OPT_CONFIGDIR:	/* Obsoletd by --nssdir|-d */
 		case 'd':
-			lsw_conf_nssdir(optarg);
+			lsw_conf_nssdir(optarg, logger);
 			break;
 
 		case OPT_PASSWORD:
@@ -422,6 +535,10 @@ int main(int argc, char *argv[])
 
 		case 'v':
 			log_to_stderr = TRUE;
+			break;
+
+		case OPT_DEBUG:
+			cur_debugging = -1;
 			break;
 
 		case 'V':
@@ -461,28 +578,25 @@ int main(int argc, char *argv[])
 	 * processed, and really are "constant".
 	 */
 	const struct lsw_conf_options *oco = lsw_init_options();
-	libreswan_log("using nss directory \"%s\"\n", oco->nssdir);
+	log_message(RC_LOG, logger, "using nss directory \"%s\"", oco->nssdir);
 
 	/*
 	 * Set up for NSS - contains key pairs.
 	 */
 	int status = 0;
-	lsw_nss_buf_t err;
-	if (!lsw_nss_setup(oco->nssdir, LSW_NSS_READONLY,
-			   lsw_nss_get_password, err)) {
-		fprintf(stderr, "%s: %s\n", progname, err);
+	if (!lsw_nss_setup(oco->nssdir, LSW_NSS_READONLY, logger)) {
 		exit(1);
 	}
 
 	/* options that apply to entire files */
 	if (dump_flg) {
 		/* dumps private key info too */
-		foreach_secret(dump_key, NULL);
+		foreach_secret(dump_key, NULL, logger);
 		goto out;
 	}
 
 	if (list_flg) {
-		foreach_secret(list_key, NULL);
+		foreach_secret(list_key, NULL, logger);
 		goto out;
 	}
 
@@ -491,13 +605,13 @@ int main(int argc, char *argv[])
 		if (log_to_stderr)
 			printf("%s picking by rsaid=%s\n",
 			       ipseckey_flg ? ";" : "\t#", rsaid);
-		pks = foreach_secret(pick_by_rsaid, rsaid);
+		pks = foreach_secret(pick_by_rsaid, rsaid, logger);
 	} else if (ckaid != NULL) {
 		if (log_to_stderr) {
 			printf("%s picking by ckaid=%s\n",
 			       ipseckey_flg ? ";" : "\t#", ckaid);
 		}
-		pks = foreach_secret(pick_by_ckaid, ckaid);
+		pks = foreach_secret(pick_by_ckaid, ckaid, logger);
 	} else {
 		fprintf(stderr, "%s: nothing to do\n", progname);
 		status = 1;

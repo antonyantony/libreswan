@@ -20,6 +20,7 @@
 
 #include "constants.h"
 #include "lswalloc.h"
+
 #include "crypt_symkey.h"
 #include "cavp_print.h"
 
@@ -88,11 +89,11 @@ void fprint_chunk(FILE *file, const char *prefix, const char *json,
 }
 
 void fprint_symkey(FILE *file, const char *prefix, const char *json,
-		   PK11SymKey *key, size_t binlen)
+		   PK11SymKey *key, size_t binlen, struct logger *logger)
 {
-	chunk_t chunk = chunk_from_symkey(prefix, key);
+	chunk_t chunk = chunk_from_symkey(prefix, key, logger);
 	fprint_chunk(file, prefix, json, chunk, binlen);
-	freeanychunk(chunk);
+	free_chunk_content(&chunk);
 }
 
 void fprint_line(FILE *file, const char *line)
@@ -128,9 +129,10 @@ void print_chunk(const char *prefix, const char *json,
 }
 
 void print_symkey(const char *prefix, const char *json,
-		  PK11SymKey *key, size_t binlen)
+		  PK11SymKey *key, size_t binlen,
+		  struct logger *logger)
 {
-	fprint_symkey(stdout, prefix, json, key, binlen);
+	fprint_symkey(stdout, prefix, json, key, binlen, logger);
 }
 
 void print_number(const char *prefix, const char *json,

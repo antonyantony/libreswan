@@ -12,6 +12,7 @@
  * Copyright (C) 2013 Wolfgang Nothdurft <wolfgang@linogate.de>
  * Copyright (C) 2016-2019 Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2017 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2017 Mayank Totale <mtotale@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -36,13 +37,9 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#ifdef SOLARIS
-# include <sys/sockio.h>        /* for Solaris 2.6: defines SIOCGIFCONF */
-#endif
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/time.h>
-#include <sys/poll.h>   /* only used for forensic poll call */
 #include <netdb.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -55,13 +52,6 @@
 #include <event2/event.h>
 #include <event2/event_struct.h>
 #include <event2/thread.h>
-
-#if defined(IP_RECVERR) && defined(MSG_ERRQUEUE)
-#  include <asm/types.h>        /* for __u8, __u32 */
-#  include <linux/errqueue.h>
-#  include <sys/uio.h>          /* struct iovec */
-#endif
-
 
 #include "sysdep.h"
 #include "socketwrapper.h"
@@ -82,11 +72,11 @@
 #include "keys.h"
 #include "whack.h"              /* for RC_LOG_SERIOUS */
 #include "pluto_crypt.h"        /* cryptographic helper functions */
-#include "udpfromto.h"
 #include "monotime.h"
 #include "ikev1.h"		/* for complete_v1_state_transition() */
 #include "ikev2.h"		/* for complete_v2_state_transition() */
 #include "state_db.h"
+#include "iface.h"
 
 #ifdef USE_XFRM_INTERFACE
 #include "kernel_xfrm_interface.h"
@@ -114,9 +104,6 @@ char *pluto_vendorid;
 
 static pid_t addconn_child_pid = 0;
 
-/* list of interface devices */
-struct iface_list interface_dev;
-
 /* pluto's main Libevent event_base */
 static struct event_base *pluto_eb =  NULL;
 
@@ -138,32 +125,41 @@ struct sockaddr_un ctl_addr = {
  * It is important that the socket is created before the original
  * Pluto process returns.
  */
-err_t init_ctl_socket(void)
+
+bool init_ctl_socket(struct logger *logger)
 {
-	err_t failed = NULL;
-
-	LIST_INIT(&interface_dev);
-
 	delete_ctl_socket();    /* preventative medicine */
 	ctl_fd = safe_socket(AF_UNIX, SOCK_STREAM, 0);
 	if (ctl_fd == -1) {
-		failed = "create";
-	} else if (fcntl(ctl_fd, F_SETFD, FD_CLOEXEC) == -1) {
-		failed = "fcntl FD+CLOEXEC";
-	} else {
-		/* to keep control socket secure, use umask */
+		log_message(ERROR_STREAM, logger,
+			    "FATAL ERROR: could not create control socket "PRI_ERRNO,
+			    pri_errno(errno));
+		return false;
+	}
+
+	if (fcntl(ctl_fd, F_SETFD, FD_CLOEXEC) == -1) {
+		log_message(ERROR_STREAM, logger,
+			    "FATAL ERROR: could not fcntl FD+CLOEXEC control socket "PRI_ERRNO,
+			    pri_errno(errno));
+		return false;
+	}
+
+	/* to keep control socket secure, use umask */
 #ifdef PLUTO_GROUP_CTL
-		mode_t ou = umask(~(S_IRWXU | S_IRWXG));
+	mode_t ou = umask(~(S_IRWXU | S_IRWXG));
 #else
-		mode_t ou = umask(~S_IRWXU);
+	mode_t ou = umask(~S_IRWXU);
 #endif
 
-		if (bind(ctl_fd, (struct sockaddr *)&ctl_addr,
-			 offsetof(struct sockaddr_un, sun_path) +
-				strlen(ctl_addr.sun_path)) < 0)
-			failed = "bind";
-		umask(ou);
+	if (bind(ctl_fd, (struct sockaddr *)&ctl_addr,
+		 offsetof(struct sockaddr_un, sun_path) +
+		 strlen(ctl_addr.sun_path)) < 0) {
+		log_message(ERROR_STREAM, logger,
+			    "FATAL ERROR: could not bind control socket "PRI_ERRNO,
+			    pri_errno(errno));
+		return false;
 	}
+	umask(ou);
 
 #ifdef PLUTO_GROUP_CTL
 	{
@@ -171,24 +167,26 @@ err_t init_ctl_socket(void)
 
 		if (g != NULL) {
 			if (fchown(ctl_fd, -1, g->gr_gid) != 0) {
-				loglog(RC_LOG_SERIOUS,
-				       "Cannot chgrp ctl fd(%d) to gid=%d: %s",
-				       ctl_fd, g->gr_gid, strerror(errno));
+				log_message(RC_LOG_SERIOUS, logger,
+					    "cannot chgrp ctl fd(%d) to gid=%d: %s",
+					    ctl_fd, g->gr_gid, strerror(errno));
 			}
 		}
 	}
 #endif
 
-	/* 5 is a haphazardly chosen limit for the backlog.
+	/*
+	 * 5 (five) is a haphazardly chosen limit for the backlog.
 	 * Rumour has it that this is the max on BSD systems.
 	 */
-	if (failed == NULL && listen(ctl_fd, 5) < 0)
-		failed = "listen() on";
+	if (listen(ctl_fd, 5) < 0) {
+		log_message(ERROR_STREAM, logger,
+			    "FATAL ERROR: could not listen on control socket "PRI_ERRNO,
+			    pri_errno(errno));
+		return false;
+	}
 
-	return failed == NULL ? NULL : builddiag(
-		"could not %s control socket: %d %s",
-		failed, errno,
-		strerror(errno));
+	return true;
 }
 
 void delete_ctl_socket(void)
@@ -199,6 +197,8 @@ void delete_ctl_socket(void)
 
 bool listening = FALSE;  /* should we pay attention to IKE messages? */
 bool pluto_drop_oppo_null = FALSE; /* drop opportunistic AUTH-NULL on first IKE msg? */
+bool pluto_listen_udp = TRUE;
+bool pluto_listen_tcp = FALSE;
 
 enum ddos_mode pluto_ddos_mode = DDOS_AUTO; /* default to auto-detect */
 #ifdef HAVE_SECCOMP
@@ -210,228 +210,6 @@ deltatime_t pluto_shunt_lifetime = DELTATIME_INIT(PLUTO_SHUNT_LIFE_DURATION_DEFA
 
 unsigned int pluto_sock_bufsize = IKE_BUF_AUTO; /* use system values */
 bool pluto_sock_errqueue = TRUE; /* Enable MSG_ERRQUEUE on IKE socket */
-
-struct iface_port  *interfaces = NULL;  /* public interfaces */
-
-/* Initialize the interface sockets. */
-
-static void mark_ifaces_dead(void)
-{
-	struct iface_port *p;
-
-	for (p = interfaces; p != NULL; p = p->next)
-		p->change = IFN_DELETE;
-}
-
-static void free_dead_iface_dev(struct iface_dev *id)
-{
-	if (--id->id_count == 0) {
-		pfree(id->id_vname);
-		pfree(id->id_rname);
-
-		LIST_REMOVE(id, id_entry);
-
-		pfree(id);
-	}
-}
-
-static void free_dead_ifaces(void)
-{
-	struct iface_port *p;
-	bool some_dead = FALSE,
-	     some_new = FALSE;
-
-	for (p = interfaces; p != NULL; p = p->next) {
-		if (p->change == IFN_DELETE) {
-			endpoint_buf b;
-			libreswan_log("shutting down interface %s/%s %s",
-				      p->ip_dev->id_vname,
-				      p->ip_dev->id_rname,
-				      str_endpoint(&p->local_endpoint, &b));
-			some_dead = TRUE;
-		} else if (p->change == IFN_ADD) {
-			some_new = TRUE;
-		}
-	}
-
-	if (some_dead) {
-		struct iface_port **pp;
-
-		release_dead_interfaces();
-		delete_states_dead_interfaces();
-		for (pp = &interfaces; (p = *pp) != NULL; ) {
-			if (p->change == IFN_DELETE) {
-				*pp = p->next; /* advance *pp */
-				delete_pluto_event(&p->pev);
-				close(p->fd);
-				free_dead_iface_dev(p->ip_dev);
-				pfree(p);
-			} else {
-				pp = &p->next; /* advance pp */
-			}
-		}
-	}
-
-	/* this must be done after the release_dead_interfaces
-	 * in case some to the newly unoriented connections can
-	 * become oriented here.
-	 */
-	if (some_dead || some_new)
-		check_orientations();
-}
-
-void free_ifaces(void)
-{
-	mark_ifaces_dead();
-	free_dead_ifaces();
-#ifdef USE_XFRM_INTERFACE
-	free_xfrmi_ipsec1();
-#endif
-}
-
-struct raw_iface *static_ifn = NULL;
-
-int create_socket(const struct raw_iface *ifp, const char *v_name, int port)
-{
-	int fd = socket(addrtypeof(&ifp->addr), SOCK_DGRAM, IPPROTO_UDP);
-	int fcntl_flags;
-	static const int on = TRUE;     /* by-reference parameter; constant, we hope */
-
-	if (fd < 0) {
-		LOG_ERRNO(errno, "socket() in create_socket()");
-		return -1;
-	}
-
-	/* Set socket Nonblocking */
-	if ((fcntl_flags = fcntl(fd, F_GETFL)) >= 0) {
-		if (!(fcntl_flags & O_NONBLOCK)) {
-			fcntl_flags |= O_NONBLOCK;
-			if (fcntl(fd, F_SETFL, fcntl_flags) == -1) {
-				LOG_ERRNO(errno, "fcntl(,, O_NONBLOCK) in create_socket()");
-			}
-		}
-	}
-
-	if (fcntl(fd, F_SETFD, FD_CLOEXEC) == -1) {
-		LOG_ERRNO(errno, "fcntl(,, FD_CLOEXEC) in create_socket()");
-		close(fd);
-		return -1;
-	}
-
-	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
-		       (const void *)&on, sizeof(on)) < 0) {
-		LOG_ERRNO(errno, "setsockopt SO_REUSEADDR in create_socket()");
-		close(fd);
-		return -1;
-	}
-
-#ifdef SO_PRIORITY
-	static const int so_prio = 6; /* rumored maximum priority, might be 7 on linux? */
-	if (setsockopt(fd, SOL_SOCKET, SO_PRIORITY,
-			(const void *)&so_prio, sizeof(so_prio)) < 0) {
-		LOG_ERRNO(errno, "setsockopt(SO_PRIORITY) in find_raw_ifaces4()");
-		/* non-fatal */
-	}
-#endif
-
-	if (pluto_sock_bufsize != IKE_BUF_AUTO) {
-#if defined(linux)
-		/*
-		 * Override system maximum
-		 * Requires CAP_NET_ADMIN
-		 */
-		int so_rcv = SO_RCVBUFFORCE;
-		int so_snd = SO_SNDBUFFORCE;
-#else
-		int so_rcv = SO_RCVBUF;
-		int so_snd = SO_SNDBUF;
-#endif
-		if (setsockopt(fd, SOL_SOCKET, so_rcv,
-			(const void *)&pluto_sock_bufsize, sizeof(pluto_sock_bufsize)) < 0) {
-				LOG_ERRNO(errno, "setsockopt(SO_RCVBUFFORCE) in find_raw_ifaces4()");
-		}
-		if (setsockopt(fd, SOL_SOCKET, so_snd,
-			(const void *)&pluto_sock_bufsize, sizeof(pluto_sock_bufsize)) < 0) {
-				LOG_ERRNO(errno, "setsockopt(SO_SNDBUFFORCE) in find_raw_ifaces4()");
-		}
-	}
-
-
-
-	/* To improve error reporting.  See ip(7). */
-#if defined(IP_RECVERR) && defined(MSG_ERRQUEUE)
-	if (pluto_sock_errqueue) {
-		if (setsockopt(fd, SOL_IP, IP_RECVERR, (const void *)&on, sizeof(on)) < 0) {
-			LOG_ERRNO(errno, "setsockopt IP_RECVERR in create_socket()");
-			close(fd);
-			return -1;
-		}
-	}
-#endif
-
-	/* With IPv6, there is no fragmentation after
-	 * it leaves our interface.  PMTU discovery
-	 * is mandatory but doesn't work well with IKE (why?).
-	 * So we must set the IPV6_USE_MIN_MTU option.
-	 * See draft-ietf-ipngwg-rfc2292bis-01.txt 11.1
-	 */
-#ifdef IPV6_USE_MIN_MTU /* YUCK: not always defined */
-	if (addrtypeof(&ifp->addr) == AF_INET6 &&
-	    setsockopt(fd, SOL_SOCKET, IPV6_USE_MIN_MTU,
-		       (const void *)&on, sizeof(on)) < 0) {
-		LOG_ERRNO(errno, "setsockopt IPV6_USE_MIN_MTU in process_raw_ifaces()");
-		close(fd);
-		return -1;
-	}
-#endif
-
-	/*
-	 * NETKEY requires us to poke an IPsec policy hole that allows
-	 * IKE packets, unlike KLIPS which implicitly always allows
-	 * plaintext IKE.  This installs one IPsec policy per socket
-	 * but this function is called for each: IPv4 port 500 and
-	 * 4500 IPv6 port 500
-	 */
-	if (kernel_ops->poke_ipsec_policy_hole != NULL &&
-	    !kernel_ops->poke_ipsec_policy_hole(ifp, fd)) {
-		close(fd);
-		return -1;
-	}
-
-	/*
-	 * ??? does anyone care about the value of port of ifp->addr?
-	 * Old code seemed to assume that it should be reset to pluto_port.
-	 * But only on successful bind.  Seems wrong or unnecessary.
-	 */
-	ip_endpoint if_endpoint = endpoint(&ifp->addr, port);
-	ip_sockaddr if_sa;
-	size_t if_sa_size = endpoint_to_sockaddr(&if_endpoint, &if_sa);
-	if (bind(fd, &if_sa.sa, if_sa_size) < 0) {
-		endpoint_buf b;
-		LOG_ERRNO(errno, "bind() for %s/%s %s in process_raw_ifaces()",
-			  ifp->name, v_name,
-			  str_endpoint(&if_endpoint, &b));
-		close(fd);
-		return -1;
-	}
-
-#if defined(HAVE_UDPFROMTO)
-	/* we are going to use udpfromto.c, so initialize it */
-	if (udpfromto_init(fd) == -1) {
-		LOG_ERRNO(errno, "udpfromto_init() returned an error - ignored");
-	}
-#endif
-
-	/* poke a hole for IKE messages in the IPsec layer */
-	if (kernel_ops->exceptsocket != NULL) {
-		if (!kernel_ops->exceptsocket(fd, AF_INET)) {
-			close(fd);
-			return -1;
-		}
-	}
-
-	return fd;
-}
 
 /*
  * Static events.
@@ -456,43 +234,77 @@ static void free_static_event(struct event *ev)
  * Global timer events.
  */
 
-struct global_timer {
+struct global_timer_desc {
 	struct event ev;
 	global_timer_cb *cb;
-	const char *name;
+	const char *const name;
 };
 
-static struct global_timer global_timers[GLOBAL_TIMERS_ROOF];
+static struct global_timer_desc global_timers[] = {
+#define E(T) [T] = { .name = #T, }
+	E(EVENT_REINIT_SECRET),
+	E(EVENT_SHUNT_SCAN),
+	E(EVENT_PENDING_DDNS),
+	E(EVENT_SD_WATCHDOG),
+	E(EVENT_PENDING_PHASE2),
+	E(EVENT_CHECK_CRLS),
+	E(EVENT_REVIVE_CONNS),
+	E(EVENT_FREE_ROOT_CERTS),
+	E(EVENT_RESET_LOG_RATE_LIMIT),
+	E(EVENT_PROCESS_KERNEL_QUEUE),
+	E(EVENT_NAT_T_KEEPALIVE),
+#undef E
+};
 
-static void global_timer_event(evutil_socket_t fd UNUSED,
-			       const short event, void *arg)
+static void global_timer_event_cb(evutil_socket_t fd UNUSED,
+				  const short event, void *arg)
 {
 	passert(in_main_thread());
-	struct global_timer *gt = arg;
+	struct global_timer_desc *gt = arg;
 	passert(event & EV_TIMEOUT);
 	passert(gt >= global_timers);
 	passert(gt < global_timers + elemsof(global_timers));
 	dbg("processing global timer %s", gt->name);
 	threadtime_t start = threadtime_start();
-	gt->cb();
+	gt->cb(null_fd);
 	threadtime_stop(&start, SOS_NOBODY, "global timer %s", gt->name);
 }
 
-void enable_periodic_timer(enum event_type type, global_timer_cb *cb,
+void call_global_event_inline(enum global_timer timer, struct fd *whackfd)
+{
+	passert(in_main_thread());
+	if (!pexpect(timer < elemsof(global_timers))) {
+		/* timer is hardwired so shouldn't happen */
+		return;
+	}
+	struct global_timer_desc *gt = &global_timers[timer];
+	passert(gt->name != NULL);
+	if (!event_initialized(&gt->ev)) {
+		log_global(RC_LOG, whackfd, "inject: timer %s is not initialized",
+			   gt->name);
+	}
+	log_global(RC_LOG, whackfd, "inject: injecting timer event %s", gt->name);
+	threadtime_t start = threadtime_start();
+	gt->cb(whackfd);
+	threadtime_stop(&start, SOS_NOBODY, "global timer %s", gt->name);
+}
+
+void enable_periodic_timer(enum global_timer type, global_timer_cb *cb,
 			   deltatime_t period)
 {
 	passert(in_main_thread());
 	passert(type < elemsof(global_timers));
-	struct global_timer *gt = &global_timers[type];
+	struct global_timer_desc *gt = &global_timers[type];
 	/* initialize */
+	passert(gt->name != NULL);
 	passert(!event_initialized(&gt->ev));
 	event_assign(&gt->ev, pluto_eb, (evutil_socket_t)-1,
-		     EV_TIMEOUT|EV_PERSIST, global_timer_event, gt/*arg*/);
-	gt->name = enum_name(&timer_event_names, type);
+		     EV_TIMEOUT|EV_PERSIST,
+		     global_timer_event_cb, gt/*arg*/);
 	gt->cb = cb;
 	passert(event_get_events(&gt->ev) == (EV_TIMEOUT|EV_PERSIST));
 	/* enable */
-	struct timeval t = deltatimeval(period);
+	struct timeval t = timeval_from_deltatime(period);
 	passert(event_add(&gt->ev, &t) >= 0);
 	/* log */
 	deltatime_buf buf;
@@ -500,38 +312,40 @@ void enable_periodic_timer(enum event_type type, global_timer_cb *cb,
 	    gt->name, str_deltatime(period, &buf));
 }
 
-void init_oneshot_timer(enum event_type type, global_timer_cb *cb)
+void init_oneshot_timer(enum global_timer type, global_timer_cb *cb)
 {
 	passert(in_main_thread());
 	passert(type < elemsof(global_timers));
-	struct global_timer *gt = &global_timers[type];
+	struct global_timer_desc *gt = &global_timers[type];
+	/* initialize */
+	passert(gt->name != NULL);
 	passert(!event_initialized(&gt->ev));
 	event_assign(&gt->ev, pluto_eb, (evutil_socket_t)-1,
-		     EV_TIMEOUT, global_timer_event, gt/*arg*/);
-	gt->name = enum_name(&timer_event_names, type);
+		     EV_TIMEOUT,
+		     global_timer_event_cb, gt/*arg*/);
 	gt->cb = cb;
 	passert(event_get_events(&gt->ev) == (EV_TIMEOUT));
 	dbg("global one-shot timer %s initialized", gt->name);
 }
 
-void schedule_oneshot_timer(enum event_type type, deltatime_t delay)
+void schedule_oneshot_timer(enum global_timer type, deltatime_t delay)
 {
 	passert(type < elemsof(global_timers));
-	struct global_timer *gt = &global_timers[type];
+	struct global_timer_desc *gt = &global_timers[type];
 	deltatime_buf buf;
 	dbg("global one-shot timer %s scheduled in %s seconds",
 	    gt->name, str_deltatime(delay, &buf));
 	passert(event_initialized(&gt->ev));
 	passert(event_get_events(&gt->ev) == (EV_TIMEOUT));
-	struct timeval t = deltatimeval(delay);
+	struct timeval t = timeval_from_deltatime(delay);
 	passert(event_add(&gt->ev, &t) >= 0);
 }
 
 /* urban dictionary says deschedule is a word */
-void deschedule_oneshot_timer(enum event_type type)
+void deschedule_oneshot_timer(enum global_timer type)
 {
 	passert(type < elemsof(global_timers));
-	struct global_timer *gt = &global_timers[type];
+	struct global_timer_desc *gt = &global_timers[type];
 	dbg("global one-shot timer %s disabled", gt->name);
 	passert(event_initialized(&gt->ev));
 	passert(event_del(&gt->ev) >= 0);
@@ -540,7 +354,7 @@ void deschedule_oneshot_timer(enum event_type type)
 static void free_global_timers(void)
 {
 	for (unsigned u = 0; u < elemsof(global_timers); u++) {
-		struct global_timer *gt = &global_timers[u];
+		struct global_timer_desc *gt = &global_timers[u];
 		if (event_initialized(&gt->ev)) {
 			free_static_event(&gt->ev);
 			dbg("global timer %s uninitialized", gt->name);
@@ -548,11 +362,10 @@ static void free_global_timers(void)
 	}
 }
 
-static void list_global_timers(struct fd *whackfd,
-			       monotime_t now)
+static void list_global_timers(struct show *s, monotime_t now)
 {
 	for (unsigned u = 0; u < elemsof(global_timers); u++) {
-		struct global_timer *gt = &global_timers[u];
+		struct global_timer_desc *gt = &global_timers[u];
 		/*
 		 * XXX: DUE.mt is "set to hold the time at which the
 		 * timeout will expire" which is presumably a time and
@@ -564,11 +377,10 @@ static void list_global_timers(struct fd *whackfd,
 			const char *what = (event_get_events(&gt->ev) & EV_PERSIST) ? "periodic" : "one-shot";
 			deltatime_t delay = monotimediff(due, now);
 			deltatime_buf delay_buf;
-			whack_comment(whackfd,
-				  "global %s timer %s is scheduled for %jd (in %s seconds)",
-				  what, gt->name,
-				  monosecs(due), /* XXX: useful? */
-				  str_deltatime(delay, &delay_buf));
+			show_comment(s, "global %s timer %s is scheduled for %jd (in %s seconds)",
+				     what, gt->name,
+				     monosecs(due), /* XXX: useful? */
+				     str_deltatime(delay, &delay_buf));
 		}
 	}
 }
@@ -577,7 +389,7 @@ static void list_global_timers(struct fd *whackfd,
  * Global signal events.
  */
 
-typedef void (signal_handler_cb)(void);
+typedef void (signal_handler_cb)(struct logger *logger);
 
 struct signal_handler {
 	struct event ev;
@@ -608,10 +420,11 @@ static void signal_handler_handler(evutil_socket_t fd UNUSED,
 {
 	passert(in_main_thread());
 	passert(event & EV_SIGNAL);
+	struct logger logger[1] = { GLOBAL_LOGGER(null_fd), };
 	struct signal_handler *se = arg;
 	dbg("processing signal %s", se->name);
 	threadtime_t start = threadtime_start();
-	se->cb();
+	se->cb(logger);
 	threadtime_stop(&start, SOS_NOBODY, "signal handler %s", se->name);
 }
 
@@ -638,13 +451,13 @@ static void free_signal_handlers(void)
 	}
 }
 
-static void list_signal_handlers(struct fd *whackfd)
+static void list_signal_handlers(struct show *s)
 {
 	for (unsigned i = 0; i < elemsof(signal_handlers); i++) {
 		struct signal_handler *se = &signal_handlers[i];
 		if (event_initialized(&se->ev) &&
 		    event_pending(&se->ev, EV_SIGNAL, NULL) > 0) {
-			whack_comment(whackfd, "signal event handler %s", se->name);
+			show_comment(s, "signal event handler %s", se->name);
 		}
 	}
 }
@@ -767,7 +580,7 @@ void fire_timer_photon_torpedo(struct event **evp,
 	 * before it has been saved by the helper thread.
 	 */
 	*evp = ev;
-	struct timeval t = deltatimeval(delay);
+	struct timeval t = timeval_from_deltatime(delay);
 	passert(event_add(ev, &t) >= 0);
 }
 
@@ -814,42 +627,102 @@ static void resume_handler(evutil_socket_t fd UNUSED,
 		pexpect(status == STF_SKIP_COMPLETE_STATE_TRANSITION);
 		threadtime_stop(&start, e->serialno, "resume %s", e->name);
 	} else {
+		/* no previous state */
 		pexpect(push_cur_state(st) == SOS_NOBODY);
 		statetime_t start = statetime_start(st);
 		struct msg_digest *md = unsuspend_md(st);
 
-		/* trust nothing */
-		struct msg_digest *old_md = md;
-		so_serial_t old_st_serialno = st->st_serialno;
+		/* trust nothing; so save everything */
+		so_serial_t old_st = st->st_serialno;
+		so_serial_t old_md_st = md != NULL && md->st != NULL ? md->st->st_serialno : SOS_NOBODY;
 		enum ike_version ike_version = st->st_ike_version;
+		/* when MD.ST it matches ST */
+		pexpect(old_md_st == SOS_NOBODY || old_md_st == old_st);
 
 		/* run the callback */
-		stf_status status = e->callback(st, &md, e->context);
-		/* XXX: this may trash ST and MD */
+		stf_status status = e->callback(st, md, e->context);
+		/* this may trash MD.ST */
 
 		if (status == STF_SKIP_COMPLETE_STATE_TRANSITION) {
+			/* MD.ST may have been freed! */
 			dbg("resume %s for #%lu suppresed complete_v%d_state_transition()%s",
 			    e->name, e->serialno, ike_version,
-			    md == old_md ? "" : " and stole MD");
+			    (old_md_st != SOS_NOBODY && md->st == NULL ? "; MD.ST disappeared" :
+			     old_md_st != SOS_NOBODY && md->st != st ? "; MD.ST was switched" :
+			     ""));
+		} else if (old_md_st != SOS_NOBODY && md->st == NULL) {
+			/*
+			 * XXX: yes, MD.ST can be set to NULL.
+			 *
+			 * What happens is code deletes ST part way
+			 * through a state transition and then tries
+			 * to signal this by setting MD.ST to NULL
+			 * (presumably it was previously set to ST).
+			 *
+			 * Of course all the intervening code still
+			 * has references to the now-defunct state in
+			 * local ST et.al. variables.  What could
+			 * possibly go wrong .....
+			 *
+			 * The relevant code should instead return
+			 * STF_deleteme (STF_ZOMBIFY?)  so that the
+			 * delete can be performed by the state
+			 * transition function.
+			 *
+			 * XXX/SML: There is no need to abort here in
+			 * all cases where st is null, so moved this
+			 * precondition to where it's needed.  Some
+			 * previous logic appears to have been tooled
+			 * to handle null state, and state might be
+			 * null legitimately in certain failure cases
+			 * (STF_FAIL + xxx).
+			 *
+			 * One condition for null state is when a new
+			 * connection request packet arrives and there
+			 * is no suitable matching configuration.  For
+			 * example, ikev2_parent_inI1outR1() will
+			 * return (STF_FAIL + NO_PROPOSAL_CHOSEN) but
+			 * no state in this case.  While other
+			 * failures may be better caught before this
+			 * function is called, we should be graceful
+			 * here.  And for this particular case, and
+			 * similar failure cases, we want
+			 * SEND_NOTIFICATION (below) to let the peer
+			 * know why we've rejected the request.
+			 *
+			 * Another case of null state is return from
+			 * ikev2_parent_inR1BoutI1B which returns
+			 * STF_IGNORE.
+			 *
+			 * Another case occurs when we finish an
+			 * Informational Exchange message that causes
+			 * us to delete the IKE state.  In fact, that
+			 * can be an STF_OK and yet have no remaining
+			 * state object at this point.
+			 */
+			pexpect(ike_version == IKEv2);
+			dbg("XXX: resume %s for #%lu deleted MD.ST", e->name, old_st);
 		} else {
-			/* no stealing MD */
-			pexpect(old_md == md);
-			/* don't trust ST */
 			/* XXX: mumble something about struct ike_version */
 			switch (ike_version) {
 			case IKEv1:
-				/* no switching ST */
-				pexpect(md == NULL || md->st == NULL || md->st->st_serialno == old_st_serialno);
-				complete_v1_state_transition(&md, status);
+				/* no switching MD.ST */
+				pexpect(old_md_st == SOS_NOBODY ?
+					md == NULL || md->st == NULL :
+					md != NULL && md->st != NULL && md->st->st_serialno == old_md_st);
+				complete_v1_state_transition(md, status);
 				break;
 			case IKEv2:
-				/* get grumpy when ST is switched */
-				if (md != NULL && md->st != NULL && md->st->st_serialno != old_st_serialno) {
-					dbg("XXX: resume for #%lu switched MD.ST to #%lu",
-					    old_st_serialno, md->st->st_serialno);
-					st = md->st;
+				if (old_md_st == SOS_NOBODY) {
+					pexpect(md == NULL || md->st == NULL);
+				} else if (pexpect(md != NULL && md->st != NULL)) {
+					if (md->st->st_serialno != old_st) {
+						dbg("XXX: resume %s for #%lu switched MD.ST to #%lu",
+						    e->name, old_st, md->st->st_serialno);
+						st = md->st;
+					}
 				}
-				complete_v2_state_transition(st, &md, status);
+				complete_v2_state_transition(st, md, status);
 				break;
 			default:
 				bad_case(ike_version);
@@ -960,6 +833,17 @@ extern void schedule_callback(const char *name, so_serial_t serialno,
 				  deltatime(0)/*now*/);
 }
 
+void attach_fd_read_sensor(struct event **ev, evutil_socket_t fd,
+			   event_callback_fn cb, void *arg)
+{
+	passert(*ev == NULL);
+	*ev = event_new(get_pluto_event_base(), fd,
+			EV_READ|EV_PERSIST, cb, arg);
+	passert(*ev != NULL);
+	/* note call */
+	passert(event_add(*ev, NULL) >= 0);
+}
+
 /*
  * XXX: Some of the callers save the struct pluto_event reference but
  * some do not.
@@ -980,136 +864,78 @@ struct pluto_event *add_fd_read_event_handler(evutil_socket_t fd,
 	 * running, there can't be a race between the event being
 	 * added and the event firing.
 	 */
-	e->ev = event_new(pluto_eb, fd, EV_READ|EV_PERSIST, cb, arg);
-	passert(e->ev != NULL);
-	passert(event_add(e->ev, NULL) >= 0);
+	attach_fd_read_sensor(&e->ev, fd, cb, arg);
 	return e; /* compatible with pluto_event_new for the time being */
 }
 
 /*
  * dump list of events to whacklog
  */
-void timer_list(struct fd *whackfd)
+void list_timers(struct show *s, monotime_t now)
 {
-	monotime_t nw = mononow();
+	show_comment(s, "it is now: %jd seconds since monotonic epoch",
+		     monosecs(now));
 
-	whack_comment(whackfd,
-		  "it is now: %jd seconds since monotonic epoch",
-		  monosecs(nw));
-
-	list_global_timers(whackfd, nw);
-	list_signal_handlers(whackfd);
+	list_global_timers(s, now);
+	list_signal_handlers(s);
 
 	for (struct pluto_event *ev = pluto_events_head;
 	     ev != NULL; ev = ev->next) {
 		pexpect(ev->ev_state == NULL);
-		char buf[256] = "not timer based";
-
-		if (ev->ev_type != EVENT_NULL) {
-			snprintf(buf, sizeof(buf), "schd: %jd (in %jds)",
-				 monosecs(ev->ev_time),
-				 deltasecs(monotimediff(ev->ev_time, nw)));
-		}
-		whack_comment(whackfd, "event %s is %s", ev->ev_name, buf);
-	}
-
-	list_state_events(nw);
-}
-
-void find_ifaces(bool rm_dead)
-{
-	if (rm_dead)
-		mark_ifaces_dead();
-
-	if (kernel_ops->process_raw_ifaces != NULL) {
-		kernel_ops->process_raw_ifaces(find_raw_ifaces4());
-		kernel_ops->process_raw_ifaces(find_raw_ifaces6());
-		kernel_ops->process_raw_ifaces(static_ifn);
-	}
-
-	if (rm_dead)
-		free_dead_ifaces(); /* ditch remaining old entries */
-
-	if (interfaces == NULL)
-		loglog(RC_LOG_SERIOUS, "no public interfaces found");
-
-	if (listening) {
-		struct iface_port *ifp;
-
-		for (ifp = interfaces; ifp != NULL; ifp = ifp->next) {
-			delete_pluto_event(&ifp->pev);
-			ifp->pev = add_fd_read_event_handler(ifp->fd,
-							     comm_handle_cb,
-							     ifp, "ethX");
-			endpoint_buf b;
-			dbg("setup callback for interface %s %s fd %d",
-			    ifp->ip_dev->id_rname,
-			    str_endpoint(&ifp->local_endpoint, &b),
-			    ifp->fd);
+		SHOW_JAMBUF(RC_COMMENT, s, buf) {
+			show_comment(s, "event %s is ", ev->ev_name);
+			if (ev->ev_type != EVENT_NULL) {
+				jam(buf, "schd: %jd (in %jds)",
+				    monosecs(ev->ev_time),
+				    deltasecs(monotimediff(ev->ev_time, now)));
+			} else {
+				jam(buf, "not timer based");
+			}
 		}
 	}
 }
 
-struct iface_port *find_iface_port_by_local_endpoint(ip_endpoint *local_endpoint)
+void show_debug_status(struct show *s)
 {
-	for (struct iface_port *p = interfaces; p != NULL; p = p->next) {
-		if (endpoint_eq(*local_endpoint, p->local_endpoint)) {
-			return p;
-		}
-	}
-	return NULL;
-}
-
-void show_ifaces_status(struct fd *whackfd)
-{
-	struct iface_port *p;
-
-	for (p = interfaces; p != NULL; p = p->next) {
-		endpoint_buf b;
-		whack_comment(whackfd, "interface %s/%s %s",
-			  p->ip_dev->id_vname, p->ip_dev->id_rname,
-			  str_endpoint(&p->local_endpoint, &b));
-	}
-}
-
-void show_debug_status(void)
-{
-	LSWLOG_WHACK(RC_COMMENT, buf) {
-		lswlogs(buf, "debug:");
+	SHOW_JAMBUF(RC_COMMENT, s, buf) {
+		jam(buf, "debug:");
 		if (cur_debugging & DBG_MASK) {
-			lswlogs(buf, " ");
-			lswlog_enum_lset_short(buf, &debug_names,
-					       "+", cur_debugging & DBG_MASK);
+			jam(buf, " ");
+			jam_enum_lset_short(buf, &debug_names,
+					    "+", cur_debugging & DBG_MASK);
 		}
-		lswlog_impairments(buf, " impair: "/*prefix*/, "+");
+		if (have_impairments()) {
+			jam(buf, " impair: ");
+			jam_impairments(buf, "+");
+		}
 	}
 }
 
-void show_fips_status(struct fd *whackfd)
+void show_fips_status(struct show *s)
 {
 	bool fips = libreswan_fipsmode();
-	whack_comment(whackfd, "FIPS mode %s", !fips ?
+	show_comment(s, "FIPS mode %s", !fips ?
 		"disabled" :
-		IMPAIR(FORCE_FIPS) ? "enabled [forced]" : "enabled");
+		impair.force_fips ? "enabled [forced]" : "enabled");
 }
 
-static void huphandler_cb(void)
+static void huphandler_cb(struct logger *logger)
 {
 	/* logging is probably not signal handling / threa safe */
-	libreswan_log("Pluto ignores SIGHUP -- perhaps you want \"whack --listen\"");
+	log_message(RC_LOG, logger, "Pluto ignores SIGHUP -- perhaps you want \"whack --listen\"");
 }
 
-static void termhandler_cb(void)
+static void termhandler_cb(struct logger *logger_unused UNUSED)
 {
 	exit_pluto(PLUTO_EXIT_OK);
 }
 
 #ifdef HAVE_SECCOMP
-static void syshandler_cb(void)
+static void syshandler_cb(struct logger *logger)
 {
-	loglog(RC_LOG_SERIOUS, "pluto received SIGSYS - possible SECCOMP violation!");
+	log_message(RC_LOG_SERIOUS, logger, "pluto received SIGSYS - possible SECCOMP violation!");
 	if (pluto_seccomp_mode == SECCOMP_ENABLED) {
-		loglog(RC_LOG_SERIOUS, "seccomp=enabled mandates daemon restart");
+		log_message(RC_LOG_SERIOUS, logger, "seccomp=enabled mandates daemon restart");
 		exit_pluto(PLUTO_EXIT_SECCOMP_FAIL);
 	}
 }
@@ -1128,7 +954,7 @@ struct pid_entry {
 	monotime_t start_time;
 };
 
-static void jam_pid_entry(struct lswlog *buf, const void *data)
+static void jam_pid_entry(struct jambuf *buf, const void *data)
 {
 	if (data == NULL) {
 		jam(buf, "NULL pid");
@@ -1144,7 +970,7 @@ static void jam_pid_entry(struct lswlog *buf, const void *data)
 
 static hash_t pid_hasher(const pid_t *pid)
 {
-	return hasher(shunk2(pid, sizeof(*pid)), zero_hash);
+	return hash_table_hasher(shunk2(pid, sizeof(*pid)), zero_hash);
 }
 
 static hash_t pid_entry_hasher(const void *data)
@@ -1177,8 +1003,7 @@ static struct hash_table pids_hash_table = {
 static void add_pid(const char *name, so_serial_t serialno, pid_t pid,
 		    pluto_fork_cb *callback, void *context)
 {
-	DBG(DBG_CONTROL,
-	    DBG_log("forked child %d", pid));
+	dbg("forked child %d", pid);
 	struct pid_entry *new_pid = alloc_thing(struct pid_entry, "fork pid");
 	new_pid->magic = PID_MAGIC;
 	new_pid->pid = pid;
@@ -1212,43 +1037,42 @@ int pluto_fork(const char *name, so_serial_t serialno,
 static pluto_fork_cb addconn_exited; /* type assertion */
 
 static void addconn_exited(struct state *null_st UNUSED,
-			   struct msg_digest **null_mdp UNUSED,
+			   struct msg_digest *null_mdp UNUSED,
 			   int status, void *context UNUSED)
 {
-	DBG(DBG_CONTROLMORE,
-	   DBG_log("reaped addconn helper child (status %d)", status));
+	dbg("reaped addconn helper child (status %d)", status);
 	addconn_child_pid = 0;
 }
 
-static void log_status(struct lswlog *buf, int status)
+static void jam_status(struct jambuf *buf, int status)
 {
-	lswlogf(buf, " (");
+	jam(buf, " (");
 	if (WIFEXITED(status)) {
-		lswlogf(buf, "exited with status %u",
+		jam(buf, "exited with status %u",
 			WEXITSTATUS(status));
 	} else if (WIFSIGNALED(status)) {
-		lswlogf(buf, "terminated with signal %s (%d)",
+		jam(buf, "terminated with signal %s (%d)",
 			strsignal(WTERMSIG(status)),
 			WTERMSIG(status));
 	} else if (WIFSTOPPED(status)) {
 		/* should not happen */
-		lswlogf(buf, "stopped with signal %s (%d) but WUNTRACED not specified",
+		jam(buf, "stopped with signal %s (%d) but WUNTRACED not specified",
 			strsignal(WSTOPSIG(status)),
 			WSTOPSIG(status));
 	} else if (WIFCONTINUED(status)) {
-		lswlogf(buf, "continued");
+		jam(buf, "continued");
 	} else {
-		lswlogf(buf, "wait status %x not recognized!", status);
+		jam(buf, "wait status %x not recognized!", status);
 	}
 #ifdef WCOREDUMP
 	if (WCOREDUMP(status)) {
-		lswlogs(buf, ", core dumped");
+		jam_string(buf, ", core dumped");
 	}
 #endif
-	lswlogs(buf, ")");
+	jam_string(buf, ")");
 }
 
-static void childhandler_cb(void)
+static void childhandler_cb(struct logger *logger)
 {
 	while (true) {
 		int status;
@@ -1257,21 +1081,19 @@ static void childhandler_cb(void)
 		switch (child) {
 		case -1: /* error? */
 			if (errno == ECHILD) {
-				DBG(DBG_CONTROLMORE,
-				    DBG_log("waitpid returned ECHILD (no child processes left)"));
+				dbg("waitpid returned ECHILD (no child processes left)");
 			} else {
-				LOG_ERRNO(errno, "waitpid unexpectedly failed");
+				log_errno(logger, errno, "waitpid unexpectedly failed");
 			}
 			return;
 		case 0: /* nothing to do */
-			DBG(DBG_CONTROLMORE,
-			    DBG_log("waitpid returned nothing left to do (all child processes are busy)"));
+			dbg("waitpid returned nothing left to do (all child processes are busy)");
 			return;
 		default:
-			LSWDBGP(DBG_CONTROLMORE, buf) {
-				lswlogf(buf, "waitpid returned pid %d",
+			LSWDBGP(DBG_BASE, buf) {
+				jam(buf, "waitpid returned pid %d",
 					child);
-				log_status(buf, status);
+				jam_status(buf, status);
 			}
 			struct pid_entry *pid_entry = NULL;
 			hash_t hash = pid_hasher(&child);
@@ -1283,10 +1105,10 @@ static void childhandler_cb(void)
 				}
 			}
 			if (pid_entry == NULL) {
-				LSWLOG(buf) {
-					lswlogf(buf, "waitpid return unknown child pid %d",
+				LOG_JAMBUF(RC_LOG, logger, buf) {
+					jam(buf, "waitpid return unknown child pid %d",
 						child);
-					log_status(buf, status);
+					jam_status(buf, status);
 				}
 			} else {
 				struct state *st = state_with_serialno(pid_entry->serialno);
@@ -1294,9 +1116,9 @@ static void childhandler_cb(void)
 					pid_entry->callback(NULL, NULL,
 							    status, pid_entry->context);
 				} else if (st == NULL) {
-					LSWDBGP(DBG_CONTROLMORE, buf) {
+					LSWDBGP(DBG_BASE, buf) {
 						jam_pid_entry(buf, pid_entry);
-						lswlogs(buf, " disappeared");
+						jam_string(buf, " disappeared");
 					}
 					pid_entry->callback(NULL, NULL,
 							    status, pid_entry->context);
@@ -1305,12 +1127,13 @@ static void childhandler_cb(void)
 					struct msg_digest *md = unsuspend_md(st);
 					if (DBGP(DBG_CPU_USAGE)) {
 						deltatime_t took = monotimediff(mononow(), pid_entry->start_time);
-						DBG_log("#%lu waited "PRI_DELTATIME" for '%s' fork()",
-							st->st_serialno, pri_deltatime(took),
+						deltatime_buf dtb;
+						DBG_log("#%lu waited %s for '%s' fork()",
+							st->st_serialno, str_deltatime(took, &dtb),
 							pid_entry->name);
 					}
 					statetime_t start = statetime_start(st);
-					pid_entry->callback(st, &md, status,
+					pid_entry->callback(st, md, status,
 							    pid_entry->context);
 					statetime_stop(&start, "callback for %s",
 						       pid_entry->name);
@@ -1388,13 +1211,15 @@ void init_server(void)
  */
 void call_server(char *conffile)
 {
+	struct logger logger[1] = { GLOBAL_LOGGER(null_fd), };
+
 	init_hash_table(&pids_hash_table);
 
 	/*
 	 * setup basic events, CTL and SIGNALs
 	 */
 
-	DBG(DBG_CONTROLMORE, DBG_log("Setting up events, loop start"));
+	dbg("Setting up events, loop start");
 
 	add_fd_read_event_handler(ctl_fd, whack_handle_cb, NULL, "PLUTO_CTL_FD");
 
@@ -1429,8 +1254,7 @@ void call_server(char *conffile)
 			 */
 			n = 0;
 # else
-			EXIT_LOG_ERRNO(errno,
-				       "readlink(\"/proc/self/exe\") failed in call_server()");
+			FATAL_ERRNO(errno, "readlink(\"/proc/self/exe\") failed in call_server()");
 # endif
 		}
 #else
@@ -1446,15 +1270,15 @@ void call_server(char *conffile)
 		while (n > 0 && addconn_path_space[n - 1] != '/')
 			n--;
 
-		if ((size_t)n >
-		    sizeof(addconn_path_space) - sizeof(addconn_name))
-			exit_log("path to %s is too long", addconn_name);
+		if ((size_t)n > sizeof(addconn_path_space) - sizeof(addconn_name)) {
+			fatal(logger, "path to %s is too long", addconn_name);
+		}
 
 		strcpy(addconn_path_space + n, addconn_name);
 
 		if (access(addconn_path_space, X_OK) < 0)
-			EXIT_LOG_ERRNO(errno, "%s missing or not executable",
-				       addconn_path_space);
+			FATAL_ERRNO(errno, "%s missing or not executable",
+				    addconn_path_space);
 
 		char *newargv[] = { DISCARD_CONST(char *, "addconn"),
 				    DISCARD_CONST(char *, "--ctlsocket"),
@@ -1480,9 +1304,8 @@ void call_server(char *conffile)
 
 		/* Parent */
 
-		DBG(DBG_CONTROLMORE,
-		    DBG_log("created addconn helper (pid:%d) using %s+execve",
-			    addconn_child_pid, USE_VFORK ? "vfork" : "fork"));
+		dbg("created addconn helper (pid:%d) using %s+execve",
+		    addconn_child_pid, USE_VFORK ? "vfork" : "fork");
 		add_pid("addconn", SOS_NOBODY, addconn_child_pid,
 			addconn_exited, NULL);
 	}
@@ -1490,18 +1313,7 @@ void call_server(char *conffile)
 	/* parent continues */
 
 #ifdef HAVE_SECCOMP
-	switch (pluto_seccomp_mode) {
-	case SECCOMP_ENABLED:
-		init_seccomp_main(SCMP_ACT_KILL);
-		break;
-	case SECCOMP_TOLERANT:
-		init_seccomp_main(SCMP_ACT_TRAP);
-		break;
-	case SECCOMP_DISABLED:
-		break;
-	default:
-		bad_case(pluto_seccomp_mode);
-	}
+	init_seccomp_main(logger);
 #else
 	libreswan_log("seccomp security not supported");
 #endif
@@ -1510,459 +1322,13 @@ void call_server(char *conffile)
 	passert(r == 0);
 }
 
-/* Process any message on the MSG_ERRQUEUE
- *
- * This information is generated because of the IP_RECVERR socket option.
- * The API is sparsely documented, and may be LINUX-only, and only on
- * fairly recent versions at that (hence the conditional compilation).
- *
- * - ip(7) describes IP_RECVERR
- * - recvmsg(2) describes MSG_ERRQUEUE
- * - readv(2) describes iovec
- * - cmsg(3) describes how to process auxiliary messages
- *
- * ??? we should link this message with one we've sent
- * so that the diagnostic can refer to that negotiation.
- *
- * ??? how long can the messge be?
- *
- * ??? poll(2) has a very incomplete description of the POLL* events.
- * We assume that POLLIN, POLLOUT, and POLLERR are all we need to deal with
- * and that POLLERR will be on iff there is a MSG_ERRQUEUE message.
- *
- * We have to code around a couple of surprises:
- *
- * - Select can say that a socket is ready to read from, and
- *   yet a read will hang.  It turns out that a message available on the
- *   MSG_ERRQUEUE will cause select to say something is pending, but
- *   a normal read will hang.  poll(2) can tell when a MSG_ERRQUEUE
- *   message is pending.
- *
- *   This is dealt with by calling check_msg_errqueue after select
- *   has indicated that there is something to read, but before the
- *   read is performed.  check_msg_errqueue will return TRUE if there
- *   is something left to read.
- *
- * - A write to a socket may fail because there is a pending MSG_ERRQUEUE
- *   message, without there being anything wrong with the write.  This
- *   makes for confusing diagnostics.
- *
- *   To avoid this, we call check_msg_errqueue before a write.  True,
- *   there is a race condition (a MSG_ERRQUEUE message might arrive
- *   between the check and the write), but we should eliminate many
- *   of the problematic events.  To narrow the window, the poll(2)
- *   will await until an event happens (in the case or a write,
- *   POLLOUT; this should be benign for POLLIN).
- */
-
-#if defined(IP_RECVERR) && defined(MSG_ERRQUEUE)
-static struct state *find_likely_sender(size_t packet_len, uint8_t *buffer,
-					size_t sizeof_buffer)
+bool ev_before(struct pluto_event *pev, deltatime_t delay)
 {
-	if (packet_len > sizeof_buffer) {
-		/*
-		 * When the message is too big it is truncated.  But
-		 * what about the returned packet length?  Force
-		 * truncation.
-		 */
-		dbg("MSG_ERRQUEUE packet longer than %zu bytes; truncated", sizeof_buffer);
-		packet_len = sizeof_buffer;
-	}
-	if (packet_len < sizeof(struct isakmp_hdr)) {
-		dbg("MSG_ERRQUEUE packet is smaller than an IKE header");
-		return NULL;
-	}
-	pb_stream packet_pbs;
-	init_pbs(&packet_pbs, buffer, packet_len, __func__);
-	struct isakmp_hdr hdr;
-	if (!in_struct(&hdr, &raw_isakmp_hdr_desc, &packet_pbs, NULL)) {
-		/*
-		 * XXX:
-		 *
-		 * When in_struct() fails it logs an obscure and
-		 * typically context free error (for instance, cur_*
-		 * is unset when processing error messages); and
-		 * there's no clean for this or calling code to pass
-		 * in context.
-		 *
-		 * Fortunately, since the buffer is large enough to
-		 * hold the header, there's really not much left that
-		 * can trigger an error (everything in ISAKMP_HDR_DESC
-		 * that involves validation has its type set to FT_NAT
-		 * in RAW_ISAKMP_HDR_DESC).
-		 */
-		libreswan_log("MSG_ERRQUEUE packet IKE header is corrupt");
-		return NULL;
-	}
-	enum ike_version ike_version = hdr_ike_version(&hdr);
-	struct state *st;
-	switch (ike_version) {
-	case IKEv1:
-		/* might work? */
-		st = state_by_ike_spis(ike_version,
-				       NULL/*ignore-clonedfrom*/,
-				       NULL/*ignore-v1_msgid*/,
-				       NULL/*ignore-role*/,
-				       &hdr.isa_ike_spis,
-				       NULL, NULL,
-				       __func__);
-		break;
-	case IKEv2:
-	{
-		/*
-		 * Since this end sent the message mapping IKE_I is
-		 * straight forward.
-		 */
-		enum sa_role ike_role = (hdr.isa_flags & ISAKMP_FLAGS_v2_IKE_I) ? SA_INITIATOR : SA_RESPONDER;
-		so_serial_t clonedfrom = SOS_NOBODY;
-		st = state_by_ike_spis(ike_version,
-				       &clonedfrom/*IKE*/,
-				       NULL/*ignore-v1_msgid*/,
-				       &ike_role,
-				       &hdr.isa_ike_spis,
-				       NULL, NULL,
-				       __func__);
-		break;
-	}
-	default:
-		dbg("MSG_ERRQUEUE packet IKE header version unknown");
-		return NULL;
-	}
-	if (st == NULL) {
-		dbg("MSG_ERRQUEUE packet has no matching %s SA",
-		    enum_name(&ike_version_names, ike_version));
-		return NULL;
-	}
-	dbg("MSG_ERRQUEUE packet matches %s SA #%lu",
-	    enum_name(&ike_version_names, ike_version),
-	    st->st_serialno);
-	return st;
-}
-
-static bool check_msg_errqueue(const struct iface_port *ifp, short interest, const char *before)
-{
-	struct pollfd pfd;
-	int again_count = 0;
-
-	pfd.fd = ifp->fd;
-	pfd.events = interest | POLLPRI | POLLOUT;
-
-	while (pfd.revents = 0,
-	       poll(&pfd, 1, -1) > 0 && (pfd.revents & POLLERR)) {
-		/*
-		 * This buffer needs to be large enough to fit the IKE
-		 * header so that the IKE SPIs and flags can be
-		 * extracted and used to find the sender of the
-		 * message.
-		 *
-		 * Give it double that.
-		 */
-		uint8_t buffer[sizeof(struct isakmp_hdr) * 2];
-
-		union {
-			struct sockaddr sa;
-			struct sockaddr_in sa_in4;
-			struct sockaddr_in6 sa_in6;
-		} from;
-
-		ssize_t packet_len;
-
-		struct msghdr emh;
-		struct iovec eiov;
-		union {
-			/* force alignment (not documented as necessary) */
-			struct cmsghdr ecms;
-
-			/* how much space is enough? */
-			unsigned char space[256];
-		} ecms_buf;
-
-		struct cmsghdr *cm;
-		char fromstr[sizeof(" for message to  port 65536") +
-			     INET6_ADDRSTRLEN];
-		struct state *sender = NULL;
-
-		zero(&from.sa);
-
-		emh.msg_name = &from.sa; /* ??? filled in? */
-		emh.msg_namelen = sizeof(from);
-		emh.msg_iov = &eiov;
-		emh.msg_iovlen = 1;
-		emh.msg_control = &ecms_buf;
-		emh.msg_controllen = sizeof(ecms_buf);
-		emh.msg_flags = 0;
-
-		eiov.iov_base = buffer; /* see readv(2) */
-		eiov.iov_len = sizeof(buffer);
-
-		packet_len = recvmsg(ifp->fd, &emh, MSG_ERRQUEUE);
-
-		if (packet_len == -1) {
-			if (errno == EAGAIN) {
-				/* 32 is picked from thin air */
-				if (again_count == 32) {
-					loglog(RC_LOG_SERIOUS, "recvmsg(,, MSG_ERRQUEUE): given up reading socket after 32 EAGAIN errors");
-					return FALSE;
-				}
-				again_count++;
-				LOG_ERRNO(errno,
-					  "recvmsg(,, MSG_ERRQUEUE) on %s failed (noticed before %s) (attempt %d)",
-					  ifp->ip_dev->id_rname, before, again_count);
-				continue;
-			} else {
-				LOG_ERRNO(errno,
-					  "recvmsg(,, MSG_ERRQUEUE) on %s failed (noticed before %s)",
-					  ifp->ip_dev->id_rname, before);
-				break;
-			}
-		} else {
-			/*
-			 * Getting back a truncated IKE datagram a big
-			 * deal - find_likely_sender() only needs the
-			 * header when figuring out which state sent
-			 * the packet.
-			 */
-			if (DBGP(DBG_BASE) && (emh.msg_flags & MSG_TRUNC)) {
-				DBG_log("recvmsg(,, MSG_ERRQUEUE) on %s returned a truncated (IKE) datagram (MSG_TRUNC)",
-					ifp->ip_dev->id_rname);
-			}
-
-			sender = find_likely_sender((size_t) packet_len,
-						    buffer, sizeof(buffer));
-		}
-
-		if (DBGP(DBG_BASE)) {
-			if (packet_len > 0) {
-				DBG_log("rejected packet:");
-				DBG_dump(NULL, buffer, packet_len);
-			}
-			DBG_log("control:");
-			DBG_dump(NULL, emh.msg_control,
-				 emh.msg_controllen);
-		}
-
-		/* ??? Andi Kleen <ak@suse.de> and misc documentation
-		 * suggests that name will have the original destination
-		 * of the packet.  We seem to see msg_namelen == 0.
-		 * Andi says that this is a kernel bug and has fixed it.
-		 * Perhaps in 2.2.18/2.4.0.
-		 */
-		passert(emh.msg_name == &from.sa);
-		if (DBGP(DBG_BASE)) {
-			DBG_log("name:");
-			DBG_dump(NULL, emh.msg_name, emh.msg_namelen);
-		}
-
-		fromstr[0] = '\0'; /* usual case :-( */
-		switch (from.sa.sa_family) {
-			char as[INET6_ADDRSTRLEN];
-
-		case AF_INET:
-			if (emh.msg_namelen == sizeof(struct sockaddr_in))
-				snprintf(fromstr, sizeof(fromstr),
-					 " for message to %s port %u",
-					 inet_ntop(from.sa.sa_family,
-						   &from.sa_in4.sin_addr, as,
-						   sizeof(as)),
-					 ntohs(from.sa_in4.sin_port));
-			break;
-		case AF_INET6:
-			if (emh.msg_namelen == sizeof(struct sockaddr_in6))
-				snprintf(fromstr, sizeof(fromstr),
-					 " for message to %s port %u",
-					 inet_ntop(from.sa.sa_family,
-						   &from.sa_in6.sin6_addr, as,
-						   sizeof(as)),
-					 ntohs(from.sa_in6.sin6_port));
-			break;
-		}
-
-		for (cm = CMSG_FIRSTHDR(&emh)
-		     ; cm != NULL
-		     ; cm = CMSG_NXTHDR(&emh, cm)) {
-			if (cm->cmsg_level == SOL_IP &&
-			    cm->cmsg_type == IP_RECVERR) {
-				/* ip(7) and recvmsg(2) specify:
-				 * ee_origin is SO_EE_ORIGIN_ICMP for ICMP
-				 *  or SO_EE_ORIGIN_LOCAL for locally generated errors.
-				 * ee_type and ee_code are from the ICMP header.
-				 * ee_info is the discovered MTU for EMSGSIZE errors
-				 * ee_data is not used.
-				 *
-				 * ??? recvmsg(2) says "SOCK_EE_OFFENDER" but
-				 * means "SO_EE_OFFENDER".  The OFFENDER is really
-				 * the router that complained.  As such, the port
-				 * is meaningless.
-				 */
-
-				/* ??? cmsg(3) claims that CMSG_DATA returns
-				 * void *, but RFC 2292 and /usr/include/bits/socket.h
-				 * say unsigned char *.  The manual is being fixed.
-				 */
-				struct sock_extended_err *ee =
-					(void *)CMSG_DATA(cm);
-				const char *offstr = "unspecified";
-				char offstrspace[INET6_ADDRSTRLEN];
-				char orname[50];
-
-				if (cm->cmsg_len >
-				    CMSG_LEN(sizeof(struct sock_extended_err)))
-				{
-					const struct sockaddr *offender =
-						SO_EE_OFFENDER(ee);
-
-					switch (offender->sa_family) {
-					case AF_INET:
-						offstr = inet_ntop(
-							offender->sa_family,
-							&((const
-							   struct sockaddr_in *)
-							  offender)->sin_addr,
-							offstrspace,
-							sizeof(offstrspace));
-						break;
-					case AF_INET6:
-						offstr = inet_ntop(
-							offender->sa_family,
-							&((const
-							   struct sockaddr_in6
-							   *)offender)->sin6_addr,
-							offstrspace,
-							sizeof(offstrspace));
-						break;
-					default:
-						offstr = "unknown";
-						break;
-					}
-				}
-
-				switch (ee->ee_origin) {
-				case SO_EE_ORIGIN_NONE:
-					snprintf(orname, sizeof(orname),
-						 "none");
-					break;
-				case SO_EE_ORIGIN_LOCAL:
-					snprintf(orname, sizeof(orname),
-						 "local");
-					break;
-				case SO_EE_ORIGIN_ICMP:
-					snprintf(orname, sizeof(orname),
-						 "ICMP type %d code %d (not authenticated)",
-						 ee->ee_type, ee->ee_code);
-					break;
-				case SO_EE_ORIGIN_ICMP6:
-					snprintf(orname, sizeof(orname),
-						 "ICMP6 type %d code %d (not authenticated)",
-						 ee->ee_type, ee->ee_code);
-					break;
-				default:
-					snprintf(orname, sizeof(orname),
-						 "invalid origin %u",
-						 ee->ee_origin);
-					break;
-				}
-
-				enum stream logger;
-				if (packet_len == 1 && buffer[0] == 0xff &&
-				    (cur_debugging & DBG_NATT) == 0) {
-					/*
-					 * don't log NAT-T keepalive related errors unless NATT debug is
-					 * enabled
-					 */
-					logger = NO_STREAM;
-				} else if (sender != NULL && sender->st_connection != NULL &&
-					   LDISJOINT(sender->st_connection->policy, POLICY_OPPORTUNISTIC)) {
-					/*
-					 * The sender is known and
-					 * this isn't an opportunistic
-					 * connection, so log.
-					 *
-					 * XXX: originally this path
-					 * was taken unconditionally
-					 * but with opportunistic that
-					 * got too verbose.  Is there
-					 * a global opportunistic
-					 * disabled test so that
-					 * behaviour can be restored?
-					 *
-					 * HACK: So that the logging
-					 * system doesn't accidentally
-					 * include a prefix for the
-					 * wrong state et.al., switch
-					 * out everything but SENDER.
-					 * Better would be to make the
-					 * state/connection an
-					 * explicit parameter to the
-					 * logging system?
-					 */
-					logger = ALL_STREAMS;
-				} else if (DBGP(DBG_BASE)) {
-					/*
-					 * Since this output is forced
-					 * using DBGP, report the
-					 * error using debug-log.
-					 *
-					 * A NULL SENDER here doesn't
-					 * matter - it just gets
-					 * ignored.
-					 */
-					logger = DEBUG_STREAM;
-				} else {
-					logger = NO_STREAM;
-				}
-				if (logger != NO_STREAM) {
-					endpoint_buf epb;
-					log_message(logger,
-						    sender/*could be null*/, NULL/*md*/,
-						    "ERROR: asynchronous network error report on %s (%s)%s, complainant %s: %s [errno %" PRIu32 ", origin %s]",
-						    ifp->ip_dev->id_rname,
-						    str_endpoint(&ifp->local_endpoint, &epb),
-						    fromstr,
-						    offstr,
-						    strerror(ee->ee_errno),
-						    ee->ee_errno, orname);
-				}
-			} else if (cm->cmsg_level == SOL_IP &&
-				   cm->cmsg_type == IP_PKTINFO) {
-				/* do nothing */
-			} else {
-				/* .cmsg_len is a kernel_size_t(!), but the value
-				 * certainly ought to fit in an unsigned long.
-				 */
-				libreswan_log(
-					"unknown cmsg: level %d, type %d, len %zu",
-					cm->cmsg_level, cm->cmsg_type,
-					 cm->cmsg_len);
-			}
-		}
-	}
-	return (pfd.revents & interest) != 0;
-}
-#endif /* defined(IP_RECVERR) && defined(MSG_ERRQUEUE) */
-
-bool check_incoming_msg_errqueue(const struct iface_port *ifp UNUSED,
-				 const char *before UNUSED)
-{
-#if defined(IP_RECVERR) && defined(MSG_ERRQUEUE)
-	return check_msg_errqueue(ifp, POLLIN, before);
-#else
-	return true;
-#endif	/* defined(IP_RECVERR) && defined(MSG_ERRQUEUE) */
-}
-
-void check_outgoing_msg_errqueue(const struct iface_port *ifp UNUSED,
-				 const char *before UNUSED)
-{
-#if defined(IP_RECVERR) && defined(MSG_ERRQUEUE)
-	(void) check_msg_errqueue(ifp, POLLOUT, before);
-#endif	/* defined(IP_RECVERR) && defined(MSG_ERRQUEUE) */
-}
-
-bool ev_before(struct pluto_event *pev, deltatime_t delay) {
 	struct timeval timeout;
-
-	return (event_pending(pev->ev, EV_TIMEOUT, &timeout) & EV_TIMEOUT) &&
-		deltaless_tv_dt(timeout, delay);
+	if (!(event_pending(pev->ev, EV_TIMEOUT, &timeout) & EV_TIMEOUT)) {
+		return false;
+	}
+	return deltatime_cmp(deltatime_from_timeval(timeout), <, delay);
 }
 
 void set_whack_pluto_ddos(enum ddos_mode mode)

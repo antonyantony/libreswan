@@ -51,16 +51,12 @@ struct root_certs *root_certs_addref(where_t where)
 	ref_add(root_certs, where); /* function result */
 	root_certs->trustcl = CERT_NewCertList();
 
-	PK11SlotInfo *slot = PK11_GetInternalKeySlot();
-	if (slot == NULL) {
-		return root_certs;
-	}
 
-	if (PK11_NeedLogin(slot)) {
-		SECStatus rv = PK11_Authenticate(slot, PR_TRUE,
-				lsw_return_nss_password_file_info());
-		if (rv != SECSuccess)
-			return root_certs;
+	struct logger logger = GLOBAL_LOGGER(null_fd);
+	PK11SlotInfo *slot = lsw_nss_get_authenticated_slot(&logger);
+	if (slot == NULL) {
+		/* already logged */
+		return root_certs; /* empty, but non-null, list */
 	}
 
 	/*
@@ -69,8 +65,9 @@ struct root_certs *root_certs_addref(where_t where)
 	threadtime_t get_time = threadtime_start();
 	CERTCertList *allcerts = PK11_ListCertsInSlot(slot);
 	threadtime_stop(&get_time, SOS_NOBODY, "%s() calling PK11_ListCertsInSlot()", __func__);
-	if (allcerts == NULL)
+	if (allcerts == NULL) {
 		return root_certs;
+	}
 
 	/*
 	 * XXX: would a better call be
@@ -125,7 +122,7 @@ void init_root_certs(void)
 	init_oneshot_timer(EVENT_FREE_ROOT_CERTS, free_root_certs);
 }
 
-void free_root_certs(void)
+void free_root_certs(struct fd *unused_whackfd UNUSED)
 {
 	passert(in_main_thread());
 	root_certs_delref(&root_certs, HERE);

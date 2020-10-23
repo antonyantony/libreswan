@@ -4,31 +4,32 @@
 %global with_development 0
 %global with_cavstests 1
 # minimum version for support for rhbz#1651314
-%global nss_version 3.39.0-1.4
+%global nss_version 3.44.0-8
 %global unbound_version 1.6.6
-# Libreswan config options
+# Libreswan config options. With these settings, libreswan
+# does not require its own FIPS validation. Only the system
+# and NSS needs to be FIPS validated.
 %global libreswan_config \\\
     FINALLIBEXECDIR=%{_libexecdir}/ipsec \\\
     FINALMANDIR=%{_mandir} \\\
-    FIPSPRODUCTCHECK=%{_sysconfdir}/system-fips \\\
-    INC_RCDEFAULT=%{_initrddir} \\\
-    INC_USRLOCAL=%{_prefix} \\\
+    FINALNSSDIR=%{_sysconfdir}/ipsec.d \\\
     INITSYSTEM=systemd \\\
-    NSS_REQ_AVA_COPY=false \\\
     NSS_HAS_IPSEC_PROFILE=true \\\
+    NSS_REQ_AVA_COPY=false \\\
+    PREFIX=%{_prefix} \\\
     PYTHON_BINARY=%{__python3} \\\
+    SHELL_BINARY=%{_bindir}/sh \\\
     USE_DNSSEC=true \\\
-    USE_FIPSCHECK=true \\\
+    USE_FIPSCHECK=false \\\
     USE_LABELED_IPSEC=true \\\
     USE_LDAP=true \\\
     USE_LIBCAP_NG=true \\\
     USE_LIBCURL=true \\\
     USE_LINUX_AUDIT=true \\\
     USE_NM=true \\\
+    USE_NSS_KDF=true \\\
     USE_SECCOMP=true \\\
     USE_XAUTHPAM=true \\\
-    USE_KLIPS=false \\\
-    USE_NSS_PRF=true \\\
 %{nil}
 
 #global prever rc1
@@ -36,7 +37,7 @@
 Name: libreswan
 Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
 # version is generated in the release script
-Version: 3.32
+Version: 4.0
 Release: %{?prever:0.}1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Url: https://libreswan.org/
@@ -49,9 +50,8 @@ Source3: https://download.libreswan.org/cavs/ikev2.fax.bz2
 BuildRequires: audit-libs-devel
 BuildRequires: bison
 BuildRequires: curl-devel
-BuildRequires: fipscheck-devel
 BuildRequires: flex
-BuildRequires: gcc
+BuildRequires: gcc make
 BuildRequires: ldns-devel
 BuildRequires: libcap-ng-devel
 BuildRequires: libevent-devel
@@ -63,7 +63,7 @@ BuildRequires: nss-tools
 BuildRequires: openldap-devel
 BuildRequires: pam-devel
 BuildRequires: pkgconfig
-BuildRequires: pkgconfig hostname
+BuildRequires: hostname
 BuildRequires: redhat-rpm-config
 BuildRequires: systemd-devel
 BuildRequires: unbound-devel >= %{unbound_version}
@@ -71,7 +71,6 @@ BuildRequires: xmlto
 %if 0%{with_efence}
 BuildRequires: ElectricFence
 %endif
-Requires: fipscheck%{_isa}
 Requires: iproute >= 2.6.8
 Requires: nss >= %{nss_version}
 Requires: nss-softokn
@@ -128,14 +127,6 @@ make %{?_smp_mflags} \
     programs
 FS=$(pwd)
 
-# Add generation of HMAC checksums of the final stripped binaries
-%define __spec_install_post \
-    %{?__debug_package:%{__debug_install_post}} \
-    %{__arch_install_post} \
-    %{__os_install_post} \
-  fipshmac -d %{buildroot}%{_libdir}/fipscheck %{buildroot}%{_libexecdir}/ipsec/pluto \
-%{nil}
-
 %install
 make \
   DESTDIR=%{buildroot} \
@@ -146,15 +137,11 @@ rm -rf %{buildroot}/usr/share/doc/libreswan
 rm -rf %{buildroot}%{_libexecdir}/ipsec/*check
 
 install -d -m 0755 %{buildroot}%{_rundir}/pluto
-# used when setting --perpeerlog without --perpeerlogbase
-install -d -m 0700 %{buildroot}%{_localstatedir}/log/pluto/peer
 install -d %{buildroot}%{_sbindir}
 
 install -d %{buildroot}%{_sysconfdir}/sysctl.d
 install -m 0644 packaging/fedora/libreswan-sysctl.conf \
   %{buildroot}%{_sysconfdir}/sysctl.d/50-libreswan.conf
-
-mkdir -p %{buildroot}%{_libdir}/fipscheck
 
 echo "include %{_sysconfdir}/ipsec.d/*.secrets" \
      > %{buildroot}%{_sysconfdir}/ipsec.secrets
@@ -208,8 +195,6 @@ certutil -N -d sql:$tmpdir --empty-password
 %attr(0700,root,root) %dir %{_sysconfdir}/ipsec.d/policies
 %attr(0644,root,root) %config(noreplace) %{_sysconfdir}/ipsec.d/policies/*
 %attr(0644,root,root) %config(noreplace) %{_sysconfdir}/sysctl.d/50-libreswan.conf
-%attr(0700,root,root) %dir %{_localstatedir}/log/pluto
-%attr(0700,root,root) %dir %{_localstatedir}/log/pluto/peer
 %attr(0755,root,root) %dir %{_rundir}/pluto
 %attr(0644,root,root) %{_tmpfilesdir}/libreswan.conf
 %attr(0644,root,root) %{_unitdir}/ipsec.service
@@ -217,8 +202,7 @@ certutil -N -d sql:$tmpdir --empty-password
 %{_sbindir}/ipsec
 %{_libexecdir}/ipsec
 %attr(0644,root,root) %doc %{_mandir}/*/*
-%{_libdir}/fipscheck/pluto.hmac
 
 %changelog
-* Mon Mar 30 2020 Team Libreswan <team@libreswan.org> - 3.32-1
+* Wed Oct 14 2020 Team Libreswan <team@libreswan.org> - 4.0-1
 - Automated build from release tar ball

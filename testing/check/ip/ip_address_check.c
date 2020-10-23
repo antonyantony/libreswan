@@ -22,7 +22,7 @@
 #include "lswcdefs.h"		/* for elemsof() */
 #include "constants.h"		/* for streq() */
 #include "ip_address.h"
-
+#include "jambuf.h"
 #include "ipcheck.h"
 
 static void check_shunk_to_address(void)
@@ -37,37 +37,37 @@ static void check_shunk_to_address(void)
 	} tests[] = {
 
 		/* any/unspec */
-		{ 4, "0.0.0.0", 0, "0.0.0.0", },
-		{ 6, "::", 0, "::", "0:0:0:0:0:0:0:0", },
-		{ 6, "0:0:0:0:0:0:0:0", 0, "::", "0:0:0:0:0:0:0:0", },
+		{ 4, "0.0.0.0", 0, "0.0.0.0", NULL, false, },
+		{ 6, "::", 0, "::", "0:0:0:0:0:0:0:0", false, },
+		{ 6, "0:0:0:0:0:0:0:0", 0, "::", "0:0:0:0:0:0:0:0", false, },
 
 		/* local */
-		{ 4, "127.0.0.1", 0, "127.0.0.1", },
-		{ 6, "::1", 0, "::1", "0:0:0:0:0:0:0:1", },
-		{ 6, "0:0:0:0:0:0:0:1", 0, "::1", "0:0:0:0:0:0:0:1", },
+		{ 4, "127.0.0.1", 0, "127.0.0.1", NULL, false, },
+		{ 6, "::1", 0, "::1", "0:0:0:0:0:0:0:1", false, },
+		{ 6, "0:0:0:0:0:0:0:1", 0, "::1", "0:0:0:0:0:0:0:1", false, },
 
 		/* mask - and buffer overflow */
-		{ 4, "255.255.255.255", 0, "255.255.255.255", },
-		{ 6, "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", 0, "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", },
+		{ 4, "255.255.255.255", 0, "255.255.255.255", NULL, false, },
+		{ 6, "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", 0, "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", NULL, false, },
 
 		/* all bytes and '/' */
-		{ 4, "1.2.3.4", '/', "1.2.3.4", "1/2/3/4", },
-		{ 6, "1:2:3:4:5:6:7:8", '/', "1:2:3:4:5:6:7:8", "1/2/3/4/5/6/7/8", },
+		{ 4, "1.2.3.4", '/', "1.2.3.4", "1/2/3/4", false, },
+		{ 6, "1:2:3:4:5:6:7:8", '/', "1:2:3:4:5:6:7:8", "1/2/3/4/5/6/7/8", false, },
 
 		/* suppress leading zeros - 01 vs 1 */
-		{ 6, "0001:0012:0003:0014:0005:0016:0007:0018", 0, "1:12:3:14:5:16:7:18", },
+		{ 6, "0001:0012:0003:0014:0005:0016:0007:0018", 0, "1:12:3:14:5:16:7:18", NULL, false, },
 		/* drop leading 0:0: */
-		{ 6, "0:0:3:4:5:6:7:8", 0, "::3:4:5:6:7:8", "0:0:3:4:5:6:7:8", },
+		{ 6, "0:0:3:4:5:6:7:8", 0, "::3:4:5:6:7:8", "0:0:3:4:5:6:7:8", false, },
 		/* drop middle 0:...:0 */
-		{ 6, "1:2:0:0:0:0:7:8", 0, "1:2::7:8", "1:2:0:0:0:0:7:8", },
+		{ 6, "1:2:0:0:0:0:7:8", 0, "1:2::7:8", "1:2:0:0:0:0:7:8", false, },
 		/* drop trailing :0..:0 */
-		{ 6, "1:2:3:4:5:0:0:0", 0, "1:2:3:4:5::", "1:2:3:4:5:0:0:0", },
+		{ 6, "1:2:3:4:5:0:0:0", 0, "1:2:3:4:5::", "1:2:3:4:5:0:0:0", false, },
 		/* drop first 0:..:0 */
-		{ 6, "1:2:0:0:5:6:0:0", 0, "1:2::5:6:0:0", "1:2:0:0:5:6:0:0", },
+		{ 6, "1:2:0:0:5:6:0:0", 0, "1:2::5:6:0:0", "1:2:0:0:5:6:0:0", false, },
 		/* drop logest 0:..:0 */
-		{ 6, "0:0:3:0:0:0:7:8", 0, "0:0:3::7:8", "0:0:3:0:0:0:7:8", },
+		{ 6, "0:0:3:0:0:0:7:8", 0, "0:0:3::7:8", "0:0:3:0:0:0:7:8", false, },
 		/* need two 0 */
-		{ 6, "0:2:0:4:0:6:0:8", 0, "0:2:0:4:0:6:0:8", },
+		{ 6, "0:2:0:4:0:6:0:8", 0, "0:2:0:4:0:6:0:8", NULL, false, },
 
 		{ 4, "www.libreswan.org", 0, "188.127.201.229", .requires_dns = true, },
 	};
@@ -140,25 +140,9 @@ static void check_shunk_to_address(void)
 			}
 		}
 
-		address_buf buf;
-
 		/* now convert it back cooked */
-		const char *cooked = str_address(&a, &buf);
-		if (cooked == NULL) {
-			FAIL_IN("str_address() failed");
-		} else if (!strcaseeq(t->cooked, cooked)) {
-			FAIL_IN("str_address() returned '%s', expected '%s'",
-				cooked, t->cooked);
-		}
-
-		/* now convert it back */
-		const char *raw = str_address_raw(&a, t->sep, &buf);
-		if (raw == NULL) {
-			FAIL_IN("str_address_raw() failed");
-		} else if (!strcaseeq(raw, t->raw == NULL ? t->cooked : t->raw)) {
-			FAIL_IN("str_address_raw() returned '%s', expected '%s'",
-				raw, t->raw == NULL ? t->cooked : t->raw);
-		}
+		CHECK_STR(address_buf, address, t->cooked, &a);
+		CHECK_STR(address_buf, address_raw, t->raw == NULL ? t->cooked : t->raw, &a, t->sep);
 
 	}
 }
@@ -187,16 +171,7 @@ static void check_str_address_sensitive(void)
 			continue;
 		}
 		CHECK_TYPE(PRINT_IN, address_type(&a));
-
-		/* now convert it back */
-		address_buf buf;
-		const char *out = str_address_sensitive(&a, &buf);
-		if (out == NULL) {
-			FAIL_IN("failed");
-		} else if (!strcaseeq(t->out, out)) {
-			FAIL_IN("returned '%s', expected '%s'",
-				out, t->out);
-		}
+		CHECK_STR(address_buf, address_sensitive, t->out, &a);
 	}
 }
 
@@ -226,13 +201,7 @@ static void check_str_address_reversed(void)
 			continue;
 		}
 		CHECK_TYPE(PRINT_IN, address_type(&a));
-
-		address_reversed_buf buf;
-		const char *out = str_address_reversed(&a, &buf);
-		if (!strcaseeq(t->out, out)) {
-			FAIL_IN("str_address_reversed returned '%s', expected '%s'",
-				out, t->out);
-		}
+		CHECK_STR(address_reversed_buf, address_reversed, t->out, &a);
 	}
 }
 
@@ -298,29 +267,29 @@ static void check_address_is(void)
 	static const struct test {
 		int family;
 		const char *in;
-		bool invalid;
+		bool set;
 		bool any;
 		bool specified;
 		bool loopback;
 	} tests[] = {
-		{ 0, "<invalid>",		.invalid = true, },
-		{ 4, "0.0.0.0",			.any = true, },
-		{ 6, "::",			.any = true, },
-		{ 4, "1.2.3.4",			.specified = true, },
-		{ 6, "1:12:3:14:5:16:7:18",	.specified = true, },
-		{ 4, "127.0.0.1",		.specified = true, .loopback = true, },
-		{ 6, "::1",			.specified = true, .loopback = true, },
+		{ 0, "<invalid>",		.set = false, },
+		{ 4, "0.0.0.0",			.set = true, .any = true, },
+		{ 6, "::",			.set = true, .any = true, },
+		{ 4, "1.2.3.4",			.set = true, .specified = true, },
+		{ 6, "1:12:3:14:5:16:7:18",	.set = true, .specified = true, },
+		{ 4, "127.0.0.1",		.set = true, .specified = true, .loopback = true, },
+		{ 6, "::1",			.set = true, .specified = true, .loopback = true, },
 	};
 
 	for (size_t ti = 0; ti < elemsof(tests); ti++) {
 		const struct test *t = &tests[ti];
-		PRINT_IN(stdout, "-> invalid: %s, any: %s, specified: %s",
-			 bool_str(t->invalid), bool_str(t->any), bool_str(t->specified));
+		PRINT_IN(stdout, "-> set: %s, any: %s, specified: %s",
+			 bool_str(t->set), bool_str(t->any), bool_str(t->specified));
 
 		/* convert it *to* internal format */
 		ip_address a;
 		if (t->family == 0) {
-			a = address_invalid;
+			a = unset_address;
 		} else {
 			const struct ip_info *type = NULL;
 			err_t err = numeric_to_address(shunk1(t->in), type, &a);

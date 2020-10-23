@@ -3,20 +3,17 @@
 %global with_efence 0
 %global with_development 0
 %global with_cavstests 1
-%global nss_version 3.41
+%global nss_version 3.52
 %global unbound_version 1.6.6
 # Libreswan config options
 %global libreswan_config \\\
     FINALLIBEXECDIR=%{_libexecdir}/ipsec \\\
     FINALMANDIR=%{_mandir} \\\
-    INC_RCDEFAULT=%{_initrddir} \\\
-    INC_USRLOCAL=%{_prefix} \\\
+    PREFIX=%{_prefix} \\\
     INITSYSTEM=systemd \\\
     PYTHON_BINARY=%{__python3} \\\
     SHELL_BINARY=%{_bindir}/sh \\\
     USE_DNSSEC=true \\\
-    USE_FIPSCHECK=false \\\
-    USE_KLIPS=false \\\
     USE_LABELED_IPSEC=true \\\
     USE_LDAP=true \\\
     USE_LIBCAP_NG=true \\\
@@ -33,7 +30,7 @@
 Name: libreswan
 Summary: Internet Key Exchange (IKEv1 and IKEv2) implementation for IPsec
 # version is generated in the release script
-Version: 3.32
+Version: 4.0
 Release: %{?prever:0.}1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Url: https://libreswan.org/
@@ -48,7 +45,7 @@ BuildRequires: audit-libs-devel
 BuildRequires: bison
 BuildRequires: curl-devel
 BuildRequires: flex
-BuildRequires: gcc
+BuildRequires: gcc make
 BuildRequires: hostname
 BuildRequires: ldns-devel
 BuildRequires: libcap-ng-devel
@@ -57,6 +54,7 @@ BuildRequires: libseccomp-devel
 BuildRequires: libselinux-devel
 BuildRequires: nspr-devel
 BuildRequires: nss-devel >= %{nss_version}
+BuildRequires: nss-tools >= %{nss_version}
 BuildRequires: openldap-devel
 BuildRequires: pam-devel
 BuildRequires: pkgconfig
@@ -129,8 +127,6 @@ rm -rf %{buildroot}/usr/share/doc/libreswan
 rm -rf %{buildroot}%{_libexecdir}/ipsec/*check
 
 install -d -m 0755 %{buildroot}%{_rundir}/pluto
-# used when setting --perpeerlog without --perpeerlogbase
-install -d -m 0700 %{buildroot}%{_localstatedir}/log/pluto/peer
 install -d %{buildroot}%{_sbindir}
 
 install -d %{buildroot}%{_sysconfdir}/sysctl.d
@@ -193,9 +189,9 @@ certutil -N -d sql:$tmpdir --empty-password
 %attr(0700,root,root) %dir %{_sysconfdir}/ipsec.d/policies
 %attr(0644,root,root) %config(noreplace) %{_sysconfdir}/ipsec.d/policies/*
 %attr(0644,root,root) %config(noreplace) %{_sysconfdir}/sysctl.d/50-libreswan.conf
-%attr(0700,root,root) %dir %{_localstatedir}/log/pluto
-%attr(0700,root,root) %dir %{_localstatedir}/log/pluto/peer
 %attr(0755,root,root) %dir %{_rundir}/pluto
+%attr(0700,root,root) %dir %{_sharedstatedir}/ipsec
+%attr(0700,root,root) %dir %{_sharedstatedir}/ipsec/nss
 %attr(0644,root,root) %{_tmpfilesdir}/libreswan.conf
 %attr(0644,root,root) %{_unitdir}/ipsec.service
 %attr(0644,root,root) %config(noreplace) %{_sysconfdir}/pam.d/pluto
@@ -204,5 +200,5 @@ certutil -N -d sql:$tmpdir --empty-password
 %doc %{_mandir}/*/*
 
 %changelog
-* Mon Mar 30 2020 Team Libreswan <team@libreswan.org> - 3.32-1
+* Wed Oct 14 2020 Team Libreswan <team@libreswan.org> - 4.0-1
 - Automated build from release tar ball

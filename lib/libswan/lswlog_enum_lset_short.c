@@ -16,14 +16,14 @@
 
 #include "lswlog.h"
 
-size_t lswlog_enum_lset_short(struct lswlog *buf, enum_names *en,
+size_t jam_enum_lset_short(struct jambuf *buf, enum_names *en,
 			      const char *separator, lset_t val)
 {
 	unsigned int e;
 
 	/* if nothing gets filled in, default to "none" rather than "" */
 	if (val == LEMPTY) {
-		return lswlogs(buf, "none");
+		return jam_string(buf, "none");
 	}
 
 	size_t size = 0;
@@ -32,9 +32,9 @@ size_t lswlog_enum_lset_short(struct lswlog *buf, enum_names *en,
 		lset_t bit = LELEM(e);
 
 		if (val & bit) {
-			size += lswlogs(buf, sep);
+			size += jam_string(buf, sep);
 			sep = separator;
-			size += lswlog_enum_short(buf, en, e);
+			size += jam_enum_short(buf, en, e);
 			val -= bit;
 		}
 	}

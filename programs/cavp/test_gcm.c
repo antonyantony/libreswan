@@ -74,7 +74,7 @@ static struct cavp_entry data[] = {
 
 static struct encrypt_desc ike_alg_encrypt_aes_gcm_4 = {
 	.common = {
-		.name = "aes_gcm",
+		.fqn = "AES_GCM",
 		.algo_type =   IKE_ALG_ENCRYPT,
 		.fips =        TRUE,
 	},
@@ -92,7 +92,7 @@ static struct encrypt_desc ike_alg_encrypt_aes_gcm_4 = {
 
 static struct encrypt_desc ike_alg_encrypt_aes_gcm_13 = {
 	.common = {
-		.name = "aes_gcm",
+		.fqn = "AES_GCM",
 		.algo_type =   IKE_ALG_ENCRYPT,
 		.fips =        TRUE,
 	},
@@ -110,7 +110,7 @@ static struct encrypt_desc ike_alg_encrypt_aes_gcm_13 = {
 
 static struct encrypt_desc ike_alg_encrypt_aes_gcm_14 = {
 	.common = {
-		.name = "aes_gcm",
+		.fqn = "AES_GCM",
 		.algo_type =   IKE_ALG_ENCRYPT,
 		.fips =        TRUE,
 	},
@@ -128,7 +128,7 @@ static struct encrypt_desc ike_alg_encrypt_aes_gcm_14 = {
 
 static struct encrypt_desc ike_alg_encrypt_aes_gcm_15 = {
 	.common = {
-		.name = "aes_gcm",
+		.fqn = "AES_GCM",
 		.algo_type =   IKE_ALG_ENCRYPT,
 		.fips =        TRUE,
 	},
@@ -170,10 +170,10 @@ static chunk_t salt = {
 	.len = 0,
 };
 
-static void gcm_run_test(void)
+static void gcm_run_test(struct logger *logger)
 {
 	print_number("Count", NULL, count);
-	print_symkey("Key", NULL, key, 0);
+	print_symkey("Key", NULL, key, 0, logger);
 	print_chunk("IV", NULL, iv, 0);
 	print_chunk("CT", NULL, ct, 0);
 	print_chunk("AAD", NULL, aad, 0);
@@ -186,7 +186,8 @@ static void gcm_run_test(void)
 	}
 	PK11SymKey *gcm_key = encrypt_key_from_symkey_bytes("GCM key", gcm_alg,
 							    0, sizeof_symkey(key),
-							    key, HERE);
+							    key,
+							    HERE, logger);
 
 	chunk_t text_and_tag = clone_chunk_chunk(ct, tag, "text-and-tag");
 
@@ -198,7 +199,8 @@ static void gcm_run_test(void)
 			  text_and_tag.ptr,
 			  ct.len, tag.len,
 			  gcm_key,
-			  FALSE/*encrypt*/);
+			  false/*encrypt*/,
+			  logger);
 	if (result) {
 		/* plain text */
 		chunk_t pt = {
@@ -210,7 +212,7 @@ static void gcm_run_test(void)
 		print_line("FAIL");
 	}
 	release_symkey(__func__, "GCM-key", &gcm_key);
-	freeanychunk(text_and_tag);
+	free_chunk_content(&text_and_tag);
 }
 
 const struct cavp test_gcm = {

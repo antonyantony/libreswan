@@ -6,6 +6,7 @@
  * Copyright (C) 2016-2017 Andrew Cagney
  * Copyright (C) 2017 Vukasin Karadzic <vukasin.karadzic@gmail.com>
  * Copyright (C) 2019 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2020 Yulia Kuzovkova <ukuzovkova@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -30,7 +31,7 @@
 #include <netinet/in.h>
 
 #include <ietf_constants.h>
-#include <libreswan/passert.h>
+#include "passert.h"
 
 #include "constants.h"
 #include "enum_names.h"
@@ -435,11 +436,11 @@ static const char *const exchange_name_ikev2[] = {
 	"ISAKMP_v2_CREATE_CHILD_SA",
 	"ISAKMP_v2_INFORMATIONAL",
 	"ISAKMP_v2_IKE_SESSION_RESUME", /* RFC 5753 */
-#if 0	/* we don't recognize these yet */
 	"ISAKMP_v2_GSA_AUTH", /* draft-yeung-g-ikev2 */
 	"ISAKMP_v2_GSA_REGISTRATION", /* draft-yeung-g-ikev2 */
 	"ISAKMP_v2_GSA_REKEY", /* draft-yeung-g-ikev2 */
-#endif
+	"ISAKMP_v2_UNASSIGNED_42", /* avoid hole in enum */
+	"ISAKMP_v2_IKE_INTERMEDIATE",
 };
 
 static const char *const exchange_name_private_use[] = {
@@ -473,7 +474,7 @@ enum_names ikev1_exchange_names = {
 
 enum_names ikev2_exchange_names = {
 	ISAKMP_v2_IKE_SA_INIT,
-	ISAKMP_v2_IKE_SESSION_RESUME,
+	ISAKMP_v2_IKE_INTERMEDIATE,
 	ARRAY_REF(exchange_name_ikev2),
 	"ISAKMP_v2_", /* prefix */
 	&exchange_names_private_use
@@ -539,30 +540,6 @@ enum_names ikev1_protocol_names = {
 	PROTO_RESERVED,
 	PROTO_IPCOMP,
 	ARRAY_REF(ikev1_protocol_name),
-	NULL, /* prefix */
-	NULL
-};
-
-static const char *const ikev2_protocol_name[] = {
-	"PROTO_v2_RESERVED",
-	"PROTO_v2_IKE",
-	"PROTO_v2_AH",
-	"PROTO_v2_ESP",
-};
-
-enum_names ikev2_protocol_names = {
-	PROTO_v2_RESERVED,
-	PROTO_v2_ESP,
-	ARRAY_REF(ikev2_protocol_name),
-	NULL, /* prefix */
-	NULL
-};
-
-/* subset of protocol names accepted by IKEv2 Delete */
-enum_names ikev2_del_protocol_names = {
-	PROTO_ISAKMP,
-	PROTO_IPSEC_ESP,
-	&ikev2_protocol_name[PROTO_ISAKMP], elemsof(ikev2_protocol_name) - PROTO_ISAKMP,
 	NULL, /* prefix */
 	NULL
 };
@@ -712,21 +689,21 @@ enum_names ipcomp_transformid_names = {
  * IANA IKEv2 Hash Algorithms
  * https://www.iana.org/assignments/ikev2-parameters/ikev2-parameters.xhtml#hash-algorithms
  */
-static const char *const notify_hash_algo_name[] = {
-        "IKEv2_AUTH_HASH_RESERVED",
-        "IKEv2_AUTH_HASH_SHA1",
-        "IKEv2_AUTH_HASH_SHA2_256",
-        "IKEv2_AUTH_HASH_SHA2_384",
-        "IKEv2_AUTH_HASH_SHA2_512",
-        "IKEv2_AUTH_HASH_IDENTITY"
+static const char *const ikev2_hash_algorithm_name[] = {
+        "IKEv2_HASH_ALGORITHM_RESERVED",
+        "IKEv2_HASH_ALGORITHM_SHA1",
+        "IKEv2_HASH_ALGORITHM_SHA2_256",
+        "IKEv2_HASH_ALGORITHM_SHA2_384",
+        "IKEv2_HASH_ALGORITHM_SHA2_512",
+        "IKEv2_HASH_ALGORITHM_IDENTITY"
 	/* 6-1023 Unassigned */
 };
 
-enum_names notify_hash_algo_names = {
-	IKEv2_AUTH_HASH_RESERVED,
-	IKEv2_AUTH_HASH_IDENTITY,
-	ARRAY_REF(notify_hash_algo_name),
-	"IKEv2_AUTH_HASH_", /* prefix */
+enum_names ikev2_hash_algorithm_names = {
+	IKEv2_HASH_ALGORITHM_RESERVED,
+	IKEv2_HASH_ALGORITHM_IDENTITY,
+	ARRAY_REF(ikev2_hash_algorithm_name),
+	"IKEv2_HASH_ALGORITHM_", /* prefix */
 	NULL
 };
 
@@ -1785,11 +1762,12 @@ static const char *const ikev2_notify_name_16384[] = {
 	"v2N_USE_PPK", /* 16435 */
 	"v2N_PPK_IDENTITY",
 	"v2N_NO_PPK_AUTH",
+	"v2N_INTERMEDIATE_EXCHANGE_SUPPORTED" /* 16438*/,
 };
 
 static enum_names ikev2_notify_names_16384 = {
 	v2N_INITIAL_CONTACT,
-	v2N_NO_PPK_AUTH,
+	v2N_INTERMEDIATE_EXCHANGE_SUPPORTED,
 	ARRAY_REF(ikev2_notify_name_16384),
 	"v2N_", /* prefix */
 	&ikev2_notify_names_private
@@ -1905,23 +1883,56 @@ const char *const critical_names[] = {
 /*
  * IKEv2 Security Protocol Identifiers
  */
-static const char *const ikev2_sec_proto_id_name[] = {
-	/* 0 - Reserved */
+
+/* proposal payload allows IKE=1, AH=2, ESP=3 */
+
+static const char *const ikev2_proposal_protocol_id_name[] = {
 	"IKEv2_SEC_PROTO_IKE",
 	"IKEv2_SEC_PROTO_AH",
 	"IKEv2_SEC_PROTO_ESP",
-	"IKEv2_SEC_FC_ESP_HEADER",	/* RFC 4595 */
+	"IKEv2_SEC_FC_ESP_HEADER",		/* RFC 4595 */
 	"IKEv2_SEC_FC_CT_AUTHENTICATION",	/* RFC 4595 */
 	/* 6 - 200 Unassigned */
 	/* 201 - 255 Private use */
 };
 
-enum_names ikev2_sec_proto_id_names = {
+enum_names ikev2_proposal_protocol_id_names = {
 	IKEv2_SEC_PROTO_IKE,
 	IKEv2_SEC_FC_CT_AUTHENTICATION,
-	ARRAY_REF(ikev2_sec_proto_id_name),
-	"IKEv2_SEC_PROTO_", /* prefix */
-	NULL
+	ARRAY_REF(ikev2_proposal_protocol_id_name),
+	.en_prefix = "IKEv2_SEC_PROTO_", /* prefix */
+};
+
+/* delete payload allows IKE=1, AH=2, ESP=3 */
+
+static const char *const ikev2_delete_protocol_id_name[] = {
+	"IKEv2_SEC_PROTO_IKE",
+	"IKEv2_SEC_PROTO_AH",
+	"IKEv2_SEC_PROTO_ESP",
+};
+
+enum_names ikev2_delete_protocol_id_names = {
+	IKEv2_SEC_PROTO_IKE,
+	IKEv2_SEC_PROTO_ESP,
+	ARRAY_REF(ikev2_delete_protocol_id_name),
+	.en_prefix = "IKEv2_SEC_PROTO_", /* prefix */
+};
+
+/* notify payload allows NONE=0, (NO IKE,) AH=2, ESP=3 */
+
+static const char *const ikev2_protocol_id_notify_name[] = {
+#define E(V) [V] = #V
+	E(IKEv2_SEC_PROTO_NONE),
+	E(IKEv2_SEC_PROTO_AH),
+	E(IKEv2_SEC_PROTO_ESP),
+#undef E
+};
+
+enum_names ikev2_notify_protocol_id_names = {
+	IKEv2_SEC_PROTO_NONE,
+	IKEv2_SEC_PROTO_ESP,
+	ARRAY_REF(ikev2_protocol_id_notify_name),
+	.en_prefix = "IKEv2_SEC_PROTO_", /* prefix */
 };
 
 /* Transform-type Encryption */
@@ -2220,6 +2231,7 @@ const char *enum_name(enum_names *ed, unsigned long val)
 	for (p = ed; p != NULL; p = p->en_next_range) {
 		passert(p->en_last - p->en_first + 1 == p->en_checklen);
 		if (p->en_first <= val && val <= p->en_last)
+			/* can be NULL */
 			return p->en_names[val - p->en_first];
 	}
 
@@ -2234,30 +2246,30 @@ const char *enum_short_name(enum_names *ed, unsigned long val)
 		strip_prefix(p, ed->en_prefix);
 }
 
-size_t lswlog_enum(struct lswlog *buf, enum_names *en, unsigned long val)
+size_t jam_enum(struct jambuf *buf, enum_names *en, unsigned long val)
 {
 	const char *name = enum_name(en, val);
 	if (name == NULL) {
 		if (en->en_prefix != NULL) {
-			lswlogs(buf, en->en_prefix);
-			lswlogs(buf, "_");
+			jam_string(buf, en->en_prefix);
+			jam_string(buf, "_");
 		}
-		return lswlogf(buf, "%lu??", val);
+		return jam(buf, "%lu??", val);
 	}
-	return lswlogs(buf, name);
+	return jam_string(buf, name);
 }
 
-size_t lswlog_enum_short(struct lswlog *buf, enum_names *en, unsigned long val)
+size_t jam_enum_short(struct jambuf *buf, enum_names *en, unsigned long val)
 {
 	const char *name = enum_short_name(en, val);
 	if (name == NULL) {
 		if (en->en_prefix != NULL) {
-			lswlogs(buf, en->en_prefix);
-			lswlogs(buf, "_");
+			jam_string(buf, en->en_prefix);
+			jam_string(buf, "_");
 		}
-		return lswlogf(buf, "%lu??", val);
+		return jam(buf, "%lu??", val);
 	}
-	return lswlogs(buf, name);
+	return jam_string(buf, name);
 }
 
 /*
@@ -2403,35 +2415,49 @@ const char *enum_enum_name(enum_enum_names *een, unsigned long table,
 const char *enum_enum_showb(enum_enum_names *een, unsigned long table,
 			    unsigned long val, struct esb_buf *b)
 {
-	const char *name = enum_enum_name(een, table, val);
-
-	if (name != NULL) {
-		return name;
+	enum_names *en = enum_enum_table(een, table);
+	if (en == NULL) {
+		/* assume the log context implies the table name */
+		snprintf(b->buf, sizeof(b->buf), "%lu??", val);
+		return b->buf;
 	}
-	snprintf(b->buf, sizeof(b->buf), "%lu??", val);
-	return b->buf;
+
+	return enum_showb(en, val, b);
 }
 
-size_t lswlog_enum_enum(struct lswlog *buf, enum_enum_names *een,
-			unsigned long table, unsigned long val)
+const char *enum_enum_show_shortb(enum_enum_names *een, unsigned long table,
+				  unsigned long val, struct esb_buf *b)
+{
+	enum_names *en = enum_enum_table(een, table);
+	if (en == NULL) {
+		/* assume the log context implies the table name */
+		snprintf(b->buf, sizeof(b->buf), "%lu??", val);
+		return b->buf;
+	}
+
+	return enum_show_shortb(en, val, b);
+}
+
+size_t jam_enum_enum(struct jambuf *buf, enum_enum_names *een,
+		     unsigned long table, unsigned long val)
 {
 	enum_names *en = enum_enum_table(een, table);
 	if (en == NULL) {
 		/* XXX: dump something more meaningful */
-		return lswlogf(buf, "%lu??%lu??", table, val);
+		return jam(buf, "%lu??%lu??", table, val);
 	}
-	return lswlog_enum(buf, en, val);
+	return jam_enum(buf, en, val);
 }
 
-size_t lswlog_enum_enum_short(struct lswlog *buf, enum_enum_names *een,
-			      unsigned long table, unsigned long val)
+size_t jam_enum_enum_short(struct jambuf *buf, enum_enum_names *een,
+			   unsigned long table, unsigned long val)
 {
 	enum_names *en = enum_enum_table(een, table);
 	if (en == NULL) {
 		/* XXX: dump something more meaningful */
-		return lswlogf(buf, "%lu??%lu??", table, val);
+		return jam(buf, "%lu??%lu??", table, val);
 	}
-	return lswlog_enum_short(buf, en, val);
+	return jam_enum_short(buf, en, val);
 }
 
 const char sparse_end[] = "end of sparse names";
@@ -2478,8 +2504,6 @@ static const enum_names *en_checklist[] = {
 	&ikev1_exchange_names,
 	&exchange_names_ikev1orv2,
 	&ikev1_protocol_names,
-	&ikev2_protocol_names,
-	&ikev2_del_protocol_names,
 	&isakmp_transformid_names,
 	&ah_transformid_names,
 	&esp_transformid_names,
@@ -2510,7 +2534,9 @@ static const enum_names *en_checklist[] = {
 	&ikev2_notify_names,
 	&ikev2_ts_type_names,
 	&attr_msg_type_names,
-	&ikev2_sec_proto_id_names,
+	&ikev2_proposal_protocol_id_names,
+	&ikev2_delete_protocol_id_names,
+	&ikev2_notify_protocol_id_names,
 	&ikev2_trans_type_encr_names,
 	&ikev2_trans_type_prf_names,
 	&ikev2_trans_type_integ_names,
@@ -2520,6 +2546,7 @@ static const enum_names *en_checklist[] = {
 	&pkk_names,
 	&ikev2_ppk_id_type_names,
 	&ikev2_redirect_gw_names,
+	&ip_protocol_id_names,
 };
 
 void check_enum_names(enum_names *checklist[], size_t tl)

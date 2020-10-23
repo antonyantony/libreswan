@@ -163,7 +163,7 @@ void pfree(void *ptr)
 	}
 }
 
-void report_leaks(void)
+void report_leaks(struct logger *logger)
 {
 	union mhdr *p,
 		*pprev = NULL;
@@ -185,11 +185,11 @@ void report_leaks(void)
 			/* filter out one-time leaks we prefer to not fix */
 			if (strstr(pprev->i.name, "(ignore)") == NULL) {
 				if (n != 1)
-					libreswan_log("leak: %lu * %s, item size: %lu",
-						n, pprev->i.name, pprev->i.size);
+					log_message(RC_LOG, logger, "leak: %lu * %s, item size: %lu",
+						    n, pprev->i.name, pprev->i.size);
 				else
-					libreswan_log("leak: %s, item size: %lu",
-						pprev->i.name, pprev->i.size);
+					log_message(RC_LOG, logger, "leak: %s, item size: %lu",
+						    pprev->i.name, pprev->i.size);
 				numleaks += n;
 				total += pprev->i.size;
 				n = 0;
@@ -200,11 +200,12 @@ void report_leaks(void)
 	}
 	pthread_mutex_unlock(&leak_detective_mutex);
 
-	if (numleaks != 0)
-		libreswan_log("leak detective found %lu leaks, total size %lu",
-			numleaks, total);
-	else
-		libreswan_log("leak detective found no leaks");
+	if (numleaks != 0) {
+		log_message(RC_LOG, logger, "leak detective found %lu leaks, total size %lu",
+			    numleaks, total);
+	} else {
+		log_message(RC_LOG, logger, "leak detective found no leaks");
+	}
 }
 
 static void *zalloc(size_t size)
@@ -217,11 +218,23 @@ void *alloc_bytes(size_t size, const char *name)
 	return allocate(zalloc, size, name);
 }
 
+/*
+ * Note:
+ * orig=NULL; size=0 -> NULL
+ * orig=PTR; size=0 -> new PTR (for instance a shunk with PTR = "")
+ * orig=PTR; size>0 -> new PTR
+ */
 void *clone_bytes(const void *orig, size_t size, const char *name)
 {
-	void *p = uninitialized_malloc(size, name);
-
-	memcpy(p, orig, size);
+	void *p;
+	if (orig == NULL) {
+		passert(size == 0);
+		p = NULL;
+	} else {
+		/* even when size is 0, allocate something */
+		p = uninitialized_malloc(size, name);
+		memcpy(p, orig, size);
+	}
 	return p;
 }
 
@@ -244,6 +257,7 @@ void *uninitialized_realloc(void *ptr, size_t new_size, const char *name)
 		remove_allocation(p);
 		p = realloc(p, sizeof(union mhdr) + new_size);
 		if (p == NULL) {
+			PASSERT_FAIL("unable to reallocate %zu bytes for %s", new_size, name);
 		}
 		install_allocation(p, new_size, name);
 		return p+1;

@@ -25,7 +25,7 @@
 
 #include "deltatime.h"		/* for deltatime_t */
 
-struct lswlog;
+struct jambuf;
 
 /*
  * The time objects are wrapped so that dimensional analysis will be
@@ -61,8 +61,7 @@ typedef struct {
 } realtime_buf;
 
 const char *str_realtime(realtime_t r, bool utc, realtime_buf *buf);
-size_t jam_realtime(jambuf_t *buf, realtime_t r, bool utc);
-#define lswlog_realtime jam_realtime /* XXX: TBD */
+size_t jam_realtime(struct jambuf *buf, realtime_t r, bool utc);
 
 /*
  * math

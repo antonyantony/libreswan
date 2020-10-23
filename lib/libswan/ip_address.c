@@ -18,17 +18,38 @@
 
 #include "jambuf.h"
 #include "ip_address.h"
-#include "lswlog.h"		/* for libreswan_log() */
+#include "lswlog.h"		/* for loglog(RC_LOG, ) */
 #include "ip_info.h"
+
+const ip_address unset_address; /* all zeros */
+
+ip_address strip_endpoint(const ip_address *in, where_t where)
+{
+	ip_address out = *in;
+	if (in->hport != 0 || in->ipproto != 0 || in->is_endpoint) {
+		address_buf b;
+		dbg("stripping address %s of is_endpoint=%d hport=%u ipproto=%u "PRI_WHERE,
+		    str_address(in, &b), in->is_endpoint,
+		    in->hport, in->ipproto, pri_where(where));
+		out.hport = 0;
+		out.ipproto = 0;
+		out.is_endpoint = false;
+	}
+	out.is_address = true;
+	paddress(&out);
+	return out;
+}
 
 ip_address address_from_shunk(const struct ip_info *afi, const shunk_t bytes)
 {
 	passert(afi != NULL);
 	ip_address address = {
 		.version = afi->ip_version,
+		.is_address = true,
 	};
 	passert(afi->ip_size == bytes.len);
-	memcpy(address.bytes, bytes.ptr, bytes.len);
+	memcpy(&address.bytes, bytes.ptr, bytes.len);
+	paddress(&address);
 	return address;
 }
 
@@ -88,7 +109,7 @@ shunk_t address_as_shunk(const ip_address *address)
 	if (afi == NULL) {
 		return null_shunk;
 	}
-	return shunk2(address->bytes, afi->ip_size);
+	return shunk2(&address->bytes, afi->ip_size);
 }
 
 chunk_t address_as_chunk(ip_address *address)
@@ -100,35 +121,38 @@ chunk_t address_as_chunk(ip_address *address)
 	if (afi == NULL) {
 		return empty_chunk;
 	}
-	return chunk(address->bytes, afi->ip_size);
+	return chunk2(&address->bytes, afi->ip_size);
 }
 
 /*
  * Implement https://tools.ietf.org/html/rfc5952
  */
 
-static void jam_raw_ipv4_address(jambuf_t *buf, shunk_t a, char sepc)
+static size_t jam_raw_ipv4_address(struct jambuf *buf, shunk_t a, char sepc)
 {
 	const char seps[2] = { sepc == 0 ? '.' : sepc, 0, };
 	const char *sep = "";
+	size_t s = 0;
 	for (size_t i = 0; i < a.len; i++) {
 		const uint8_t *bytes = a.ptr;
-		jam(buf, "%s%"PRIu8, sep, bytes[i]);
+		s += jam(buf, "%s%"PRIu8, sep, bytes[i]);
 		sep = seps;
 	}
+	return s;
 }
 
-static void jam_raw_ipv6_address(jambuf_t *buf, shunk_t a, char sepc,
-				 shunk_t skip)
+static size_t jam_raw_ipv6_address(struct jambuf *buf, shunk_t a, char sepc,
+				   shunk_t skip)
 {
 	const char seps[2] = { sepc == 0 ? ':' : sepc, 0, };
 	const void *ptr = a.ptr;
 	const char *sep = "";
 	const void *last = a.ptr + a.len - 2;
+	size_t s = 0;
 	while (ptr <= last) {
 		if (ptr == skip.ptr) {
 			/* skip zero run */
-			jam(buf, "%s%s", seps, seps);
+			s += jam(buf, "%s%s", seps, seps);
 			sep = "";
 			ptr += skip.len;
 		} else {
@@ -139,35 +163,39 @@ static void jam_raw_ipv6_address(jambuf_t *buf, shunk_t a, char sepc,
 			 */
 			const uint8_t *p = (const uint8_t*)ptr;
 			unsigned ia = (p[0] << 8) + p[1];
-			jam(buf, "%s%x", sep, ia);
+			s += jam(buf, "%s%x", sep, ia);
 			sep = seps;
 			ptr += 2;
 		}
 	}
+	return s;
 }
 
-void jam_address_raw(jambuf_t *buf, const ip_address *address, char sepc)
+size_t jam_address_raw(struct jambuf *buf, const ip_address *address, char sepc)
 {
 	if (address == NULL) {
-		jam(buf, "<none>");
-		return;
+		return jam(buf, "<none>");
 	}
+
 	shunk_t a = address_as_shunk(address);
 	int type = addrtypeof(address);
+	size_t s = 0;
+
 	switch (type) {
 	case AF_INET: /* N.N.N.N */
-		jam_raw_ipv4_address(buf, a, sepc);
+		s += jam_raw_ipv4_address(buf, a, sepc);
 		break;
 	case AF_INET6: /* N:N:...:N */
-		jam_raw_ipv6_address(buf, a, sepc, null_shunk);
+		s += jam_raw_ipv6_address(buf, a, sepc, null_shunk);
 		break;
 	case AF_UNSPEC:
-		jam(buf, "<unspecified>");
+		s += jam(buf, "<unspecified>");
 		break;
 	default:
-		jam(buf, "<invalid>");
+		s += jam(buf, "<invalid>");
 		break;
 	}
+	return s;
 }
 
 /*
@@ -197,84 +225,90 @@ static shunk_t zeros_to_skip(shunk_t a)
 	return zero;
 }
 
-static void format_address_cooked(jambuf_t *buf, bool sensitive,
-				  const ip_address *address)
+static size_t format_address_cooked(struct jambuf *buf, bool sensitive,
+				    const ip_address *address)
 {
 	/*
 	 * A NULL address can't be sensitive.
 	 */
 	if (address == NULL) {
-		jam(buf, "<none>");
-		return;
+		return jam(buf, "<none>");
 	}
+
 	if (sensitive) {
-		jam(buf, "<ip-address>");
-		return;
+		return jam(buf, "<ip-address>");
 	}
+
 	shunk_t a = address_as_shunk(address);
 	int type = addrtypeof(address);
+	size_t s = 0;
+
 	switch (type) {
 	case AF_INET: /* N.N.N.N */
-		jam_raw_ipv4_address(buf, a, 0);
+		s += jam_raw_ipv4_address(buf, a, 0);
 		break;
 	case AF_INET6: /* N:N:...:N */
-		jam_raw_ipv6_address(buf, a, 0, zeros_to_skip(a));
+		s += jam_raw_ipv6_address(buf, a, 0, zeros_to_skip(a));
 		break;
 	case AF_UNSPEC:
-		jam(buf, "<unspecified>");
+		s += jam(buf, "<unspecified>");
 		break;
 	default:
-		jam(buf, "<invalid>");
+		s += jam(buf, "<invalid>");
 		break;
 	}
+	return s;
 }
 
-void jam_address(jambuf_t *buf, const ip_address *address)
+size_t jam_address(struct jambuf *buf, const ip_address *address)
 {
-	format_address_cooked(buf, false, address);
+	return format_address_cooked(buf, false, address);
 }
 
-void jam_address_sensitive(jambuf_t *buf, const ip_address *address)
+size_t jam_address_sensitive(struct jambuf *buf, const ip_address *address)
 {
-	format_address_cooked(buf, !log_ip, address);
+	return format_address_cooked(buf, !log_ip, address);
 }
 
-void jam_address_reversed(jambuf_t *buf, const ip_address *address)
+size_t jam_address_reversed(struct jambuf *buf, const ip_address *address)
 {
 	shunk_t bytes = address_as_shunk(address);
 	int type = addrtypeof(address);
+	size_t s = 0;
+
 	switch (type) {
 	case AF_INET:
 	{
 		for (int i = bytes.len - 1; i >= 0; i--) {
 			const uint8_t *byte = bytes.ptr;
-			jam(buf, "%d.", byte[i]);
+			s += jam(buf, "%d.", byte[i]);
 		}
-		jam(buf, "IN-ADDR.ARPA.");
+		s += jam(buf, "IN-ADDR.ARPA.");
 		break;
 	}
 	case AF_INET6:
 	{
 		for (int i = bytes.len - 1; i >= 0; i--) {
 			const uint8_t *byte = bytes.ptr;
-			jam(buf, "%x.%x.", byte[i] & 0xf, byte[i] >> 4);
+			s += jam(buf, "%x.%x.", byte[i] & 0xf, byte[i] >> 4);
 		}
-		jam(buf, "IP6.ARPA.");
+		s += jam(buf, "IP6.ARPA.");
 		break;
 	}
 	case AF_UNSPEC:
-		jam(buf, "<unspecified>");
+		s += jam(buf, "<unspecified>");
 		break;
 	default:
-		jam(buf, "<invalid>");
+		s += jam(buf, "<invalid>");
 		break;
 	}
+	return s;
 }
 
 const char *str_address_raw(const ip_address *src, char sep,
 			    address_buf *dst)
 {
-	jambuf_t buf = ARRAY_AS_JAMBUF(dst->buf);
+	struct jambuf buf = ARRAY_AS_JAMBUF(dst->buf);
 	jam_address_raw(&buf, src, sep);
 	return dst->buf;
 }
@@ -282,7 +316,7 @@ const char *str_address_raw(const ip_address *src, char sep,
 const char *str_address(const ip_address *src,
 			       address_buf *dst)
 {
-	jambuf_t buf = ARRAY_AS_JAMBUF(dst->buf);
+	struct jambuf buf = ARRAY_AS_JAMBUF(dst->buf);
 	jam_address(&buf, src);
 	return dst->buf;
 }
@@ -290,7 +324,7 @@ const char *str_address(const ip_address *src,
 const char *str_address_sensitive(const ip_address *src,
 				  address_buf *dst)
 {
-	jambuf_t buf = ARRAY_AS_JAMBUF(dst->buf);
+	struct jambuf buf = ARRAY_AS_JAMBUF(dst->buf);
 	jam_address_sensitive(&buf, src);
 	return dst->buf;
 }
@@ -298,17 +332,14 @@ const char *str_address_sensitive(const ip_address *src,
 const char *str_address_reversed(const ip_address *src,
 				 address_reversed_buf *dst)
 {
-	jambuf_t buf = ARRAY_AS_JAMBUF(dst->buf);
+	struct jambuf buf = ARRAY_AS_JAMBUF(dst->buf);
 	jam_address_reversed(&buf, src);
 	return dst->buf;
 }
 
-const ip_address address_invalid = {
-	.version = 0,
-};
-
 ip_address address_any(const struct ip_info *info)
 {
+	passert(info != NULL);
 	if (info == NULL) {
 		/*
 		 * XXX: Loudly reject AF_UNSPEC, but don't crash.
@@ -320,23 +351,16 @@ ip_address address_any(const struct ip_info *info)
 		 * AF_UNSPEC, then call that function
 		 * address_unspecified().
 		 */
-		PEXPECT_LOG("AF_UNSPEC unexpected");
-		return address_invalid;
+		log_pexpect(HERE, "AF_UNSPEC unexpected");
+		return unset_address;
 	} else {
 		return info->any_address;
 	}
 }
 
-bool address_is_any(const ip_address *address)
+bool address_is_set(const ip_address *address)
 {
-	const struct ip_info *type = address_type(address);
-	if (type == NULL) {
-		return false;
-	} else {
-		shunk_t addr = address_as_shunk(address);
-		shunk_t any = address_as_shunk(&type->any_address);
-		return hunk_eq(addr, any);
-	}
+	return address_type(address) != NULL;
 }
 
 bool address_is_specified(const ip_address *address)
@@ -344,21 +368,132 @@ bool address_is_specified(const ip_address *address)
 	const struct ip_info *type = address_type(address);
 	if (type == NULL) {
 		return false;
-	} else {
-		shunk_t addr = address_as_shunk(address);
-		shunk_t any = address_as_shunk(&type->any_address);
-		return !hunk_eq(addr, any);
 	}
+	shunk_t addr = address_as_shunk(address);
+	shunk_t any = address_as_shunk(&type->any_address);
+	return !hunk_eq(addr, any);
 }
 
-bool address_is_loopback(const ip_address *address)
+bool address_eq(const ip_address *l, const ip_address *r)
+{
+	const struct ip_info *lt = address_type(l);
+	const struct ip_info *rt = address_type(r);
+	if (lt == NULL || rt == NULL) {
+		/* AF_UNSPEC/NULL are never equal; think NaN */
+		return false;
+	}
+	if (lt != rt) {
+		return false;
+	}
+	shunk_t ls = address_as_shunk(l);
+	shunk_t rs = address_as_shunk(r);
+	return hunk_eq(ls, rs);
+}
+
+bool address_eq_loopback(const ip_address *address)
 {
 	const struct ip_info *type = address_type(address);
 	if (type == NULL) {
 		return false;
-	} else {
-		shunk_t addr = address_as_shunk(address);
-		shunk_t loopback = address_as_shunk(&type->loopback_address);
-		return hunk_eq(addr, loopback);
+	}
+	return address_eq(address, &type->loopback_address);
+}
+
+bool address_eq_any(const ip_address *address)
+{
+	const struct ip_info *type = address_type(address);
+	if (type == NULL) {
+		return false;
+	}
+	return address_eq(address, &type->any_address);
+}
+
+/*
+ * mashup() notes:
+ * - mashup operates on network-order IP addresses
+ */
+
+struct ip_blit {
+	uint8_t and;
+	uint8_t or;
+};
+
+const struct ip_blit clear_bits = { .and = 0x00, .or = 0x00, };
+const struct ip_blit set_bits = { .and = 0x00/*don't care*/, .or = 0xff, };
+const struct ip_blit keep_bits = { .and = 0xff, .or = 0x00, };
+
+ip_address address_blit(ip_address address,
+			const struct ip_blit *routing_prefix,
+			const struct ip_blit *host_id,
+			unsigned nr_mask_bits)
+{
+	/* strip port; copy type */
+	chunk_t raw = address_as_chunk(&address);
+
+	if (!pexpect(nr_mask_bits <= raw.len * 8)) {
+		return unset_address;	/* "can't happen" */
+	}
+
+	uint8_t *p = raw.ptr; /* cast void* */
+
+	/*
+	 * Split the byte array into:
+	 *
+	 *    leading | xbyte:xbit | trailing
+	 *
+	 * where LEADING only contains ROUTING_PREFIX bits, TRAILING
+	 * only contains HOST_ID bits, and XBYTE is the cross over and
+	 * contains the first HOST_ID bit at big (aka PPC) endian
+	 * position XBIT.
+	 */
+	size_t xbyte = nr_mask_bits / BITS_PER_BYTE;
+	unsigned xbit = nr_mask_bits % BITS_PER_BYTE;
+
+	/* leading bytes only contain the ROUTING_PREFIX */
+	for (unsigned b = 0; b < xbyte; b++) {
+		p[b] &= routing_prefix->and;
+		p[b] |= routing_prefix->or;
+	}
+
+	/*
+	 * Handle the cross over byte:
+	 *
+	 *    & {ROUTING_PREFIX,HOST_ID}->and | {ROUTING_PREFIX,HOST_ID}->or
+	 *
+	 * the hmask's shift is a little counter intuitive - it clears
+	 * the first (most significant) XBITs.
+	 *
+	 * tricky logic:
+	 * - if xbyte == raw.len we must not access p[xbyte]
+	 */
+	if (xbyte < raw.len) {
+		uint8_t hmask = 0xFF >> xbit; /* clear MSBs */
+		uint8_t pmask = ~hmask; /* set MSBs */
+		p[xbyte] &= (routing_prefix->and & pmask) | (host_id->and & hmask);
+		p[xbyte] |= (routing_prefix->or & pmask) | (host_id->or & hmask);
+	}
+
+	/* trailing bytes only contain the HOST_ID */
+	for (unsigned b = xbyte + 1; b < raw.len; b++) {
+		p[b] &= host_id->and;
+		p[b] |= host_id->or;
+	}
+
+	return address;
+}
+
+void pexpect_address(const ip_address *a, const char *s, where_t where)
+{
+	if (a != NULL && a->version != 0) {
+		/* i.e., is-set */
+		if (a->is_address == false ||
+		    a->is_endpoint == true ||
+		    a->hport != 0 ||
+		    a->ipproto != 0) {
+			address_buf b;
+			dbg("EXPECTATION FAILED: %s is not an address; "PRI_ADDRESS" "PRI_WHERE,
+			    s, pri_address(a, &b),
+			    pri_where(where));
+		}
 	}
 }

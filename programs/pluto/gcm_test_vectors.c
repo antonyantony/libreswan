@@ -16,7 +16,6 @@
 #include <stdlib.h>
 #include "constants.h"
 #include "lswalloc.h"
-#include "lswlog.h"
 #include "lswfips.h"
 
 #include "ike_alg.h"
@@ -24,9 +23,11 @@
 #include "ike_alg_test_gcm.h"
 #include "ike_alg_encrypt_ops.h"	/* XXX: oops */
 
-#include "nss.h"
 #include "pk11pub.h"
 #include "crypt_symkey.h"
+
+#include "defs.h"		/* for so_serial_t */
+#include "log.h"
 
 /*
  * Ref: http://csrc.nist.gov/groups/STM/cavp/documents/mac/gcmtestvectors.zip
@@ -77,15 +78,14 @@ static const struct gcm_test_vector aes_gcm_test_vectors[] = {
 const struct gcm_test_vector *const aes_gcm_tests = aes_gcm_test_vectors;
 
 static bool test_gcm_vector(const struct encrypt_desc *encrypt_desc,
-			    const struct gcm_test_vector *test)
+			    const struct gcm_test_vector *test,
+			    struct logger *logger)
 {
-	libreswan_log("  %s", test->description);
-
 	const size_t salt_size = encrypt_desc->salt_size;
 
 	bool ok = TRUE;
 
-	PK11SymKey *sym_key = decode_to_key(encrypt_desc, test->key);
+	PK11SymKey *sym_key = decode_to_key(encrypt_desc, test->key, logger);
 
 	chunk_t salted_iv = decode_to_chunk("salted IV", test->salted_iv);
 	passert(salted_iv.len == encrypt_desc->wire_iv_size + salt_size);
@@ -109,28 +109,33 @@ static bool test_gcm_vector(const struct encrypt_desc *encrypt_desc,
 	 * from test_gcm_vector to be pleasant:
 	 *	text_and_tag, len, tag, aad, salt, wire_iv, sym_key
 	 */
-#	define try(enc, desc, from, to) {  \
-		memcpy(text_and_tag.ptr, from.ptr, from.len);  \
-		text_and_tag.len = len + tag.len;  \
-		DBG(DBG_CRYPT,  \
-		    DBG_log("test_gcm_vector: %s: aad-size=%zd salt-size=%zd wire-IV-size=%zd text-size=%zd tag-size=%zd",  \
-			    desc, aad.len, salt.len, wire_iv.len, len, tag.len);  \
-		    DBG_dump_hunk("test_gcm_vector: text+tag on call",  \
-				   text_and_tag));  \
-		if (!encrypt_desc->encrypt_ops->do_aead(encrypt_desc,  \
+#	define try(enc, desc, from, to)					\
+	{								\
+		memcpy(text_and_tag.ptr, from.ptr, from.len);		\
+		text_and_tag.len = len + tag.len;			\
+		if (DBGP(DBG_CRYPT)) {					\
+			DBG_log("test_gcm_vector: %s: aad-size=%zd salt-size=%zd wire-IV-size=%zd text-size=%zd tag-size=%zd", \
+				desc, aad.len, salt.len, wire_iv.len, len, tag.len); \
+			DBG_dump_hunk("test_gcm_vector: text+tag on call", \
+				      text_and_tag);			\
+		}							\
+		if (!encrypt_desc->encrypt_ops->do_aead(encrypt_desc,	\
 							salt.ptr, salt.len, \
 							wire_iv.ptr, wire_iv.len, \
 							aad.ptr, aad.len, \
 							text_and_tag.ptr, \
 							len, tag.len,	\
-							sym_key, enc) || \
+							sym_key, enc,	\
+							logger) ||	\
 		    !verify_bytes("output ciphertext", to.ptr, to.len,	\
 				  text_and_tag.ptr, to.len) ||		\
 		    !verify_bytes("TAG", tag.ptr, tag.len,		\
 				  text_and_tag.ptr + len, tag.len))	\
 			ok = FALSE;					\
-		DBG(DBG_CRYPT, DBG_dump_hunk("test_gcm_vector: text+tag on return",  \
-					      text_and_tag));  \
+		if (DBGP(DBG_CRYPT)) {					\
+			DBG_dump_hunk("test_gcm_vector: text+tag on return", \
+				      text_and_tag);			\
+		}							\
 	}
 
 	/* test decryption */
@@ -143,27 +148,29 @@ static bool test_gcm_vector(const struct encrypt_desc *encrypt_desc,
 
 #	undef try
 
-	freeanychunk(salted_iv);
-	freeanychunk(aad);
-	freeanychunk(plaintext);
-	freeanychunk(ciphertext);
-	freeanychunk(tag);
-	freeanychunk(text_and_tag);
+	free_chunk_content(&salted_iv);
+	free_chunk_content(&aad);
+	free_chunk_content(&plaintext);
+	free_chunk_content(&ciphertext);
+	free_chunk_content(&tag);
+	free_chunk_content(&text_and_tag);
 
 	/* Clean up.  */
 	release_symkey(__func__, "sym_key", &sym_key);
 
-	DBG(DBG_CRYPT, DBG_log("test_gcm_vector: %s", ok ? "passed" : "failed"));
+	DBGF(DBG_CRYPT, "test_gcm_vector: %s", ok ? "passed" : "failed");
 	return ok;
 }
 
 bool test_gcm_vectors(const struct encrypt_desc *desc,
-		      const struct gcm_test_vector *tests)
+		      const struct gcm_test_vector *tests,
+		      struct logger *logger)
 {
 	bool ok = TRUE;
 	const struct gcm_test_vector *test;
 	for (test = tests; test->key != NULL; test++) {
-		if (!test_gcm_vector(desc, test)) {
+		log_message(RC_LOG, logger, "  %s", test->description);
+		if (!test_gcm_vector(desc, test, logger)) {
 			ok = FALSE;
 		}
 	}

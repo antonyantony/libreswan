@@ -12,6 +12,7 @@
  * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
  * Copyright (C) 2014-2019 Andrew Cagney <cagney@gnu.org>
  * Copyright (C) 2017-2018 Antony Antony <antony@phenome.org>
+ * Copyright (C) 2017 Mayank Totale <mtotale@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -34,8 +35,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <resolv.h>
-
-#include "libreswan/pfkeyv2.h"
 
 #include "sysdep.h"
 #include "constants.h"
@@ -83,6 +82,8 @@
 #include "pluto_stats.h"
 #include "chunk.h"
 #include "pending.h"
+#include "iface.h"
+#include "ikev2_delete.h"	/* for record_v2_delete(); but call is dying */
 
 /*
  * Process KE values.
@@ -117,12 +118,12 @@ void unpack_KE_from_helper(struct state *st,
 	 */
 	if (DBGP(DBG_CRYPT)) {
 		DBG_log("wire (crypto helper) group %s and state group %s %s",
-			kn->group ? kn->group->common.name : "NULL",
-			st->st_oakley.ta_dh ? st->st_oakley.ta_dh->common.name : "NULL",
+			kn->group ? kn->group->common.fqn : "NULL",
+			st->st_oakley.ta_dh ? st->st_oakley.ta_dh->common.fqn : "NULL",
 			kn->group == st->st_oakley.ta_dh ? "match" : "differ");
 	}
 
-	freeanychunk(*g); /* happens in odd error cases */
+	free_chunk_content(g); /* happens in odd error cases */
 	*g = kn->gi;
 
 	transfer_dh_secret_to_state("KE", &kn->secret, st);
@@ -166,22 +167,21 @@ void unpack_nonce(chunk_t *n, const struct pluto_crypto_req *r)
 {
 	const struct pcr_kenonce *kn = &r->pcr_d.kn;
 
-	freeanychunk(*n);
+	free_chunk_content(n);
 	*n = kn->n;
 }
 
-bool ikev1_justship_nonce(chunk_t *n, pb_stream *outs, uint8_t np,
-		    const char *name)
+bool ikev1_justship_nonce(chunk_t *n, pb_stream *outs,
+			  const char *name)
 {
-	return ikev1_out_generic_chunk(np, &isakmp_nonce_desc, outs, *n, name);
+	return ikev1_out_generic_chunk(&isakmp_nonce_desc, outs, *n, name);
 }
 
 bool ikev1_ship_nonce(chunk_t *n, struct pluto_crypto_req *r,
-		pb_stream *outs, uint8_t np,
-		const char *name)
+		      pb_stream *outs, const char *name)
 {
 	unpack_nonce(n, r);
-	return ikev1_justship_nonce(n, outs, np, name);
+	return ikev1_justship_nonce(n, outs, name);
 }
 
 static initiator_function *pick_initiator(struct connection *c,
@@ -309,20 +309,20 @@ void ipsecdoi_replace(struct state *st, unsigned long try)
 			policy |= POLICY_PFS;
 		if (st->st_ah.present) {
 			policy |= POLICY_AUTHENTICATE;
-			if (st->st_ah.attrs.encapsulation ==
+			if (st->st_ah.attrs.mode ==
 			    ENCAPSULATION_MODE_TUNNEL)
 				policy |= POLICY_TUNNEL;
 		}
 		if (st->st_esp.present &&
 		    st->st_esp.attrs.transattrs.ta_encrypt != &ike_alg_encrypt_null) {
 			policy |= POLICY_ENCRYPT;
-			if (st->st_esp.attrs.encapsulation ==
+			if (st->st_esp.attrs.mode ==
 			    ENCAPSULATION_MODE_TUNNEL)
 				policy |= POLICY_TUNNEL;
 		}
 		if (st->st_ipcomp.present) {
 			policy |= POLICY_COMPRESS;
-			if (st->st_ipcomp.attrs.encapsulation ==
+			if (st->st_ipcomp.attrs.mode ==
 			    ENCAPSULATION_MODE_TUNNEL)
 				policy |= POLICY_TUNNEL;
 		}
@@ -414,25 +414,28 @@ bool extract_peer_id(enum ike_id_type kind, struct id *peer, const pb_stream *id
 
 		/* ??? ought to do some more sanity check, but what? */
 
-		setchunk(peer->name, id_pbs->cur, left);
+		peer->name = chunk2(id_pbs->cur, left);
 		break;
 
 	case ID_KEY_ID:
-		setchunk(peer->name, id_pbs->cur, left);
-		DBG(DBG_PARSING,
-		    DBG_dump_hunk("KEY ID:", peer->name));
+		peer->name = chunk2(id_pbs->cur, left);
+		if (DBGP(DBG_BASE)) {
+			DBG_dump_hunk("KEY ID:", peer->name);
+		}
 		break;
 
 	case ID_DER_ASN1_DN:
-		setchunk(peer->name, id_pbs->cur, left);
-		DBG(DBG_PARSING,
-		    DBG_dump_hunk("DER ASN1 DN:", peer->name));
+		peer->name = chunk2(id_pbs->cur, left);
+		if (DBGP(DBG_BASE)) {
+		    DBG_dump_hunk("DER ASN1 DN:", peer->name);
+		}
 		break;
 
 	case ID_NULL:
 		if (left != 0) {
-			DBG(DBG_PARSING,
-				DBG_dump("unauthenticated NULL ID:", id_pbs->cur, left));
+			if (DBGP(DBG_BASE)) {
+				DBG_dump("unauthenticated NULL ID:", id_pbs->cur, left);
+			}
 		}
 		break;
 
@@ -453,7 +456,15 @@ void initialize_new_state(struct state *st,
 			  int try)
 {
 	update_state_connection(st, c);
-	set_state_ike_endpoints(st, c);
+
+	/* reset our choice of interface */
+	c->interface = NULL;
+	(void)orient(c);
+	st->st_interface = c->interface;
+	passert(st->st_interface != NULL);
+	st->st_remote_endpoint = endpoint3(c->interface->protocol,
+					   &c->spd.that.host_addr,
+					   ip_hport(c->spd.that.host_port));
 
 	st->st_policy = policy & ~POLICY_IPSEC_MASK;        /* clear bits */
 	st->st_try = try;
@@ -473,7 +484,7 @@ void initialize_new_state(struct state *st,
 
 void send_delete(struct state *st)
 {
-	if (IMPAIR(SEND_NO_DELETE)) {
+	if (impair.send_no_delete) {
 		dbg("IMPAIR: impair-send-no-delete set - not sending Delete/Notify");
 	} else {
 		dbg("#%lu send %s delete notification for %s",
@@ -485,9 +496,11 @@ void send_delete(struct state *st)
 			send_v1_delete(st);
 			break;
 		case IKEv2:
-			record_v2_delete(st);
-			send_recorded_v2_ike_msg(st, "delete notification");
-			struct ike_sa *ike = ike_sa(st);
+		{
+			struct ike_sa *ike = ike_sa(st, HERE);
+			record_v2_delete(ike, st);
+			send_recorded_v2_message(ike, "delete notification",
+						 MESSAGE_REQUEST);
 			/*
 			 * XXX: The record 'n' send call shouldn't be
 			 * needed.  Instead, as part of this
@@ -502,27 +515,30 @@ void send_delete(struct state *st)
 			 * that the next packet will be sent before
 			 * this one has had a response.
 			 */
-			dbg("Message ID: IKE #%lu sender #%lu in %s hacking around record ' send",
+			dbg("Message ID: IKE #%lu sender #%lu in %s hacking around record 'n' send",
 			    ike->sa.st_serialno, st->st_serialno, __func__);
 			v2_msgid_update_sent(ike, &ike->sa, NULL/*new exchange*/, MESSAGE_REQUEST);
+			st->st_dont_send_delete = true;
 			break;
+		}
 		default:
 			bad_case(st->st_ike_version);
 		}
 	}
 }
 
-void lswlog_child_sa_established(struct lswlog *buf, struct state *st)
+void lswlog_child_sa_established(struct jambuf *buf, struct state *st)
 {
 	struct connection *const c = st->st_connection;
 	const char *ini = " {";
 
-	lswlogs(buf, c->policy & POLICY_TUNNEL ? " tunnel mode" : " transport mode");
+	jam_string(buf, c->policy & POLICY_TUNNEL ? " tunnel mode" : " transport mode");
 
 	if (st->st_esp.present) {
 		bool nat = (st->hidden_variables.st_nat_traversal & NAT_T_DETECTED) != 0;
 		bool tfc = c->sa_tfcpad != 0 && !st->st_seen_no_tfc;
 		bool esn = st->st_esp.attrs.transattrs.esn_enabled;
+		bool tcp = st->st_interface->protocol == &ip_protocol_tcp;
 
 		if (nat)
 			dbg("NAT-T: NAT Traversal detected - their IKE port is '%d'",
@@ -531,32 +547,32 @@ void lswlog_child_sa_established(struct lswlog *buf, struct state *st)
 		dbg("NAT-T: encaps is '%s'",
 		     c->encaps == yna_auto ? "auto" : bool_str(c->encaps == yna_yes));
 
-		lswlogf(buf, "%sESP%s%s%s=>0x%08" PRIx32 " <0x%08" PRIx32 "",
+		jam(buf, "%sESP%s%s%s=>0x%08" PRIx32 " <0x%08" PRIx32 "",
 			ini,
-			nat ? "/NAT" : "",
+			tcp ? "inTCP" : nat ? "inUDP" : "",
 			esn ? "/ESN" : "",
 			tfc ? "/TFC" : "",
 			ntohl(st->st_esp.attrs.spi),
 			ntohl(st->st_esp.our_spi));
-		lswlogf(buf, " xfrm=%s", st->st_esp.attrs.transattrs.ta_encrypt->common.fqn);
+		jam(buf, " xfrm=%s", st->st_esp.attrs.transattrs.ta_encrypt->common.fqn);
 		/* log keylen when it is required and/or "interesting" */
 		if (!st->st_esp.attrs.transattrs.ta_encrypt->keylen_omitted ||
 		    (st->st_esp.attrs.transattrs.enckeylen != 0 &&
 		     st->st_esp.attrs.transattrs.enckeylen != st->st_esp.attrs.transattrs.ta_encrypt->keydeflen)) {
-			lswlogf(buf, "_%u", st->st_esp.attrs.transattrs.enckeylen);
+			jam(buf, "_%u", st->st_esp.attrs.transattrs.enckeylen);
 		}
-		lswlogf(buf, "-%s", st->st_esp.attrs.transattrs.ta_integ->common.fqn);
+		jam(buf, "-%s", st->st_esp.attrs.transattrs.ta_integ->common.fqn);
 
 		if ((st->st_ike_version == IKEv2) && st->st_pfs_group != NULL)  {
-			lswlogs(buf, "-");
-			lswlogs(buf, st->st_pfs_group->common.name);
+			jam_string(buf, "-");
+			jam_string(buf, st->st_pfs_group->common.fqn);
 		}
 
 		ini = " ";
 	}
 
 	if (st->st_ah.present) {
-		lswlogf(buf, "%sAH%s=>0x%08" PRIx32 " <0x%08" PRIx32 " xfrm=%s",
+		jam(buf, "%sAH%s=>0x%08" PRIx32 " <0x%08" PRIx32 " xfrm=%s",
 			ini,
 			st->st_ah.attrs.transattrs.esn_enabled ? "/ESN" : "",
 			ntohl(st->st_ah.attrs.spi),
@@ -567,7 +583,7 @@ void lswlog_child_sa_established(struct lswlog *buf, struct state *st)
 	}
 
 	if (st->st_ipcomp.present) {
-		lswlogf(buf, "%sIPCOMP=>0x%08" PRIx32 " <0x%08" PRIx32,
+		jam(buf, "%sIPCOMP=>0x%08" PRIx32 " <0x%08" PRIx32,
 			ini,
 			ntohl(st->st_ipcomp.attrs.spi),
 			ntohl(st->st_ipcomp.our_spi));
@@ -575,17 +591,17 @@ void lswlog_child_sa_established(struct lswlog *buf, struct state *st)
 		ini = " ";
 	}
 
-	lswlogs(buf, ini);
-	lswlogs(buf, "NATOA=");
+	jam_string(buf, ini);
+	jam_string(buf, "NATOA=");
 	/* XXX: can lswlog_ip() be used? */
 	ipstr_buf ipb;
-	lswlogs(buf, isanyaddr(&st->hidden_variables.st_nat_oa) ? "none" :
+	jam_string(buf, isanyaddr(&st->hidden_variables.st_nat_oa) ? "none" :
 		ipstr(&st->hidden_variables.st_nat_oa, &ipb));
 
-	lswlogs(buf, " NATD=");
+	jam_string(buf, " NATD=");
 
 	if (isanyaddr(&st->hidden_variables.st_natd)) {
-		lswlogs(buf, "none");
+		jam_string(buf, "none");
 	} else {
 		/* XXX: can lswlog_ip() be used?  need to check st_remoteport */
 		char oa[ADDRTOT_BUF + sizeof(":00000")];
@@ -593,49 +609,49 @@ void lswlog_child_sa_established(struct lswlog *buf, struct state *st)
 			 "%s:%d",
 			 sensitive_ipstr(&st->hidden_variables.st_natd, &ipb),
 			 endpoint_hport(&st->st_remote_endpoint));
-		lswlogs(buf, oa);
+		jam_string(buf, oa);
 	}
 
-	lswlogf(buf, (st->st_ike_version == IKEv1 && !st->hidden_variables.st_peer_supports_dpd) ? " DPD=unsupported" :
+	jam(buf, (st->st_ike_version == IKEv1 && !st->hidden_variables.st_peer_supports_dpd) ? " DPD=unsupported" :
 			dpd_active_locally(st) ? " DPD=active" : " DPD=passive");
 
 	if (st->st_xauth_username[0] != '\0') {
-		lswlogs(buf, " username=");
-		lswlogs(buf, st->st_xauth_username);
+		jam_string(buf, " username=");
+		jam_string(buf, st->st_xauth_username);
 	}
 
-	lswlogs(buf, "}");
+	jam_string(buf, "}");
 }
 
-void lswlog_ike_sa_established(struct lswlog *buf, struct state *st)
+void lswlog_ike_sa_established(struct jambuf *buf, struct state *st)
 {
 	passert(st->st_oakley.ta_encrypt != NULL);
 	passert(st->st_oakley.ta_prf != NULL);
 	passert(st->st_oakley.ta_dh != NULL);
 
-	lswlogs(buf, " {auth=");
+	jam_string(buf, " {auth=");
 	if (st->st_ike_version == IKEv2) {
-		lswlogs(buf, "IKEv2");
+		jam(buf, "IKEv2");
 	} else {
-		lswlog_enum_short(buf, &oakley_auth_names, st->st_oakley.auth);
+		jam_enum_short(buf, &oakley_auth_names, st->st_oakley.auth);
 	}
 
-	lswlogf(buf, " cipher=%s", st->st_oakley.ta_encrypt->common.fqn);
+	jam(buf, " cipher=%s", st->st_oakley.ta_encrypt->common.fqn);
 	if (st->st_oakley.enckeylen > 0) {
 		/* XXX: also check omit key? */
-		lswlogf(buf, "_%d", st->st_oakley.enckeylen);
+		jam(buf, "_%d", st->st_oakley.enckeylen);
 	}
 
 	/*
 	 * Note: for IKEv1 and AEAD encrypters,
 	 * st->st_oakley.ta_integ is 'none'!
 	 */
-	lswlogs(buf, " integ=");
+	jam_string(buf, " integ=");
 	if (st->st_ike_version == IKEv2) {
 		if (st->st_oakley.ta_integ == &ike_alg_integ_none) {
-			lswlogs(buf, "n/a");
+			jam_string(buf, "n/a");
 		} else {
-			lswlogs(buf, st->st_oakley.ta_integ->common.fqn);
+			jam_string(buf, st->st_oakley.ta_integ->common.fqn);
 		}
 	} else {
 		/*
@@ -643,12 +659,12 @@ void lswlog_ike_sa_established(struct lswlog *buf, struct state *st)
 		 * (always?) NULL.  Display the PRF.  The choice and
 		 * behaviour are historic.
 		 */
-		lswlogs(buf, st->st_oakley.ta_prf->common.fqn);
+		jam_string(buf, st->st_oakley.ta_prf->common.fqn);
 	}
 
 	if (st->st_ike_version == IKEv2) {
-		lswlogf(buf, " prf=%s", st->st_oakley.ta_prf->common.fqn);
+		jam(buf, " prf=%s", st->st_oakley.ta_prf->common.fqn);
 	}
 
-	lswlogf(buf, " group=%s}", st->st_oakley.ta_dh->common.fqn);
+	jam(buf, " group=%s}", st->st_oakley.ta_dh->common.fqn);
 }

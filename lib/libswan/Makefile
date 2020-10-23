@@ -40,29 +40,34 @@ LIB = libswan.a
 OBJS += x509dn.o asn1.o oid.o
 
 OBJS += constants.o \
-	alloc.o diag.o \
 	id.o initaddr.o initsubnet.o \
-        keyblobtoid.o \
 	lex.o \
 	lswconf.o \
 	lswfips.o \
 	rangetosubnet.o sameaddr.o \
 	secrets.o \
-	subnettypeof.o ttoaddr.o ttodata.o ttoprotoport.o \
+	subnettypeof.o ttoaddr.o ttodata.o \
 	ttosa.o ttosubnet.o ttoul.o \
 	secitem_chunk.o \
 	base64_pubkey.o \
 	lswnss.o \
-	lsw_passert_fail.o \
 	alg_byname.o
 
+OBJS += alloc.o
+OBJS += alloc_printf.o
+
+OBJS += diag.o
+OBJS += passert.o
+OBJS += pexpect.o
 OBJS += nss_cert_load.o
 OBJS += certs.o
 OBJS += reqid.o
+OBJS += keyid.o
 
-ifeq ($(USE_NETKEY),true)
+ifeq ($(USE_XFRM),true)
 OBJS += addr_lookup.o
-OBJS += kernel_xfrm_reply.o
+OBJS += kernel_netlink_reply.o
+OBJS += kernel_netlink_query.o
 ifeq ($(USE_XFRM_INTERFACE), true)
  OBJS += netlink_attrib.o
 endif
@@ -74,7 +79,6 @@ OBJS += kernel_alg.o
 OBJS += kernel_sadb.o
 OBJS += role.o
 
-OBJS += addrtot.o
 OBJS += addrtypeof.o
 OBJS += anyaddr.o
 OBJS += datatot.o
@@ -91,13 +95,20 @@ OBJS += ckaid.o
 
 OBJS += chunk.o
 OBJS += shunk.o
+OBJS += hunk.o
 
 OBJS += ip_address.o
+OBJS += ip_encap.o
 OBJS += ip_endpoint.o
 OBJS += ip_info.o
+OBJS += ip_port.o
+OBJS += ip_port_range.o
 OBJS += ip_protocol.o
+OBJS += ip_protoport.o
 OBJS += ip_range.o
 OBJS += ip_said.o
+OBJS += ip_selector.o
+OBJS += ip_sockaddr.o
 OBJS += ip_subnet.o
 
 OBJS += lmod.o
@@ -114,35 +125,26 @@ OBJS += keywords.o
 OBJS += DBG_dump.o
 OBJS += DBG_log.o
 
-OBJS += libreswan_exit_log_errno.o
-OBJS += libreswan_log_errno.o
+OBJS += log_error.o
+OBJS += fatal.o
 OBJS += libreswan_bad_case.o
 
-OBJS += libreswan_log.o
-OBJS += libreswan_log_rc.o
-
-OBJS += log_pexpect.o
+OBJS += lswglob.o
 
 OBJS += jambuf.o
 OBJS += jam_bytes.o
-OBJS += lswlog.o
-OBJS += lswlog_nss_error.o
-OBJS += lswlog_nss_ckm.o
-OBJS += lswlog_nss_ckf.o
-OBJS += lswlog_nss_cka.o
-OBJS += lswlog_nss_secitem.o
+OBJS += log_message.o
+OBJS += log_va_list.o
+OBJS += log_nss_error.o
+OBJS += jam_nss_error.o
+OBJS += jam_nss_ckm.o
+OBJS += jam_nss_ckf.o
+OBJS += jam_nss_cka.o
+OBJS += jam_nss_secitem.o
+
 OBJS += lswlog_enum_lset_short.o
-OBJS += lswlog_to_file_stream.o
-OBJS += lswlog_pexpect.o
-OBJS += lswlog_passert.o
 
 # Crypto code:
-#
-# XXX: More is coming as it gets cleaned up and made more library
-# like.
-
-# not much left using this
-CFLAGS += -I$(top_srcdir)/lib/libcrypto
 
 OBJS += ike_alg.o
 OBJS += ike_alg_test.o
@@ -154,7 +156,7 @@ OBJS += ike_alg_prf_mac_nss_ops.o
 OBJS += ike_alg_prf_mac_xcbc_ops.o
 OBJS += ike_alg_prf_ikev1_mac_ops.o
 OBJS += ike_alg_prf_ikev2_mac_ops.o
-ifeq ($(USE_NSS_PRF),true)
+ifeq ($(USE_NSS_KDF),true)
 OBJS += ike_alg_prf_ikev1_nss_ops.o
 OBJS += ike_alg_prf_ikev2_nss_ops.o
 endif
@@ -167,59 +169,44 @@ OBJS += ike_alg_desc.o
 ifeq ($(USE_3DES),true)
 OBJS += ike_alg_3des.o
 endif
+ifeq ($(USE_AES),true)
 OBJS += ike_alg_aes.o
+endif
+ifeq ($(USE_CAMELLIA),true)
 OBJS += ike_alg_camellia.o
-ifeq ($(USE_CAST),true)
-OBJS += ike_alg_cast.o
 endif
+
 OBJS += ike_alg_dh.o
+
+ifeq ($(USE_MD5),true)
 OBJS += ike_alg_md5.o
+endif
+
 OBJS += ike_alg_none.o
-ifeq ($(USE_RIPEMD),true)
-OBJS += ike_alg_ripemd.o
-endif
-ifeq ($(USE_SERPENT),true)
-OBJS += ike_alg_serpent.o
-endif
+
+ifeq ($(USE_SHA1),true)
 OBJS += ike_alg_sha1.o
+endif
+
+ifeq ($(USE_SHA2),true)
 OBJS += ike_alg_sha2.o
-ifeq ($(USE_TWOFISH),true)
-OBJS += ike_alg_twofish.o
 endif
 
 OBJS += crypt_mac.o
+OBJS += crypt_hash.o
+OBJS += crypt_prf.o
+OBJS += crypt_symkey.o
 
 ifeq ($(USE_NSS_AVA_COPY),true)
 OBJS += nss_copies.o
 endif
 
-ifeq ($(USE_UNBOUND_EVENT_H_COPY),true)
-CFLAGS+=-I${LIBRESWANSRCDIR}/include/unbound
-endif
-
 ifeq ($(USE_DNSSEC),true)
 OBJS += unbound.o
 endif
-
-ifeq ($(USE_KLIPS),true)
-CFLAGS += -DKLIPS
+ifeq ($(USE_UNBOUND_EVENT_H_COPY),true)
+USERLAND_INCLUDES += -I$(top_srcdir)/include/unbound
 endif
-
-ifeq ($(USE_KLIPS),true)
-CFLAGS += -DPFKEYV2
-OBJS += pfkey_sock.o pfkey_error.o
-OBJS += pfkey_v2_build.o pfkey_v2_ext_bits.o pfkey_v2_parse.o
-OBJS += pfkey_v2_debug.o
-endif
-
-# Original flags; this is a mess.
-CFLAGS+=${PORTINCLUDE} -I.
-CFLAGS+=-I${LIBRESWANSRCDIR}
-CFLAGS+= $(NSSFLAGS)
-CFLAGS+=-I${LIBRESWANSRCDIR}/include ${PORTINCLUDE}
-# XXX: hack until everything uses a consistent .c.o rule
-CFLAGS+=$(USERLAND_CFLAGS)
-CFLAGS+=${CROSSFLAGS}
 
 OBJS += $(abs_builddir)/version.o
 

@@ -19,8 +19,9 @@
 #include "lswtool.h"
 #include "lswfips.h"
 #include "lswnss.h"
-#include "lswlog.h"
+#include "lswlog.h"			/* for log_to_stderr */
 #include "ike_alg.h"
+#include "crypt_symkey.h"		/* for init_crypt_symkey() */
 
 #include "cavp.h"
 #include "cavps.h"
@@ -127,7 +128,7 @@ static void usage(void)
 int main(int argc, char *argv[])
 {
 	log_to_stderr = false;
-	tool_init_log(argv[0]);
+	struct logger *logger = tool_init_log(argv[0]);
 
 	if (argc <= 1) {
 		usage();
@@ -155,11 +156,10 @@ int main(int argc, char *argv[])
 	}
 
 	/* start NSS so crypto works while args are being parsed */
-	lsw_nss_buf_t err;
-	if (!lsw_nss_setup(NULL, 0, NULL, err)) {
-		fprintf(stderr, "unexpected %s\n", err);
+	if (!lsw_nss_setup(NULL, 0, logger)) {
 		return 1;
 	}
+	init_crypt_symkey(logger);
 
 	for (; *argp != NULL; argp++) {
 		const char *arg = *argp;
@@ -216,7 +216,7 @@ int main(int argc, char *argv[])
 			return 0;
 		}
 
-		if (cavp != NULL && acvp_option(cavp, arg, argp[1])) {
+		if (cavp != NULL && acvp_option(cavp, arg, argp[1], logger)) {
 			argp++;
 			use_acvp = true;
 			continue;
@@ -227,11 +227,11 @@ int main(int argc, char *argv[])
 	}
 
 	if (!use_acvp && cavp == NULL) {
-		libreswan_log("Guessing test type ...");
+		fprintf(stderr, "Guessing test type ...");
 	}
 
 	if (use_acvp) {
-		libreswan_log("Using CMVP");
+		fprintf(stderr, "Using CMVP");
 	} else if (*argp == NULL) {
 		fprintf(stderr, "missing test file\n");
 		exit(1);
@@ -255,15 +255,15 @@ int main(int argc, char *argv[])
 	setbuf(stdout, NULL);
 
 	log_to_stderr = verbose;
-	init_ike_alg();
+	init_ike_alg(logger);
 
 	if (use_acvp) {
 		passert(cavp != NULL);
 		print_begin();
-		cavp->run_test();
+		cavp->run_test(logger);
 		print_end();
 	} else {
-		cavp_parser(cavp);
+		cavp_parser(cavp, logger);
 	}
 
 	lsw_nss_shutdown();

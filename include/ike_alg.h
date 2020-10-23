@@ -17,14 +17,14 @@
 #define _IKE_ALG_H
 
 #include <stdbool.h>	/* for bool */
-#include <nss.h>
 #include <pk11pub.h>
 #include "shunk.h"
 #include "ietf_constants.h"
 
 struct ike_alg;
-struct lswlog;
+struct jambuf;
 enum ike_alg_key;
+struct logger;
 
 /*
  * More meaningful passert.
@@ -37,44 +37,43 @@ enum ike_alg_key;
 #define pri_ike_alg(ALG)						\
 		ike_alg_type_name((ALG)->algo_type),			\
 			((ALG)->fqn != NULL ? (ALG)->fqn		\
-			 : (ALG)->name != NULL ? (ALG)->name		\
 			 : "NULL")
 
-#define pexpect_ike_alg(ALG, ASSERTION)					\
+#define pexpect_ike_alg(LOGGER, ALG, ASSERTION)				\
 	{								\
 		/* wrapping ASSERTION in parens suppresses -Wparen */	\
 		bool assertion__ = ASSERTION; /* no paren */		\
 		if (!assertion__) {					\
-			log_pexpect(HERE,				\
-				    PRI_IKE_ALG" fails: " #ASSERTION,	\
-				    pri_ike_alg(ALG));			\
+			pexpect_fail(LOGGER, HERE,			\
+				     PRI_IKE_ALG" fails: " #ASSERTION,	\
+				     pri_ike_alg(ALG));			\
 		}							\
 	}
 
-#define pexpect_ike_alg_streq(ALG, LHS, RHS)				\
+#define pexpect_ike_alg_streq(LOGGER, ALG, LHS, RHS)			\
 	{								\
 		/* wrapping ASSERTION in parens suppresses -Wparen */	\
 		const char *lhs = LHS;					\
 		const char *rhs = RHS;					\
 		if (lhs == NULL || rhs == NULL || !streq(LHS, RHS)) {	\
-			log_pexpect(HERE,				\
-				    PRI_IKE_ALG" fails: %s != %s (%s != %s)", \
-				    pri_ike_alg(ALG),			\
-				    lhs, rhs, #LHS, #RHS);		\
+			pexpect_fail(LOGGER, HERE,			\
+				     PRI_IKE_ALG" fails: %s != %s (%s != %s)", \
+				     pri_ike_alg(ALG),			\
+				     lhs, rhs, #LHS, #RHS);		\
 		}							\
 	}
 
-#define pexpect_ike_alg_strcaseeq(ALG, LHS, RHS)			\
+#define pexpect_ike_alg_strcaseeq(LOGGER, ALG, LHS, RHS)		\
 	{								\
 		/* wrapping ASSERTION in parens suppresses -Wparen */	\
 		const char *lhs = LHS;					\
 		const char *rhs = RHS;					\
 		if (lhs == NULL || rhs == NULL || !strcaseeq(LHS, RHS)) { \
-			log_pexpect(HERE,				\
-				    PRI_IKE_ALG" fails: %s != %s (%s != %s)", \
-				    pri_ike_alg(ALG),			\
-				    ike_alg_type_name((ALG)->algo_type), \
-				    (ALG)->fqn, lhs, rhs, #RHS, #LHS);	\
+			pexpect_fail(LOGGER, HERE,			\
+				     PRI_IKE_ALG" fails: %s != %s (%s != %s)", \
+				     pri_ike_alg(ALG),			\
+				     ike_alg_type_name((ALG)->algo_type), \
+				     (ALG)->fqn, lhs, rhs, #RHS, #LHS);	\
 		}							\
 	}
 
@@ -218,7 +217,7 @@ int ike_alg_enum_match(const struct ike_alg_type *type, enum ike_alg_key key,
  *
  * (1) The linux centric header libreswan/pfkeyv2 tries to define the
  *     enum sadb_ealg with the names K_SADB[_X]_AALG_... but the code
- *     is broken - it doesn't accomodate missing algorithms (more
+ *     is broken - it doesn't accommodate missing algorithms (more
  *     generally, the header defines all sorts of stuff that conflicts
  *     with <net/pfkeyv2.h>)
  *
@@ -254,9 +253,8 @@ int ike_alg_enum_match(const struct ike_alg_type *type, enum ike_alg_key key,
  */
 struct ike_alg {
 	/*
-	 * Name to print when logging.  FQN = fully-qualified-name.
+	 * Name to print when logging; FQN = fully-qualified-name.
 	 */
-	const char *name;
 	const char *fqn;
 	/*
 	 * String containing a comma separated list of all names that
@@ -413,7 +411,7 @@ struct encrypt_desc {
 	 * XXX: The linux centric header libreswan/pfkeyv2 tries to
 	 * define "enum sadb_ealg" with the names
 	 * K_SADB[_X]_EALG_... but the code is broken - it doesn't
-	 * accomodate missing algorithms.  Hence it is not used here.
+	 * accommodate missing algorithms.  Hence it is not used here.
 	 */
 	unsigned encrypt_sadb_ealg_id;
 
@@ -459,35 +457,40 @@ struct hash_desc {
 	const size_t hash_block_size;
 	/*
 	 * For NSS.
-	 *
-	 * This is all somewhat redundant.  Unfortunately there isn't
-	 * a way to map between them.
 	 */
 	struct {
 		/*
 		 * The NSS_OID_TAG identifies the the PK11 digest
 		 * (hash) context that should created when using
 		 * PL11_Digest*().
+		 *
+		 * This is all somewhat redundant.  Unfortunately
+		 * there isn't a way to map between them.
 		 */
 		SECOidTag oid_tag;
 		/*
 		 * The DERIVE_MECHANISM specifies the derivation
 		 * (algorithm) to use when using PK11_Derive().
+		 *
+		 * This is all somewhat redundant.  Unfortunately
+		 * there isn't a way to map between them.
 		 */
 		CK_MECHANISM_TYPE derivation_mechanism;
+		/*
+		 * For digital sign schema
+		 */
+		const CK_RSA_PKCS_PSS_PARAMS *rsa_pkcs_pss_params;
 	} nss;
 
-	const struct hash_ops *hash_ops;
-};
+	/*
+	 * ASN.1 blobs specific to a particular hash algorithm are
+	 * sent in the Auth payload as part of Digital signature
+	 * authentication as per RFC7427
+	 */
+	shunk_t hash_asn1_blob_rsa;
+	shunk_t hash_asn1_blob_ecdsa;
 
-/*
- * ASN.1 blobs specific to a particular hash algorithm are sent in the
- * Auth payload as part of Digital signature authentication as per RFC7427
- */
-struct asn1_hash_blob {
-	enum notify_payload_hash_algorithms hash_algo;
-	const uint8_t *blob;
-	size_t blob_sz;
+	const struct hash_ops *hash_ops;
 };
 
 /*
@@ -618,7 +621,7 @@ struct integ_desc {
 	 *
 	 * The linux centric header libreswan/pfkeyv2 tries to define
 	 * "enum sadb_aalg" with the names K_SADB[_X]_AALG_... but the
-	 * code is broken - it doesn't accomodate missing algorithms.
+	 * code is broken - it doesn't accommodate missing algorithms.
 	 * Hence it is not used here.
 	 */
 	unsigned integ_sadb_aalg_id;
@@ -668,8 +671,8 @@ struct integ_desc {
 
 extern bool encrypt_desc_is_aead(const struct encrypt_desc *enc_desc);
 
-void init_ike_alg(void);
-void test_ike_alg(void);
+void init_ike_alg(struct logger *logger);
+void test_ike_alg(struct logger *logger);
 
 /*
  * Iterate over all enabled algorithms.
@@ -791,11 +794,5 @@ const struct integ_desc *ikev1_get_kernel_integ_desc(enum ikev1_auth_attribute);
 
 const struct encrypt_desc *encrypt_desc_by_sadb_ealg_id(unsigned id);
 const struct integ_desc *integ_desc_by_sadb_aalg_id(unsigned id);
-
-/*
- * Pretty print the algorithm to the standard log.  The logged line is
- * very wide.
- */
-void libreswan_log_ike_alg(const char *prefix, const struct ike_alg *alg);
 
 #endif /* _IKE_ALG_H */

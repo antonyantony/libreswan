@@ -36,7 +36,7 @@ CTLSOCKET="${IPSEC_RUNDIR}/pluto.ctl"
 export IPSEC_EXECDIR IPSEC_CONF IPSEC_RUNDIR CTLSOCKET
 
 # standardize PATH, and export it for everything else's benefit
-PATH="${IPSEC_SBINDIR}":/sbin:/usr/sbin:/usr/local/bin:/bin:/usr/bin
+PATH="${IPSEC_SBINDIR}:${PATH#${IPSEC_SBINDIR}:}"
 export PATH
 
 # suppress ElectricFence banner changing our reference testing output
@@ -110,7 +110,7 @@ ipsec_help() {
     echo "where {command} is one of:"
     echo ""
     GOTTWO=""
-    for f in start stop restart status trafficstatus traffic globalstatus shuntstatus briefstatus fips import initnss checknss checknflog \
+    for f in start stop restart status trafficstatus traffic globalstatus shuntstatus briefstatus showstates fips import initnss checknss checknflog \
 	$(ls "${IPSEC_EXECDIR}" | grep -E -v -i "${DONTMENTION}"); do
 	if [ -z "${GOTTWO}" ]; then
 	    # first of two entries
@@ -246,6 +246,7 @@ ipsec_import() {
 }
 
 ipsec_checknss() {
+    local file
     while [ ${#} -gt 0 ]; do
 	case "${1}" in
 	    --checknss|checknss)
@@ -278,10 +279,38 @@ ipsec_checknss() {
 
     if [ -d "${IPSEC_NSSDIR}" -a -w "${IPSEC_NSSDIR}" ]; then
 	IPSEC_NSSDIR_SQL="sql:${IPSEC_NSSDIR}"
+	# Handle nssdir default change from /etc/ipsec.d to /var/lib/ipsec/nss
+	if [ "${IPSEC_CONFDDIR}" != "${IPSEC_NSSDIR}" -a \
+	    "${cmd}" = "checknss" ]
+	then
+	    # Check for legacy nss db format in old location and give failure
+	    # We can't handle two operations at same time.
+	    if [ -f "${IPSEC_CONFDDIR}/cert8.db" -a \
+		! -f "${IPSEC_CONFDDIR}/cert9.db" -a \
+		! -f "${IPSEC_NSSDIR}/cert9.db" ]
+	    then
+		echo "Failure - we cannot handle both nss db format conversion and nss db move to new location in one run." >&2
+		echo "Run \"ipsec checknss --nssdir ${IPSEC_CONFDDIR}\" manually first to convert db format" >&2
+		exit 4
+	    fi
+	    for file in cert9.db key4.db pkcs11.txt; do
+		if [ -f "${IPSEC_CONFDDIR}/${file}" -a \
+		    ! -f "${IPSEC_NSSDIR}/${file}" ]
+		then
+		    if ! mv "${IPSEC_CONFDDIR}/${file}" \
+			"${IPSEC_NSSDIR}/${file}"
+		    then
+			echo "Failed to mv ${IPSEC_CONFDDIR}/${file} ${IPSEC_NSSDIR}/${file}" >&2
+			exit 4
+		    fi
+		fi
+	    done
+	fi
 	# if we have old database
 	if [ -f "${IPSEC_NSSDIR}/cert8.db" -o \
 	    -f "${IPSEC_NSSDIR}/key3.db" -o \
-	    -f "${IPSEC_NSSDIR}/secmod.db" ]; then
+	    -f "${IPSEC_NSSDIR}/secmod.db" ]
+	then
 	    if [ ! -f "${IPSEC_NSSDIR}/cert9.db" -o \
 		! -f "${IPSEC_NSSDIR}/key4.db" ]; then
 		IMPORTDBPW=""
@@ -448,6 +477,11 @@ while [ ${#} -gt 0 ]; do
 	briefstatus|--briefstatus)
 	    cmd="whack"
 	    whackoption="--briefstatus"
+	    shift
+	    ;;
+	showstates|--showstates)
+	    cmd="whack"
+	    whackoption="--showstates"
 	    shift
 	    ;;
 	start|--start)

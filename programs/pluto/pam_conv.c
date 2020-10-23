@@ -32,7 +32,7 @@
 #include <security/pam_appl.h> /* needed for pam_handle_t */
 
 #include "defs.h"
-#include "lswlog.h"
+#include "log.h"
 #include "pam_conv.h"
 
 /* BEWARE: This code is multi-threaded.
@@ -110,15 +110,14 @@ static int pam_conv(int num_msg,
 
 static void log_pam_step(const struct pam_thread_arg *arg, const char *what)
 {
-	DBG(DBG_XAUTH,
-		DBG_log("%s helper thread %s for state #%lu, %s[%lu] user=%s.",
-			arg->atype, what,
-			arg->st_serialno, arg->c_name,
-			arg->c_instance_serial, arg->name));
+	dbg("%s helper thread %s for state #%lu, %s[%lu] user=%s.",
+	    arg->atype, what,
+	    arg->st_serialno, arg->c_name,
+	    arg->c_instance_serial, arg->name);
 }
 
 /*
- * PAM (Plugable Authentication Modules) interaction with external module
+ * PAM (Pluggable Authentication Modules) interaction with external module
  * NO locks/mutex here all data is copied already
  *
  * @return bool success
