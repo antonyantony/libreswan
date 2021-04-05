@@ -2065,6 +2065,39 @@ static void setup_esp_nic_offload(struct kernel_sa *sa, struct connection *c,
 	sa->nic_offload_dev = c->interface->ip_dev->id_rname;
 }
 
+static uint64_t compute_sa_soft_limit(enum sa_role sa_role, uint64_t max,
+			       unsigned long fuzz, bool rekey)
+{
+	uint64_t max_old = max;
+	intmax_t marg = max - (max * IPSEC_SA_MAX_SOFT_LIMIT_PERCENTAGE/100);
+	uint64_t ret = max;
+	intmax_t marg_before =  marg;
+
+	if (!rekey)
+		return ret;
+
+	switch (sa_role) {
+		case SA_INITIATOR:
+			max  -= marg;
+			marg /= 4;
+			marg = marg * fuzz / 100.E0 * (rand() / (RAND_MAX + 1.E0));
+			ret = max + marg;
+			dbg("AA max before %" PRIu64 " marg %ld max new %" PRIu64 " fuzz %lu %ld", max_old, marg, ret, fuzz, marg_before);
+			break;
+
+		case SA_RESPONDER:
+			marg /= 2;
+			max -= marg;
+			marg = marg * fuzz / 100.E0 * (rand() / (RAND_MAX + 1.E0));
+			ret = max + marg;
+			break;
+		default:
+			bad_case(sa_role);
+	}
+
+	return ret;
+}
+
 /*
  * Set up one direction of the SA bundle
  */
@@ -2110,11 +2143,23 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		.tunnel = (proto_encap.mode == ENCAP_MODE_TUNNEL),
 		.transport_proto = c->spd.this.client.ipproto,
 		.sa_lifetime = c->sa_ipsec_life_seconds,
+		.sa_max_bytes = c->sa_max_bytes,
+		.sa_max_soft_bytes = compute_sa_soft_limit(st->st_sa_role,
+						c->sa_max_bytes,
+						c->sa_rekey_fuzz,
+						!LIN(POLICY_DONT_REKEY, c->policy)),
+		.sa_max_packets = c->sa_max_packets,
+		.sa_max_soft_packets = compute_sa_soft_limit(st->st_sa_role,
+						c->sa_max_packets,
+						c->sa_rekey_fuzz,
+						!LIN(POLICY_DONT_REKEY, c->policy)),
 		.outif = -1,
 		.sec_label = (st->st_v1_seen_sec_label.len > 0 ? st->st_v1_seen_sec_label :
 			      st->st_v1_acquired_sec_label.len > 0 ? st->st_v1_acquired_sec_label :
 			      c->spd.this.sec_label /* assume connection outlive their kernel_sa's */),
 	};
+
+
 
 	address_buf sab, dab;
 	selector_buf scb, dcb;
@@ -3809,4 +3854,80 @@ void shutdown_kernel(struct logger *logger)
 	if (kernel_ops->shutdown != NULL)
 		kernel_ops->shutdown(logger);
 	expire_bare_shunts(logger, true/*all*/);
+}
+
+void handle_sa_expire(ipsec_spi_t spi, uint8_t protoid, ip_address *dst,
+		       bool hard, uint64_t bytes, uint64_t packets, uint64_t add_time)
+{
+	struct child_sa *child = find_v2_child_sa_by_spi(spi, protoid, dst);
+	address_buf a;
+
+	if (child == NULL) {
+		llog(LOG_STREAM, &failsafe_logger, "Received kernel EXPIRE event for IPsec SPI 0x%x, but there is no connection with this SPI and dst %s bytes %" PRIu64 "packets %" PRIu64,
+		     ntohl(spi), str_address(dst, &a), bytes, packets);
+		return;
+	}
+
+	const struct connection *c = child->sa.st_connection;
+	if ((hard && impair.ignore_hard_expire) ||
+	     (!hard && impair.ignore_soft_expire)) {
+                        llog(RC_LOG, c->logger, "IMPAIR is supressing a %s EXPIRE event spi 0x%x dst %s bytes %" PRIu64 " packets %" PRIu64,
+			     hard ? "hard" : "soft", ntohl(spi), str_address(dst, &a),
+			     bytes, packets);
+                        return;
+	}
+
+	bool rekey = !LIN(POLICY_DONT_REKEY, c->policy);
+	bool newest = c->newest_ipsec_sa == child->sa.st_serialno;
+	struct state *st =  &child->sa;
+	struct ipsec_proto_info *pr = st->st_esp.present ? &st->st_esp : st->st_ah.present ? &st->st_ah : st->st_ipcomp.present ? &st->st_ipcomp : NULL;
+
+	bool softexpired = ((pr->peer_kernel_sa_expired & SA_SOFT_EXPIRED) ||
+			(pr->our_kernel_sa_expired & SA_SOFT_EXPIRED));
+
+	bool hardexpired = ((pr->peer_kernel_sa_expired & SA_HARD_EXPIRED) ||
+			(pr->our_kernel_sa_expired & SA_HARD_EXPIRED));
+
+	enum sa_expire_kind expire = hard ? SA_HARD_EXPIRED : SA_SOFT_EXPIRED;
+
+	llog(RC_LOG, c->logger, "Received %s EXPIRE for SPI 0x%x bytes %" PRIu64 " packets %" PRIu64 " %s rekey=%s%s%s%s",
+	     hard ? "hard" : "soft", ntohl(spi), bytes, packets,
+             newest ? "for the newest SA" : "for old SA. Delete it or it is about to expire.",
+	     rekey ?  "yes" : "no",
+	     softexpired ? " one of SA was soft expired ignore this expire." : ".",
+	     hardexpired ? " one of SA was hard expired ignore this expire." : ".",
+             (newest && rekey && !softexpired && !hardexpired) ? " Replace this SA" : "");
+
+	if ((softexpired && expire == SA_SOFT_EXPIRED)  ||
+	    (hardexpired && expire == SA_HARD_EXPIRED)) {
+		dbg("#%lu one of the SA has already expired ignore this %s EXPIRE",
+		    child->sa.st_serialno, hard ? "hard" : "soft");
+		/*
+		 * likely the other direction SA EXPIRED, it triggered first.
+		 * It should be safe to ignore. No need for another log.
+		 */
+	} else if (!hardexpired && expire == SA_HARD_EXPIRED) {
+		if (pr->attrs.spi == spi) {
+			pr->our_kernel_sa_expired |= expire;
+			set_sa_info(pr, bytes, add_time, true /* inbound */, NULL);
+		} else {
+			pr->peer_kernel_sa_expired |= expire;
+			set_sa_info(pr, bytes, add_time, false /* outbound */, NULL);
+		}
+		event_force(EVENT_SA_EXPIRE, &child->sa);
+
+	} else if (newest && rekey && !hardexpired && !softexpired && expire == SA_SOFT_EXPIRED) {
+		if (pr->attrs.spi == spi) {
+			set_sa_info(pr, bytes, add_time, true /* inbound */, NULL);
+			pr->peer_kernel_sa_expired |= expire;
+		} else {
+			pr->our_kernel_sa_expired |= expire;
+			set_sa_info(pr, bytes, add_time, false /* outbound */, NULL);
+		}
+		// Fix ME EVENT_v2_REKEY is the not the right one it set next timer 8 hours
+		// Fix ME for IKEv1 ???
+		event_force(EVENT_v2_REKEY, &child->sa);
+	} else {
+		passert(1); /* lets break! */
+	}
 }
