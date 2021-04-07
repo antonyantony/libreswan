@@ -3,9 +3,9 @@ north #
  ipsec start
 Redirecting to: [initsystem]
 north #
- /testing/pluto/bin/wait-until-pluto-started
+ ../../guestbin/wait-until-pluto-started
 north #
- ../bin/block-non-ipsec.sh
+ ../../guestbin/block-non-ipsec.sh
 north #
  ipsec auto --add north-east
 002 "north-east": added IKEv1 connection
@@ -62,9 +62,6 @@ north #
  hostname | grep east > /dev/null && ipsec whack --trafficstatus
 north #
  hostname | grep east > /dev/null && ipsec stop
-north #
- grep "^leak" /tmp/pluto.log
-leak-detective enabled
 north #
  if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
 north #

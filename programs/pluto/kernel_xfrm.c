@@ -1302,12 +1302,15 @@ static bool netlink_add_sa(const struct kernel_sa *sa, bool replace,
 	req.p.reqid = sa->reqid;
 	dbg("XFRM: adding IPsec SA with reqid %d", sa->reqid);
 
-	/* TODO expose limits to kernel_sa via config */
-	req.p.lft.soft_byte_limit = sa->sa_lifebytes * IPSEC_SA_LIFEBYTES_SOFT_LIMIT_PERCENTAGE / 100;
-	dbg("AA_2019 set soft_byte_limit %llu ", req.p.lft.soft_byte_limit);
-	req.p.lft.soft_packet_limit = XFRM_INF;
+	req.p.lft.soft_byte_limit = sa->sa_lifebytes * IPSEC_SA_LIFE_SOFT_LIMIT_PERCENTAGE / 100;
 	req.p.lft.hard_byte_limit = sa->sa_lifebytes;
-	req.p.lft.hard_packet_limit = XFRM_INF;
+	req.p.lft.soft_packet_limit = sa->sa_lifepackets * IPSEC_SA_LIFE_SOFT_LIMIT_PERCENTAGE / 100;
+	req.p.lft.hard_packet_limit = sa->sa_lifepackets;
+
+	/* we can ignore userspace, but that wouldn't prevent kernel from deleting and causing ACQUIRE */
+	if (impair.ignore_hard_expire) {
+		req.p.lft.hard_byte_limit = req.p.lft.hard_packet_limit = XFRM_INF;
+	}
 
 	req.n.nlmsg_len = NLMSG_ALIGN(NLMSG_LENGTH(sizeof(req.p)));
 
@@ -1893,9 +1896,9 @@ static void netlink_kernel_sa_expire(struct nlmsghdr *n, struct logger *logger)
 	address_buf b;
 	xfrm2ip(&ue->state.saddr, &src, ue->state.family);
 	xfrm2ip(&ue->state.id.daddr, &dst, ue->state.family);
-	dbg("%s spi 0x%x src %s dst %s%s mode %u proto %d", __func__,
+	dbg("%s spi 0x%x src %s dst %s %s mode %u proto %d", __func__,
 	    ntohl(ue->state.id.spi),
-	    str_address(&src, &a), str_address(&dst, &b), ue->hard ? "hard" : "",
+	    str_address(&src, &a), str_address(&dst, &b), ue->hard ? "hard" : "soft",
 	    ue->state.mode, ue->state.id.proto);
 	uint8_t protoid = PROTO_RESERVED;
 	switch (ue->state.id.proto) {
@@ -1904,7 +1907,7 @@ static void netlink_kernel_sa_expire(struct nlmsghdr *n, struct logger *logger)
 	default:
 		bad_case(ue->state.id.proto);
 	}
-	initiate_replace(ue->state.id.spi, protoid, &dst);
+	handle_expiring_sa(ue->state.id.spi, protoid, &dst, !ue->hard);
 }
 
 static void netlink_policy_expire(struct nlmsghdr *n, struct logger *logger)

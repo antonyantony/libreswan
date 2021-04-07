@@ -150,6 +150,8 @@ struct impair {
 	unsigned add_unknown_v2_payload_to_sk;
 	bool unknown_v2_payload_critical;
 
+	bool ignore_soft_expire;
+	bool ignore_hard_expire;
 	/*
 	 * add more here
 	 */

@@ -811,6 +811,8 @@ static stf_status ikev2_send_delete_continue(struct ike_sa *ike UNUSED,
 
 void ikev2_schedule_next_child_delete(struct state *st, struct ike_sa *ike)
 {
+	bool expiry_renew = st->st_kernel_sa_expired;
+
 	if (st->st_ike_version == IKEv2 &&
 	    should_send_delete(st)) {
 		/* pre delete check for slot to send delete message */
@@ -825,7 +827,8 @@ void ikev2_schedule_next_child_delete(struct state *st, struct ike_sa *ike)
 	}
 	delete_state(st);
 	st = NULL;
-	v2_expire_unused_ike_sa(ike);
+	if (!expiry_renew) /* we are about to create a replacement IPsec SA for the expired one */
+		v2_expire_unused_ike_sa(ike);
 }
 
 static void delete_state_tail(struct state *st);
@@ -1987,6 +1990,10 @@ static void jam_state_traffic(struct jambuf *buf, struct state *st)
 				 st->st_ah.present ? st->st_ah.peer_bytes :
 				 st->st_ipcomp.present ? st->st_ipcomp.peer_bytes : 0);
 		jam(buf, ", outBytes=%u", outb);
+
+		if (c->sa_ipsec_life_bytes != 0) {
+			jam(buf, ", maxBytes=%" PRIu64 "", c->sa_ipsec_life_bytes);
+		}
 	}
 
 	if (st->st_xauth_username[0] == '\0') {
@@ -2168,11 +2175,11 @@ void fmt_state(struct state *st, const monotime_t now,
 						       " AHin=");
 			}
 			mbcp = readable_humber(
-					(u_long)st->st_ah.attrs.life_kilobytes,
+					c->sa_ipsec_life_bytes,
 					mbcp,
 					traffic_buf +
 					  sizeof(traffic_buf),
-					"! AHmax=");
+					" AHmax=");
 		}
 		if (st->st_esp.present) {
 			add_said(&c->spd.that.host_addr, st->st_esp.attrs.spi,
@@ -2195,11 +2202,11 @@ void fmt_state(struct state *st, const monotime_t now,
 			}
 
 			mbcp = readable_humber(
-					(u_long)st->st_esp.attrs.life_kilobytes,
+					c->sa_ipsec_life_bytes,
 					mbcp,
 					traffic_buf +
 					  sizeof(traffic_buf),
-					"! ESPmax=");
+					" ESPmax=");
 		}
 		if (st->st_ipcomp.present) {
 			add_said(&c->spd.that.host_addr,

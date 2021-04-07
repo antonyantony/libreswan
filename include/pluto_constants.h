@@ -70,7 +70,7 @@ enum ike_version {
  */
 #define IPSEC_SA_LIFEBYTES_DEFAULT ~(int64_t)0 /* XFRM_INF, including xfrm.h is probably over doing it */
 #define IPSEC_SA_LIFEPACKETS_DEFAULT ~(int64_t)0 /* XFRM_INF, including xfrm.h is probably over doing it */
-#define IPSEC_SA_LIFEBYTES_SOFT_LIMIT_PERCENTAGE 80
+#define IPSEC_SA_LIFE_SOFT_LIMIT_PERCENTAGE 80
 
 #define PLUTO_SHUNT_LIFE_DURATION_DEFAULT (15 * secs_per_minute)
 #define PLUTO_HALFOPEN_SA_LIFE (secs_per_minute )
@@ -1111,6 +1111,18 @@ enum pluto_exit_code {
 	PLUTO_EXIT_GIT_BISECT_CAN_NOT_TEST = 125,
 	PLUTO_EXIT_SHELL_COMMAND_NOT_FOUND = 126,
 	PLUTO_EXIT_SHELL_COMMAND_NOT_EXECUTABLE = 127,
+};
+
+/*
+ * EXPIRE type events from the kernel.
+ * Based on these, different actions can be taken, eg skipping delete SPI
+ */
+enum sa_expire_kind {
+	SA_NOT_EXPIRED = 0,
+	SA_STATE_SOFT = 1,
+	SA_STATE_HARD = 2,
+	SA_POL_SOFT = 3,
+	SA_POL_HARD = 4,
 };
 
 #define SWAN_MAX_DOMAIN_LEN 256 /* includes nul termination */

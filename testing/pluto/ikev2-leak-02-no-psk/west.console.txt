@@ -4,7 +4,7 @@ west #
 west #
  ipsec pluto --config /etc/ipsec.conf --leak-detective
 west #
- /testing/pluto/bin/wait-until-pluto-started
+ ../../guestbin/wait-until-pluto-started
 west #
  ipsec whack --impair suppress-retransmits
 west #
@@ -25,10 +25,6 @@ west #
 done
 west #
  ipsec whack --shutdown
-west #
- grep -e leak /tmp/pluto.log | grep -v -e '|'
-leak-detective enabled
-leak detective found no leaks
 west #
  if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
 west #

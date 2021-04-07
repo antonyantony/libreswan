@@ -2491,7 +2491,11 @@ static bool teardown_half_ipsec_sa(struct state *st, bool inbound)
 			dst = &effective_remote_address;
 		}
 
-		result &= del_spi(spi, proto, src, dst, st->st_logger);
+		if (st->st_kernel_sa_expired != SA_STATE_HARD) {
+			result &= del_spi(spi, proto, src, dst, st->st_logger);
+		} else {
+			dbg("Skipped del_spi() as kernel has already deleted due to hard limit expire event");
+		}
 	}
 
 	return result;
@@ -3302,6 +3306,11 @@ bool get_sa_info(struct state *st, bool inbound, deltatime_t *ago /* OUTPUT */)
 {
 	struct connection *const c = st->st_connection;
 
+	if (st->st_kernel_sa_expired == SA_STATE_HARD) {
+		dbg("get_sa_info() skipped as kernel has already deleted the SA");
+		return true;
+	}
+
 	if (kernel_ops->get_sa == NULL || (!st->st_esp.present && !st->st_ah.present)) {
 		return false;
 	}
@@ -3552,17 +3561,44 @@ void shutdown_kernel(struct logger *logger)
 	expire_bare_shunts(logger, true/*all*/);
 }
 
-void initiate_replace(ipsec_spi_t spi, uint8_t protoid, ip_address *dst)
+void handle_expiring_sa(ipsec_spi_t spi, uint8_t protoid, ip_address *dst, bool soft)
 {
-	struct child_sa *child = find_v2_child_sa_by_spi(spi, protoid, dst);
+	struct child_sa *child = find_v2_child_sa_by_spi(spi, protoid, dst); /* why is spi still in network order? */
 	if (child != NULL) {
-		// TBD fix the case when the rekey is NO
-		if (child->sa.st_kernel_sa_expired) {
-			dbg("#%lu one of the SA has already expired ignore the EXPIRE", child->sa.st_serialno);
-		} else {
-			child->sa.st_kernel_sa_expired = true;
-			// Fix ME EVENT_SA_REKEY is the not the right one it set next timer 8 hours
-			event_force(EVENT_SA_REKEY, &child->sa);
+		struct connection *c = child->sa.st_connection;
+		bool rekey = !LIN(POLICY_DONT_REKEY, c->policy);
+		bool latest = c->newest_ipsec_sa == child->sa.st_serialno;
+
+		/* always mark it, so hard can overwrite soft status */
+		enum sa_expire_kind prev_state = child->sa.st_kernel_sa_expired;
+		child->sa.st_kernel_sa_expired = soft ? SA_STATE_SOFT : SA_STATE_HARD;
+
+		if ((!soft && impair.ignore_hard_expire) || (soft && impair.ignore_soft_expire)) {
+			llog(RC_LOG, c->logger, "IMPAIR is supressing a %s EXPIRE event", soft ? "soft" : "hard");
+			return;
 		}
+
+		llog(RC_LOG, c->logger, "received %s [bytes? packets?] EXPIRE event from kernel for connection %s with SPI 0x%x, %s",
+			soft ? "soft" : "hard",
+			c->name, ntohl(spi),
+			!latest ? "but since this Child SA has already been replaced it will just be deleted" :
+				rekey ?  "initiating a Child SA rekey" : "but connection has rekey=no so deleting connection");
+
+		if (latest && rekey) {
+			if (prev_state != SA_NOT_EXPIRED) {
+				event_delete(EVENT_v2_LIVENESS, &child->sa);
+				event_delete(EVENT_DPD, &child->sa);
+				if (soft) {
+					event_force(EVENT_SA_REKEY, &child->sa);
+				} else {
+					event_force(EVENT_SA_EXPIRE, &child->sa);
+				}
+			} else {
+				dbg("Connection %s with serial #%lu was already expiring, no further actions required",
+					c->name, child->sa.st_serialno);
+			}
+		}
+	} else {
+		log_global(RC_LOG, null_fd, "Received kernel EXPIRE event for IPsec SPI 0x%x, but there is no connection anymore with this SPI.", ntohl(spi));
 	}
 }
