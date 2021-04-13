@@ -3651,7 +3651,7 @@ struct connection *refine_host_connection_on_responder(const struct state *st,
 			indent = 3;
 
 			int wildcards;
-			bool matching_peer_id = (c->connalias != NULL && d->connalias != NULL && 
+			bool matching_peer_id = (c->connalias != NULL && d->connalias != NULL &&
 						streq(c->connalias, d->connalias)) ||
 						match_id(peer_id,
 							&d->spd.that.id,
