@@ -936,4 +936,8 @@ struct state_filter {
 bool next_state_new2old(struct state_filter *query);
 bool next_state_old2new(struct state_filter *query);
 
+void check_state(struct state *st, where_t where);
+extern char *readable_humber(uint64_t num, char *buf, const char *buf_roof,
+                             const char *prefix, char *suffix2);
+
 #endif /* _STATE_H */
