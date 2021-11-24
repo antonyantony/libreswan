@@ -3548,6 +3548,18 @@ bool get_sa_info(struct state *st, bool inbound, deltatime_t *ago /* OUTPUT */)
 		return false;
 	}
 
+	if (inbound) {
+		if (p2->peer_kernel_sa_expired & SA_HARD_EXPIRED) {
+			dbg("kernel expired peer SA SPI 0x%x skip get_sa_info()", ntohl(p2->attrs.spi));
+			return true; /* all is well the use our_bytes */
+		}
+	} else {
+		if (p2->our_kernel_sa_expired & SA_HARD_EXPIRED) {
+			dbg("kernel expired our SA SPI 0x%x get_sa_info()", ntohl(p2->our_spi));
+			return true; /* all is well the use peer_bytes */
+		}
+	}
+
 	/*
 	 * If we were redirected (using the REDIRECT mechanism),
 	 * change spd.that.host_addr temporarily, we reset it back
