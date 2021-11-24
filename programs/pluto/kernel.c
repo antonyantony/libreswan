@@ -2652,6 +2652,7 @@ static unsigned append_teardown(struct dead_spi *dead, bool inbound,
 {
 	bool present = proto->present;
 	if (!present && inbound && proto->our_spi != 0 && proto->attrs.spi == 0) {
+		/* XXX is this relic of KLIPS or similar to xfrm hard expire */
 		dbg("kernel: forcing inbound delete of %s as .our_spi: "PRI_IPSEC_SPI"; attrs.spi: "PRI_IPSEC_SPI,
 		    proto->protocol->name,
 		    pri_ipsec_spi(proto->our_spi),
@@ -2661,10 +2662,20 @@ static unsigned append_teardown(struct dead_spi *dead, bool inbound,
 	if (present) {
 		dead->protocol = proto->protocol;
 		if (inbound) {
+			if (proto->peer_kernel_sa_expired & SA_HARD_EXPIRED) {
+				dbg("kernel expired SPI 0x%x skip deleting",
+				    ntohl(proto->our_spi));
+				return 0;
+			}
 			dead->spi = proto->our_spi; /* incoming */
 			dead->src = effective_remote_address;
 			dead->dst = host_addr;
 		} else {
+			if (proto->our_kernel_sa_expired & SA_HARD_EXPIRED) {
+				dbg("kernel hard expired SPI 0x%x skip deleting",
+				    ntohl(proto->attrs.spi));
+				return 0;
+			}
 			dead->spi = proto->attrs.spi; /* outgoing */
 			dead->src = host_addr;
 			dead->dst = effective_remote_address;
@@ -3556,12 +3567,12 @@ bool get_sa_info(struct state *st, bool inbound, deltatime_t *ago /* OUTPUT */)
 	if (inbound) {
 		if (p2->peer_kernel_sa_expired & SA_HARD_EXPIRED) {
 			dbg("kernel expired peer SA SPI 0x%x skip get_sa_info()", ntohl(p2->attrs.spi));
-			return true; /* all is well the use our_bytes */
+			return true; /* all is well use the last known info */
 		}
 	} else {
 		if (p2->our_kernel_sa_expired & SA_HARD_EXPIRED) {
 			dbg("kernel expired our SA SPI 0x%x get_sa_info()", ntohl(p2->our_spi));
-			return true; /* all is well the use peer_bytes */
+			return true; /* all is well use last known info */
 		}
 	}
 
