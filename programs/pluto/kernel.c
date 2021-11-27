@@ -3533,6 +3533,31 @@ bool was_eroute_idle(struct state *st, deltatime_t since_when)
 	return false;
 }
 
+static void set_sa_info(struct ipsec_proto_info *p2, uint64_t bytes,
+			 uint64_t add_time, bool inbound, deltatime_t *ago)
+{
+	if (add_time == 0 && add_time != 0)
+		p2->add_time = add_time;
+
+	pexpect(p2->add_time == add_time);
+
+	if (inbound) {
+		if (bytes > p2->our_bytes) {
+			p2->our_bytes = bytes;
+			p2->our_lastused = mononow();
+		}
+		if (ago != NULL)
+			*ago = monotimediff(mononow(), p2->our_lastused);
+	} else {
+		if (bytes > p2->peer_bytes) {
+			p2->peer_bytes = bytes;
+			p2->peer_lastused = mononow();
+		}
+		if (ago != NULL)
+			*ago = monotimediff(mononow(), p2->peer_lastused);
+	}
+}
+
 /*
  * get information about a given sa - needs merging with was_eroute_idle
  *
@@ -3613,7 +3638,6 @@ bool get_sa_info(struct state *st, bool inbound, deltatime_t *ago /* OUTPUT */)
 
 	uint64_t bytes;
 	uint64_t add_time;
-
 	if (!kernel_ops->get_sa(&sa, &bytes, &add_time, st->st_logger))
 		return false;
 
@@ -3638,6 +3662,7 @@ bool get_sa_info(struct state *st, bool inbound, deltatime_t *ago /* OUTPUT */)
 		if (ago != NULL)
 			*ago = monotimediff(mononow(), p2->peer_lastused);
 	}
+	set_sa_info(p2, bytes, add_time, inbound, ago);
 
 	if (redirected) {
 		c->spd.that.host_addr = tmp_host_addr;
