@@ -1909,7 +1909,7 @@ static void setup_esp_nic_offload(struct kernel_sa *sa, struct connection *c,
 	sa->nic_offload_dev = c->interface->ip_dev->id_rname;
 }
 
-static uint64_t compute_sa_soft_limit(enum sa_role sa_role, uint64_t max,
+static uint64_t compute_sa_soft_limit(struct state *st, uint64_t max,
 			       unsigned long fuzz, bool rekey)
 {
 	uint64_t max_old = max;
@@ -1920,23 +1920,23 @@ static uint64_t compute_sa_soft_limit(enum sa_role sa_role, uint64_t max,
 	if (!rekey)
 		return ret;
 
-	switch (sa_role) {
-		case SA_INITIATOR:
+	bool initiator = (st->st_ike_version == IKEv2) ? st->st_sa_role == SA_INITIATOR :
+#ifdef USE_IKEv1
+	(st->st_ike_version == IKEv1) ? IS_V1_PHASE1_INIT(st->st_state) : pexpect(false);
+#else
+	pexpect(false);
+#endif
+	if (initiator) {
 			max  -= marg;
 			marg /= 4;
 			marg = marg * fuzz / 100.E0 * (rand() / (RAND_MAX + 1.E0));
 			ret = max + marg;
 			dbg("AA max before %" PRIu64 " marg %ld max new %" PRIu64 " fuzz %lu %ld", max_old, marg, ret, fuzz, marg_before);
-			break;
-
-		case SA_RESPONDER:
+	} else {
 			marg /= 2;
 			max -= marg;
 			marg = marg * fuzz / 100.E0 * (rand() / (RAND_MAX + 1.E0));
 			ret = max + marg;
-			break;
-		default:
-			bad_case(sa_role);
 	}
 
 	return ret;
@@ -1985,12 +1985,12 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		.transport_proto = c->spd.this.client.ipproto,
 		.sa_lifetime = c->sa_ipsec_life_seconds,
 		.sa_max_bytes = c->sa_max_bytes,
-		.sa_max_soft_bytes = compute_sa_soft_limit(st->st_sa_role,
+		.sa_max_soft_bytes = compute_sa_soft_limit(st,
 						c->sa_max_bytes,
 						c->sa_rekey_fuzz,
 						!LIN(POLICY_DONT_REKEY, c->policy)),
 		.sa_max_packets = c->sa_max_packets,
-		.sa_max_soft_packets = compute_sa_soft_limit(st->st_sa_role,
+		.sa_max_soft_packets = compute_sa_soft_limit(st,
 						c->sa_max_packets,
 						c->sa_rekey_fuzz,
 						!LIN(POLICY_DONT_REKEY, c->policy)),
