@@ -1,0 +1,21 @@
+  <varlistentry>
+  <term><emphasis remap='B'>ipsec-max-time</emphasis></term>
+  <listitem>
+<para>how long a particular instance of a connection
+(a set of encryption/authentication keys for user packets) should last,
+from successful negotiation to expiry;
+acceptable values are an integer optionally followed by
+<emphasis remap='B'>s</emphasis> (a time in seconds)
+or a decimal number followed by <emphasis remap='B'>m</emphasis>,
+<emphasis remap='B'>h</emphasis>, or <emphasis remap='B'>d</emphasis>
+(a time in minutes, hours, or days respectively) (default
+<emphasis remap='B'>8h</emphasis>, maximum
+<emphasis remap='B'>24h</emphasis>).
+Normally, the connection is renegotiated (via the IKE SA) before it expires.
+This option is not negotiated and both ends use their own value for this option.
+</para>
+<para>
+The keywords "keylife", "lifetime" and "salifetime" are obsoleted aliases for "ipsec-max-time".
+</para>
+  </listitem>
+  </varlistentry>
