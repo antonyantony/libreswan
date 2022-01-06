@@ -3739,7 +3739,8 @@ void show_one_connection(struct show *s,
 		c->sa_replay_window,
 		deltasecs(c->sa_rekey_margin),
 		c->sa_rekey_fuzz,
-		bytesbuf, packetsbuf,
+		c->sa_max_bytes == (uint64_t)IPSEC_SA_MAX_DEFAULT ? "<unset>" : bytesbuf,
+		c->sa_max_packets == (uint64_t)IPSEC_SA_MAX_DEFAULT  ? "<unset>" : packetsbuf,
 		c->sa_keying_tries);
 
 	show_comment(s,
