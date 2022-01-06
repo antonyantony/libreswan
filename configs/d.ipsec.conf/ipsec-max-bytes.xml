@@ -1,0 +1,26 @@
+  <varlistentry>
+  <term><emphasis remap='B'>ipsec-max-bytes</emphasis></term>
+  <listitem>
+  <para>how many bytes can be sent/received on the inbound or outbound of a particular instance of a connection
+(a set of encryption/authentication keys for user packets) ,
+from successful negotiation to expiry;
+acceptable values are an integer optionally followed by
+  <emphasis remap='B'>K</emphasis>,
+  <emphasis remap='B'>M</emphasis>,
+  <emphasis remap='B'>G</emphasis>,
+  <emphasis remap='B'>T</emphasis>,
+  <emphasis remap='B'>P</emphasis> or
+  <emphasis remap='B'>E</emphasis> to signify kilobytes, megabytes, gigabytes,
+  terabytes, petabytes or exabytes.
+
+Normally, the connection is renegotiated (via the IKE SA) before this value is reached.
+This option is not negotiated and both ends use their own value for this option.
+</para>
+<para>
+	The value reflects the number of bytes allowed to be encrypted with the same key. An IPsec
+	SA uses a different key for inbound and outbound. Thus a value of 1G means that no rekey
+	is triggered yet if the inbound has done 800M and the outboud has done 800M - while the
+	interface has seen 1.6G of traffic.
+</para>
+  </listitem>
+  </varlistentry>
