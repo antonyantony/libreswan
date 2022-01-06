@@ -1053,8 +1053,8 @@ int main(int argc, char **argv)
 	msg.modecfg_banner = NULL;
 
 	msg.nic_offload = yna_auto;
-	msg.sa_ike_life_seconds = deltatime(IKE_SA_LIFETIME_DEFAULT);
-	msg.sa_ipsec_life_seconds = deltatime(IPSEC_SA_LIFETIME_DEFAULT);
+	msg.sa_ike_max_seconds = deltatime(IKE_SA_LIFETIME_DEFAULT);
+	msg.sa_ipsec_max_seconds = deltatime(IPSEC_SA_LIFETIME_DEFAULT);
 	msg.sa_ipsec_max_bytes = IPSEC_SA_MAX_DEFAULT;
 	msg.sa_ipsec_max_packets = IPSEC_SA_MAX_DEFAULT;
 	msg.sa_rekey_margin = deltatime(SA_REPLACEMENT_MARGIN_DEFAULT);
@@ -1889,12 +1889,14 @@ int main(int argc, char **argv)
 			msg.retransmit_interval = deltatime_ms(opt_whole);
 			continue;
 
+		/* this should really accept a time value, eg 1h, 1d */
 		case CD_IKELIFETIME:	/* --ikelifetime <seconds> */
-			msg.sa_ike_life_seconds = deltatime(opt_whole);
+			msg.sa_ike_max_seconds = deltatime(opt_whole);
 			continue;
 
+		/* this should really accept a time value, eg 1h, 1d */
 		case CD_IPSECLIFETIME:	/* --ipseclifetime <seconds> */
-			msg.sa_ipsec_life_seconds = deltatime(opt_whole);
+			msg.sa_ipsec_max_seconds = deltatime(opt_whole);
 			continue;
 
 		case CD_RKMARGIN:	/* --rekeymargin <seconds> */
@@ -2669,11 +2671,11 @@ int main(int argc, char **argv)
 	    deltasecs(msg.sa_rekey_margin) > (time_t)(INT_MAX / (100 + msg.sa_rekey_fuzz)))
 		diag("rekeymargin or rekeyfuzz values are so large that they cause overflow");
 
-	check_life_time(msg.sa_ike_life_seconds, IKE_SA_LIFETIME_MAXIMUM,
-			"ikelifetime", &msg);
+	check_life_time(msg.sa_ike_max_seconds, IKE_SA_LIFETIME_MAXIMUM,
+			"ike-max-time", &msg);
 
-	check_life_time(msg.sa_ipsec_life_seconds, IPSEC_SA_LIFETIME_MAXIMUM,
-			"ipseclifetime", &msg);
+	check_life_time(msg.sa_ipsec_max_seconds, IPSEC_SA_LIFETIME_MAXIMUM,
+			"ipsec-max-time", &msg);
 
 	if (deltasecs(msg.dpd_delay) != 0 &&
 	    deltasecs(msg.dpd_timeout) == 0)

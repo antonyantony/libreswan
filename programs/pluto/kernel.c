@@ -2142,7 +2142,7 @@ static bool setup_half_ipsec_sa(struct state *st, bool inbound)
 		.inbound = inbound,
 		.tunnel = (proto_encap.mode == ENCAP_MODE_TUNNEL),
 		.transport_proto = c->spd.this.client.ipproto,
-		.sa_lifetime = c->sa_ipsec_life_seconds,
+		.sa_lifetime = c->sa_ipsec_max_seconds,
 		.sa_ipsec_max_bytes = c->sa_ipsec_max_bytes,
 		.sa_ipsec_max_soft_bytes = compute_sa_soft_limit(st,
 						c->sa_ipsec_max_bytes,

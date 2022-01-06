@@ -495,10 +495,10 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 		msg.dnshostname = conn->right.strings[KSCF_IP];
 
 	msg.nic_offload = conn->options[KNCF_NIC_OFFLOAD];
-	msg.sa_ike_life_seconds = deltatime(conn->options[KNCF_IKELIFETIME]);
-	msg.sa_ipsec_life_seconds = deltatime(conn->options[KNCF_SALIFETIME]);
-	msg.sa_ipsec_max_bytes = conn->options[KNCF_SAMAXBYTES];
-	msg.sa_ipsec_max_packets = conn->options[KNCF_SAMAXPACKETS];
+	msg.sa_ike_max_seconds = deltatime(conn->options[KNCF_IKE_MAXTIME]);
+	msg.sa_ipsec_max_seconds = deltatime(conn->options[KNCF_IPSEC_MAXTIME]);
+	msg.sa_ipsec_max_bytes = conn->options[KNCF_IPSEC_MAXBYTES];
+	msg.sa_ipsec_max_packets = conn->options[KNCF_IPSEC_MAXPACKETS];
 	msg.sa_rekey_margin = deltatime(conn->options[KNCF_REKEYMARGIN]);
 	msg.sa_rekey_fuzz = conn->options[KNCF_REKEYFUZZ];
 	msg.sa_keying_tries = conn->options[KNCF_KEYINGTRIES];

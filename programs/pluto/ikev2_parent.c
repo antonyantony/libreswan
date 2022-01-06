@@ -481,8 +481,8 @@ void schedule_v2_replace_event(struct state *st)
 	struct connection *c = st->st_connection;
 
 	/* unwrapped deltatime_t in seconds */
-	intmax_t delay = deltasecs(IS_IKE_SA(st) ? c->sa_ike_life_seconds
-				   : c->sa_ipsec_life_seconds);
+	intmax_t delay = deltasecs(IS_IKE_SA(st) ? c->sa_ike_max_seconds
+				   : c->sa_ipsec_max_seconds);
 
 	enum event_type kind;
 	const char *story;

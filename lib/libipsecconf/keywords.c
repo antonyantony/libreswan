@@ -525,11 +525,12 @@ const struct keyword_def ipsec_conf_keywords[] = {
   { "ms-dh-downgrade",  kv_conn,  kt_bool,  KNCF_MSDH_DOWNGRADE, NULL, NULL, },
   { "require-id-on-certificate",  kv_conn,  kt_bool,  KNCF_SAN_ON_CERT, NULL, NULL, },
   { "dns-match-id,",  kv_conn,  kt_bool,  KNCF_DNS_MATCH_ID, NULL, NULL, },
-  { "keylife",  kv_conn | kv_alias,  kt_time,  KNCF_SALIFETIME, NULL, NULL, },
-  { "lifetime",  kv_conn | kv_alias,  kt_time,  KNCF_SALIFETIME, NULL, NULL, },
-  { "salifetime",  kv_conn,  kt_time,  KNCF_SALIFETIME, NULL, NULL, },
-  { "samaxbytes",  kv_conn,  kt_byte,  KNCF_SAMAXBYTES, NULL, NULL, },
-  { "samaxpackets",  kv_conn,  kt_binary,  KNCF_SAMAXPACKETS, NULL, NULL, },
+  { "keylife",  kv_conn | kv_alias,  kt_time,  KNCF_IPSEC_MAXTIME, NULL, NULL, }, /* backwards compat */
+  { "lifetime",  kv_conn | kv_alias,  kt_time,  KNCF_IPSEC_MAXTIME, NULL, NULL, }, /* backwards compat */
+  { "salifetime",  kv_conn,  kt_time,  KNCF_IPSEC_MAXTIME, NULL, NULL, }, /* backwards compat */
+  { "ipsec-max-time",  kv_conn,  kt_time,  KNCF_IPSEC_MAXTIME, NULL, NULL, },
+  { "ipsec-max-bytes",  kv_conn,  kt_byte,  KNCF_IPSEC_MAXBYTES, NULL, NULL, },
+  { "ipsec-max-packets",  kv_conn,  kt_binary,  KNCF_IPSEC_MAXPACKETS, NULL, NULL, },
 
   { "retransmit-timeout",  kv_conn,  kt_time,  KNCF_RETRANSMIT_TIMEOUT, NULL, NULL, },
   { "retransmit-interval",  kv_conn,  kt_number,  KNCF_RETRANSMIT_INTERVAL_MS, NULL, NULL, },
@@ -579,7 +580,8 @@ const struct keyword_def ipsec_conf_keywords[] = {
   { "rekeyfuzz",  kv_conn,  kt_percent,  KNCF_REKEYFUZZ, NULL, NULL, },
   { "keyingtries",  kv_conn,  kt_number,  KNCF_KEYINGTRIES, NULL, NULL, },
   { "replay-window",  kv_conn,  kt_number,  KNCF_REPLAY_WINDOW, NULL, NULL, },
-  { "ikelifetime",  kv_conn,  kt_time,  KNCF_IKELIFETIME, NULL, NULL, },
+  { "ikelifetime",  kv_conn,  kt_time,  KNCF_IKE_MAXTIME, NULL, NULL, }, /* backwards compat */
+  { "ike-max-time",  kv_conn,  kt_time,  KNCF_IKE_MAXTIME, NULL, NULL, },
   { "failureshunt",  kv_conn,  kt_enum,  KNCF_FAILURESHUNT,  &kw_failureshunt_list, NULL, },
   { "negotiationshunt",  kv_conn,  kt_enum,  KNCF_NEGOTIATIONSHUNT,  &kw_negotiationshunt_list, NULL, },
 
