@@ -3731,17 +3731,22 @@ void show_one_connection(struct show *s,
 	readable_humber(c->sa_ipsec_max_packets, packetsbuf, packetsbuf + sizeof(packetsbuf), "", "");
 
 	show_comment(s,
-		"\"%s\"%s:   ike_life: %jds; ipsec_life: %jds; replay_window: %u; rekey_margin: %jds; rekey_fuzz: %lu%%; ipsec_max_bytes: %s; ipsec_max_packets: %s; keyingtries: %lu;",
+		"\"%s\"%s:   ike_life: %jds; replay_window: %u; rekey_margin: %jds; rekey_fuzz: %lu%%; keyingtries: %lu;",
 		c->name,
 		instance,
 		deltasecs(c->sa_ike_max_seconds),
-		deltasecs(c->sa_ipsec_max_seconds),
 		c->sa_replay_window,
 		deltasecs(c->sa_rekey_margin),
 		c->sa_rekey_fuzz,
-		c->sa_ipsec_max_bytes == (uint64_t)IPSEC_SA_MAX_DEFAULT ? "<unset>" : bytesbuf,
-		c->sa_ipsec_max_packets == (uint64_t)IPSEC_SA_MAX_DEFAULT  ? "<unset>" : packetsbuf,
 		c->sa_keying_tries);
+
+	show_comment(s,
+		"\"%s\"%s:   ipsec_life: %jds; ipsec_max_bytes: %s; ipsec_max_packets: %s;",
+		c->name,
+		instance,
+		deltasecs(c->sa_ipsec_max_seconds),
+		c->sa_ipsec_max_bytes == (uint64_t)IPSEC_SA_MAX_DEFAULT ? "<unset>" : bytesbuf,
+		c->sa_ipsec_max_packets == (uint64_t)IPSEC_SA_MAX_DEFAULT  ? "<unset>" : packetsbuf);
 
 	show_comment(s,
 		  "\"%s\"%s:   retransmit-interval: %jdms; retransmit-timeout: %jds; iketcp:%s; iketcp-port:%d;",
