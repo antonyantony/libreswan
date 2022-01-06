@@ -1978,8 +1978,8 @@ static bool extract_connection(const struct whack_message *wm,
 		config->nic_offload = wm->nic_offload;
 		c->sa_ike_life_seconds = wm->sa_ike_life_seconds;
 		c->sa_ipsec_life_seconds = wm->sa_ipsec_life_seconds;
-		c->sa_max_bytes = wm->sa_max_bytes;
-		c->sa_max_packets = wm->sa_max_packets;
+		c->sa_ipsec_max_bytes = wm->sa_ipsec_max_bytes;
+		c->sa_ipsec_max_packets = wm->sa_ipsec_max_packets;
 		c->sa_rekey_margin = wm->sa_rekey_margin;
 		c->sa_rekey_fuzz = wm->sa_rekey_fuzz;
 		c->sa_keying_tries = wm->sa_keying_tries;
@@ -2424,8 +2424,8 @@ void add_connection(const struct whack_message *wm, struct logger *logger)
 	    c->sa_keying_tries,
 	    c->sa_replay_window,
 	    str_connection_policies(c, &pb),
-	    c->sa_max_bytes,
-	    c->sa_max_packets);
+	    c->sa_ipsec_max_bytes,
+	    c->sa_ipsec_max_packets);
 	char topo[CONN_BUF_LEN];
 	dbg("%s", format_connection(topo, sizeof(topo), c, &c->spd));
 	/* XXX: something better? */
@@ -3727,8 +3727,8 @@ void show_one_connection(struct show *s,
 
 	char bytesbuf[128];
 	char packetsbuf[128];
-	readable_humber(c->sa_max_bytes, bytesbuf, bytesbuf + sizeof(bytesbuf), "", "");
-	readable_humber(c->sa_max_packets, packetsbuf, packetsbuf + sizeof(packetsbuf), "", "");
+	readable_humber(c->sa_ipsec_max_bytes, bytesbuf, bytesbuf + sizeof(bytesbuf), "", "");
+	readable_humber(c->sa_ipsec_max_packets, packetsbuf, packetsbuf + sizeof(packetsbuf), "", "");
 
 	show_comment(s,
 		"\"%s\"%s:   ike_life: %jds; ipsec_life: %jds; replay_window: %u; rekey_margin: %jds; rekey_fuzz: %lu%%; ipsec_max_bytes: %s; ipsec_max_packets: %s; keyingtries: %lu;",
@@ -3739,8 +3739,8 @@ void show_one_connection(struct show *s,
 		c->sa_replay_window,
 		deltasecs(c->sa_rekey_margin),
 		c->sa_rekey_fuzz,
-		c->sa_max_bytes == (uint64_t)IPSEC_SA_MAX_DEFAULT ? "<unset>" : bytesbuf,
-		c->sa_max_packets == (uint64_t)IPSEC_SA_MAX_DEFAULT  ? "<unset>" : packetsbuf,
+		c->sa_ipsec_max_bytes == (uint64_t)IPSEC_SA_MAX_DEFAULT ? "<unset>" : bytesbuf,
+		c->sa_ipsec_max_packets == (uint64_t)IPSEC_SA_MAX_DEFAULT  ? "<unset>" : packetsbuf,
 		c->sa_keying_tries);
 
 	show_comment(s,

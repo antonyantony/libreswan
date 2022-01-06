@@ -2244,7 +2244,7 @@ static void show_established_child_details(struct show *s, struct state *st)
 				jam_readable_humber(buf, st->st_ah.our_bytes, false);
 			}
 			jam(buf, " AHmax=");		/* TBD: "The ! is not printed." */
-			jam_readable_humber(buf, c->sa_max_bytes, true);
+			jam_readable_humber(buf, c->sa_ipsec_max_bytes, true);
 		}
 		if (st->st_esp.present) {
 			if (get_sa_info(st, true, NULL)) {
@@ -2256,7 +2256,7 @@ static void show_established_child_details(struct show *s, struct state *st)
 				jam_readable_humber(buf, st->st_esp.peer_bytes, false);
 			}
 			jam(buf, " ESPmax=");		/* TBD: "The ! is not printed." */
-			jam_readable_humber(buf, c->sa_max_bytes, true);
+			jam_readable_humber(buf, c->sa_ipsec_max_bytes, true);
 		}
 		if (st->st_ipcomp.present) {
 			if (get_sa_info(st, false, NULL)) {
