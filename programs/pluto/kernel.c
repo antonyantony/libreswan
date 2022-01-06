@@ -3911,7 +3911,7 @@ void handle_sa_expire(ipsec_spi_t spi, uint8_t protoid, ip_address *dst,
 	address_buf a;
 
 	if (child == NULL) {
-		llog(LOG_STREAM, &failsafe_logger, "Received kernel EXPIRE event for IPsec SPI 0x%x, but there is no connection with this SPI and dst %s bytes %" PRIu64 "packets %" PRIu64,
+		llog(LOG_STREAM, &global_logger, "Received kernel EXPIRE event for IPsec SPI 0x%x, but there is no connection with this SPI and dst %s bytes %" PRIu64 "packets %" PRIu64,
 		     ntohl(spi), str_address(dst, &a), bytes, packets);
 		return;
 	}
