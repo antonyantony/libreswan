@@ -494,8 +494,8 @@ void schedule_v2_replace_event(struct state *st)
 	 */
 	deltatime_t lifetime;
 	switch (st->st_establishing_sa) {
-	case IKE_SA: lifetime = c->sa_ike_life_seconds; break;
-	case IPSEC_SA: lifetime = c->sa_ipsec_life_seconds; break;
+	case IKE_SA: lifetime = c->sa_ike_max_seconds; break;
+	case IPSEC_SA: lifetime = c->sa_ipsec_max_seconds; break;
 	default: bad_case(st->st_establishing_sa);
 	}
 	intmax_t delay = deltasecs(lifetime);

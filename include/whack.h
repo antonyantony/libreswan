@@ -179,8 +179,8 @@ struct whack_message {
 	enum shunt_policy negotiation_shunt;
 	enum shunt_policy failure_shunt;
 
-	deltatime_t sa_ike_life_seconds;
-	deltatime_t sa_ipsec_life_seconds;
+	deltatime_t sa_ike_max_seconds;
+	deltatime_t sa_ipsec_max_seconds;
 	deltatime_t sa_rekey_margin;
 	uint64_t sa_ipsec_max_bytes;
 	uint64_t sa_ipsec_max_packets;

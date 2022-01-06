@@ -1223,7 +1223,7 @@ bool ikev1_out_sa(pb_stream *outs,
 						      attr_val_descs,
 						      &trans_pbs) ||
 					    !out_attr(OAKLEY_LIFE_DURATION,
-						      deltasecs(c->sa_ike_life_seconds),
+						      deltasecs(c->sa_ike_max_seconds),
 						      attr_desc,
 						      attr_val_descs,
 						      &trans_pbs))
@@ -1255,7 +1255,7 @@ bool ikev1_out_sa(pb_stream *outs,
 						      attr_val_descs,
 						      &trans_pbs) ||
 					    !out_attr(SA_LIFE_DURATION,
-						      deltasecs(c->sa_ipsec_life_seconds),
+						      deltasecs(c->sa_ipsec_max_seconds),
 						      attr_desc,
 						      attr_val_descs,
 						      &trans_pbs))
@@ -2310,7 +2310,7 @@ bool init_aggr_st_oakley(struct ike_sa *ike)
 
 	struct trans_attrs ta = {
 		/* When this SA expires (seconds) */
-		.life_seconds = c->sa_ike_life_seconds,
+		.life_seconds = c->sa_ike_max_seconds,
 		.life_kilobytes = 1000000,
 		.ta_encrypt = ikev1_get_ike_encrypt_desc(enc->val)
 	};
@@ -2563,8 +2563,8 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 					lifemax = FIPS_IPSEC_SA_LIFETIME_MAXIMUM;
 				attrs->life_seconds = val > lifemax ?
 					deltatime(lifemax) :
-				    (time_t)val > deltasecs(st->st_connection->sa_ipsec_life_seconds) ?
-					st->st_connection->sa_ipsec_life_seconds :
+				    (time_t)val > deltasecs(st->st_connection->sa_ipsec_max_seconds) ?
+					st->st_connection->sa_ipsec_max_seconds :
 				    deltatime(val);
 				break;
 			}
