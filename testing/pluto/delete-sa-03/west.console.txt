@@ -21,7 +21,8 @@ west #
 000 "west-east":   our auth:rsasig, their auth:rsasig, our autheap:none, their autheap:none;
 000 "west-east":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, cat:unset;
 000 "west-east":   sec_label:unset;
-000 "west-east":   ike_life: 28800s; ipsec_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east":   ike_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east":   ipsec_life: 28800s; ipsec_max_bytes: <unset>; ipsec_max_packets: <unset>;
 000 "west-east":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "west-east":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "west-east":   policy: IKEv1+RSASIG+ENCRYPT+TUNNEL+PFS+IKE_FRAG_ALLOW+ESN_NO+ESN_YES;
@@ -36,7 +37,8 @@ west #
 000 "west-east-b":   our auth:rsasig, their auth:rsasig, our autheap:none, their autheap:none;
 000 "west-east-b":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, cat:unset;
 000 "west-east-b":   sec_label:unset;
-000 "west-east-b":   ike_life: 28800s; ipsec_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-b":   ike_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-b":   ipsec_life: 28800s; ipsec_max_bytes: <unset>; ipsec_max_packets: <unset>;
 000 "west-east-b":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "west-east-b":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "west-east-b":   policy: IKEv1+RSASIG+ENCRYPT+TUNNEL+PFS+IKE_FRAG_ALLOW+ESN_NO+ESN_YES;
@@ -51,7 +53,8 @@ west #
 000 "west-east-c":   our auth:rsasig, their auth:rsasig, our autheap:none, their autheap:none;
 000 "west-east-c":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, cat:unset;
 000 "west-east-c":   sec_label:unset;
-000 "west-east-c":   ike_life: 28800s; ipsec_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-c":   ike_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-c":   ipsec_life: 28800s; ipsec_max_bytes: <unset>; ipsec_max_packets: <unset>;
 000 "west-east-c":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "west-east-c":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "west-east-c":   policy: IKEv1+RSASIG+ENCRYPT+TUNNEL+PFS+IKE_FRAG_ALLOW+ESN_NO+ESN_YES;
@@ -95,7 +98,8 @@ west #
 000 "west-east":   our auth:rsasig, their auth:rsasig, our autheap:none, their autheap:none;
 000 "west-east":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, cat:unset;
 000 "west-east":   sec_label:unset;
-000 "west-east":   ike_life: 28800s; ipsec_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east":   ike_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east":   ipsec_life: 28800s; ipsec_max_bytes: <unset>; ipsec_max_packets: <unset>;
 000 "west-east":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "west-east":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "west-east":   policy: IKEv1+RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKE_FRAG_ALLOW+ESN_NO+ESN_YES;
@@ -112,7 +116,8 @@ west #
 000 "west-east-b":   our auth:rsasig, their auth:rsasig, our autheap:none, their autheap:none;
 000 "west-east-b":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, cat:unset;
 000 "west-east-b":   sec_label:unset;
-000 "west-east-b":   ike_life: 28800s; ipsec_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-b":   ike_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-b":   ipsec_life: 28800s; ipsec_max_bytes: <unset>; ipsec_max_packets: <unset>;
 000 "west-east-b":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "west-east-b":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "west-east-b":   policy: IKEv1+RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKE_FRAG_ALLOW+ESN_NO+ESN_YES;
@@ -128,7 +133,8 @@ west #
 000 "west-east-c":   our auth:rsasig, their auth:rsasig, our autheap:none, their autheap:none;
 000 "west-east-c":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, cat:unset;
 000 "west-east-c":   sec_label:unset;
-000 "west-east-c":   ike_life: 28800s; ipsec_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-c":   ike_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-c":   ipsec_life: 28800s; ipsec_max_bytes: <unset>; ipsec_max_packets: <unset>;
 000 "west-east-c":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "west-east-c":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "west-east-c":   policy: IKEv1+RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKE_FRAG_ALLOW+ESN_NO+ESN_YES;
@@ -140,11 +146,11 @@ west #
 000 "west-east-c":   ESP algorithm newest: AES_CBC_128-HMAC_SHA1_96; pfsgroup=<Phase1>
 000 #1: "west-east":500 STATE_MAIN_I4 (IKE SA established); REPLACE in XXs; newest; lastdpd=-1s(seq in:0 out:0); idle;
 000 #2: "west-east":500 STATE_QUICK_I2 (IPsec SA established); REPLACE in XXs; newest; eroute owner; ISAKMP SA #1; idle;
-000 #2: "west-east" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 Traffic: ESPin=0B ESPout=0B ESPmax=4194303B 
+000 #2: "west-east" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 Traffic: ESPin=0B ESPout=0B ESPmax=18014398509481983B 
 000 #3: "west-east-b":500 STATE_QUICK_I2 (IPsec SA established); REPLACE in XXs; newest; eroute owner; ISAKMP SA #1; idle;
-000 #3: "west-east-b" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 Traffic: ESPin=0B ESPout=0B ESPmax=4194303B 
+000 #3: "west-east-b" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 Traffic: ESPin=0B ESPout=0B ESPmax=18014398509481983B 
 000 #4: "west-east-c":500 STATE_QUICK_I2 (IPsec SA established); REPLACE in XXs; newest; eroute owner; ISAKMP SA #1; idle;
-000 #4: "west-east-c" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 Traffic: ESPin=0B ESPout=0B ESPmax=4194303B 
+000 #4: "west-east-c" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 Traffic: ESPin=0B ESPout=0B ESPmax=18014398509481983B 
 west #
  # This down should not delete #1 because that IKE SA is also used by b and c
 west #
@@ -161,7 +167,8 @@ west #
 000 "west-east":   our auth:rsasig, their auth:rsasig, our autheap:none, their autheap:none;
 000 "west-east":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, cat:unset;
 000 "west-east":   sec_label:unset;
-000 "west-east":   ike_life: 28800s; ipsec_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east":   ike_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east":   ipsec_life: 28800s; ipsec_max_bytes: <unset>; ipsec_max_packets: <unset>;
 000 "west-east":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "west-east":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "west-east":   policy: IKEv1+RSASIG+ENCRYPT+TUNNEL+PFS+IKE_FRAG_ALLOW+ESN_NO+ESN_YES;
@@ -177,7 +184,8 @@ west #
 000 "west-east-b":   our auth:rsasig, their auth:rsasig, our autheap:none, their autheap:none;
 000 "west-east-b":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, cat:unset;
 000 "west-east-b":   sec_label:unset;
-000 "west-east-b":   ike_life: 28800s; ipsec_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-b":   ike_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-b":   ipsec_life: 28800s; ipsec_max_bytes: <unset>; ipsec_max_packets: <unset>;
 000 "west-east-b":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "west-east-b":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "west-east-b":   policy: IKEv1+RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKE_FRAG_ALLOW+ESN_NO+ESN_YES;
@@ -193,7 +201,8 @@ west #
 000 "west-east-c":   our auth:rsasig, their auth:rsasig, our autheap:none, their autheap:none;
 000 "west-east-c":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, cat:unset;
 000 "west-east-c":   sec_label:unset;
-000 "west-east-c":   ike_life: 28800s; ipsec_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-c":   ike_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-c":   ipsec_life: 28800s; ipsec_max_bytes: <unset>; ipsec_max_packets: <unset>;
 000 "west-east-c":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "west-east-c":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "west-east-c":   policy: IKEv1+RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKE_FRAG_ALLOW+ESN_NO+ESN_YES;
@@ -205,9 +214,9 @@ west #
 000 "west-east-c":   ESP algorithm newest: AES_CBC_128-HMAC_SHA1_96; pfsgroup=<Phase1>
 000 #1: "west-east":500 STATE_MAIN_I4 (IKE SA established); REPLACE in XXs; newest; lastdpd=-1s(seq in:0 out:0); idle;
 000 #3: "west-east-b":500 STATE_QUICK_I2 (IPsec SA established); REPLACE in XXs; newest; eroute owner; ISAKMP SA #1; idle;
-000 #3: "west-east-b" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 Traffic: ESPin=0B ESPout=0B ESPmax=4194303B 
+000 #3: "west-east-b" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 Traffic: ESPin=0B ESPout=0B ESPmax=18014398509481983B 
 000 #4: "west-east-c":500 STATE_QUICK_I2 (IPsec SA established); REPLACE in XXs; newest; eroute owner; ISAKMP SA #1; idle;
-000 #4: "west-east-c" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 Traffic: ESPin=0B ESPout=0B ESPmax=4194303B 
+000 #4: "west-east-c" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 Traffic: ESPin=0B ESPout=0B ESPmax=18014398509481983B 
 west #
  # both east and west should still have one IKE SA #1
 west #
@@ -218,7 +227,8 @@ west #
 000 "west-east":   our auth:rsasig, their auth:rsasig, our autheap:none, their autheap:none;
 000 "west-east":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, cat:unset;
 000 "west-east":   sec_label:unset;
-000 "west-east":   ike_life: 28800s; ipsec_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east":   ike_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east":   ipsec_life: 28800s; ipsec_max_bytes: <unset>; ipsec_max_packets: <unset>;
 000 "west-east":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "west-east":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "west-east":   policy: IKEv1+RSASIG+ENCRYPT+TUNNEL+PFS+IKE_FRAG_ALLOW+ESN_NO+ESN_YES;
@@ -234,7 +244,8 @@ west #
 000 "west-east-b":   our auth:rsasig, their auth:rsasig, our autheap:none, their autheap:none;
 000 "west-east-b":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, cat:unset;
 000 "west-east-b":   sec_label:unset;
-000 "west-east-b":   ike_life: 28800s; ipsec_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-b":   ike_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-b":   ipsec_life: 28800s; ipsec_max_bytes: <unset>; ipsec_max_packets: <unset>;
 000 "west-east-b":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "west-east-b":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "west-east-b":   policy: IKEv1+RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKE_FRAG_ALLOW+ESN_NO+ESN_YES;
@@ -250,7 +261,8 @@ west #
 000 "west-east-c":   our auth:rsasig, their auth:rsasig, our autheap:none, their autheap:none;
 000 "west-east-c":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, cat:unset;
 000 "west-east-c":   sec_label:unset;
-000 "west-east-c":   ike_life: 28800s; ipsec_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-c":   ike_life: 28800s; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; keyingtries: 0;
+000 "west-east-c":   ipsec_life: 28800s; ipsec_max_bytes: <unset>; ipsec_max_packets: <unset>;
 000 "west-east-c":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
 000 "west-east-c":   initial-contact:no; cisco-unity:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
 000 "west-east-c":   policy: IKEv1+RSASIG+ENCRYPT+TUNNEL+PFS+UP+IKE_FRAG_ALLOW+ESN_NO+ESN_YES;
@@ -262,8 +274,8 @@ west #
 000 "west-east-c":   ESP algorithm newest: AES_CBC_128-HMAC_SHA1_96; pfsgroup=<Phase1>
 000 #1: "west-east":500 STATE_MAIN_I4 (IKE SA established); REPLACE in XXs; newest; lastdpd=-1s(seq in:0 out:0); idle;
 000 #3: "west-east-b":500 STATE_QUICK_I2 (IPsec SA established); REPLACE in XXs; newest; eroute owner; ISAKMP SA #1; idle;
-000 #3: "west-east-b" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 Traffic: ESPin=0B ESPout=0B ESPmax=4194303B 
+000 #3: "west-east-b" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 Traffic: ESPin=0B ESPout=0B ESPmax=18014398509481983B 
 000 #4: "west-east-c":500 STATE_QUICK_I2 (IPsec SA established); REPLACE in XXs; newest; eroute owner; ISAKMP SA #1; idle;
-000 #4: "west-east-c" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 Traffic: ESPin=0B ESPout=0B ESPmax=4194303B 
+000 #4: "west-east-c" esp.ESPSPIi@192.1.2.23 esp.ESPSPIi@192.1.2.45 tun.0@192.1.2.23 tun.0@192.1.2.45 Traffic: ESPin=0B ESPout=0B ESPmax=18014398509481983B 
 west #
  

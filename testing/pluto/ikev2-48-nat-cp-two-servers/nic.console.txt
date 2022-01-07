@@ -1,4 +1,6 @@
 iptables -t nat -F
+[ 00.00] IPv4: martian source 192.168.234.1 from 192.168.234.151, on dev eth0
+[ 00.00] ll header: 00000000: ff ff ff ff ff ff 52 54 00 38 11 e0 08 06
 nic #
  iptables -F
 nic #
