@@ -1920,12 +1920,12 @@ static uint64_t compute_sa_soft_limit(struct state *st, uint64_t max,
 	if (!rekey)
 		return ret;
 
-	bool initiator = (st->st_ike_version == IKEv2) ? st->st_sa_role == SA_INITIATOR :
-#ifdef USE_IKEv1
-	(st->st_ike_version == IKEv1) ? IS_V1_PHASE1_INIT(st->st_state) : pexpect(false);
-#else
-	pexpect(false);
-#endif
+	/*
+	 * Important policy lies buried here. For example, we favour the
+	 * initiator over the responder by making the initiator start
+	 * rekeying sooner.
+	 */
+	bool initiator = st->st_sa_role == SA_INITIATOR;
 	if (initiator) {
 			max  -= marg;
 			marg /= 4;
