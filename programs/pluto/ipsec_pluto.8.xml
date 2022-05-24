@@ -268,9 +268,9 @@
           <arg choice="opt">dh24</arg>
         </group></arg>
 
-      <arg choice="opt">--ikelifetime <replaceable>seconds</replaceable></arg>
+      <arg choice="opt">--ike-max-time <replaceable>seconds</replaceable></arg>
 
-      <arg choice="opt">--ipseclifetime
+      <arg choice="opt">--ipsecmaxtime
       <replaceable>seconds</replaceable></arg>
 
       <arg choice="opt">--rekeymargin <replaceable>seconds</replaceable></arg>
@@ -1971,7 +1971,7 @@
 
       <variablelist remap="TP">
         <varlistentry>
-          <term><option>--ikelifetime</option>&nbsp;<emphasis
+          <term><option>--ike-max-time</option>&nbsp;<emphasis
           remap="I">seconds</emphasis></term>
 
           <listitem>
@@ -1984,7 +1984,7 @@
         </varlistentry>
 
         <varlistentry>
-          <term><option>--ipseclifetime</option>&nbsp;<emphasis
+          <term><option>--ipsecmaxtime</option>&nbsp;<emphasis
           remap="I">seconds</emphasis></term>
 
           <listitem>
@@ -2537,8 +2537,8 @@
       <!-- .na -->
 
       <para>&nbsp;&nbsp;&nbsp;ipsec whack --name&nbsp;silly
-      --host&nbsp;127.0.0.1 --to --host&nbsp;127.0.0.2 --ikelifetime&nbsp;900
-      --ipseclifetime&nbsp;800 --keyingtries&nbsp;3</para>
+      --host&nbsp;127.0.0.1 --to --host&nbsp;127.0.0.2 --ike-max-time&nbsp;900
+      --ipsecmaxtime&nbsp;800 --keyingtries&nbsp;3</para>
 
       <!-- .ad -->
 
@@ -3457,7 +3457,7 @@
           <listitem>
             <para>When responding to an ISAKMP SA proposal, the maximum
             acceptable lifetime is eight hours. The default is one hour. There
-            is no minimum. The --ikelifetime flag controls this when <emphasis
+            is no minimum. The --ike-max-time flag controls this when <emphasis
             remap="B">pluto</emphasis> is initiating.</para>
           </listitem>
         </varlistentry>
@@ -3468,7 +3468,7 @@
           <listitem>
             <para>When responding to an IPSEC SA proposal, the maximum
             acceptable lifetime is one day. The default is eight hours. There
-            is no minimum. The --ipseclifetime flag controls this when
+            is no minimum. The --ipsecmaxtime flag controls this when
             <emphasis remap="B">pluto</emphasis> is initiating.</para>
           </listitem>
         </varlistentry>
