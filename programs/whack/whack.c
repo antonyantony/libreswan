@@ -99,7 +99,7 @@ static void help(void)
 		"	[--pfsgroup <modp1024 | modp1536 | modp2048 | \\\n"
 		"		modp3072 | modp4096 | modp6144 | modp8192 \\\n"
 		"		dh22 | dh23 | dh24>] \\\n"
-		"	[--ikelifetime <seconds>] [--ipseclifetime <seconds>] \\\n"
+		"	[--ikemaxtime <seconds>] [--ipsecmaxtime <seconds>] \\\n"
 		"	[--rekeymargin <seconds>] [--rekeyfuzz <percentage>] \\\n"
 		"	[--retransmit-timeout <seconds>] \\\n"
 		"	[--retransmit-interval <msecs>] \\\n"
@@ -444,7 +444,7 @@ enum option_enums {
 
 	CD_RETRANSMIT_TIMEOUT,
 	CD_RETRANSMIT_INTERVAL,
-	CD_IKELIFETIME,
+	CD_IKEMAXTIME,
 	CD_IPSECLIFETIME,
 	CD_REKEYMARGIN,
 	CD_RKFUZZ,
@@ -771,8 +771,8 @@ static const struct option long_opts[] = {
 	{ "sendca", required_argument, NULL, CD_SEND_CA + OO },
 	{ "ipv4", no_argument, NULL, CD_CONNIPV4 + OO },
 	{ "ipv6", no_argument, NULL, CD_CONNIPV6 + OO },
-	{ "ikelifetime", required_argument, NULL, CD_IKELIFETIME + OO },
-	{ "ipseclifetime", required_argument, NULL, CD_IPSECLIFETIME + OO },
+	{ "ikemaxtime", required_argument, NULL, CD_IKEMAXTIME + OO },
+	{ "ipsecmaxtime", required_argument, NULL, CD_IPSECLIFETIME + OO },
 	{ "retransmit-timeout", required_argument, NULL, CD_RETRANSMIT_TIMEOUT + OO },
 	{ "retransmit-interval", required_argument, NULL, CD_RETRANSMIT_INTERVAL + OO },
 	{ "rekeymargin", required_argument, NULL, CD_REKEYMARGIN + OO },
@@ -1904,11 +1904,11 @@ int main(int argc, char **argv)
 			optarg_to_deltatime(&msg.retransmit_interval, &timescale_milliseconds);
 			continue;
 
-		case CD_IKELIFETIME:	/* --ikelifetime <seconds> */
+		case CD_IKEMAXTIME:	/* --ikemaxtime <seconds> */
 			optarg_to_deltatime(&msg.sa_ike_max_seconds, &timescale_seconds);
 			continue;
 
-		case CD_IPSECLIFETIME:	/* --ipseclifetime <seconds> */
+		case CD_IPSECLIFETIME:	/* --ipsecmaxtime <seconds> */
 			optarg_to_deltatime(&msg.sa_ipsec_max_seconds, &timescale_seconds);
 			continue;
 
@@ -2665,10 +2665,10 @@ int main(int argc, char **argv)
 		diagw("rekeymargin or rekeyfuzz values are so large that they cause overflow");
 
 	check_life_time(msg.sa_ike_max_seconds, IKE_SA_LIFETIME_MAXIMUM,
-			"ikelifetime", &msg);
+			"ikemaxtime", &msg);
 
 	check_life_time(msg.sa_ipsec_max_seconds, IPSEC_SA_LIFETIME_MAXIMUM,
-			"ipseclifetime", &msg);
+			"ipsecmaxtime", &msg);
 
 	switch (msg.ike_version) {
 	case IKEv1:

@@ -2437,7 +2437,7 @@ void add_connection(const struct whack_message *wm, struct logger *logger)
 	/* connection is good-to-go: log against it */
 	llog(RC_LOG, c->logger, "added %s connection", what);
 	policy_buf pb;
-	dbg("ike_life: %jd; ipsec_life: %jds; rekey_margin: %jds; rekey_fuzz: %lu%%; keyingtries: %lu; replay_window: %u; policy: %s ipsec_max_bytes: %" PRIu64 " ipsec_max_packets %" PRIu64,
+	dbg("ike_max_time: %jd; ipsex_max_time: %jds; rekey_margin: %jds; rekey_fuzz: %lu%%; keyingtries: %lu; replay_window: %u; policy: %s ipsec_max_bytes: %" PRIu64 " ipsec_max_packets %" PRIu64,
 	    deltasecs(c->sa_ike_max_seconds),
 	    deltasecs(c->sa_ipsec_max_seconds),
 	    deltasecs(c->sa_rekey_margin),
@@ -3828,10 +3828,10 @@ void show_one_connection(struct show *s,
 
 	readable_humber(c->sa_ipsec_max_bytes, bytesbuf, bytesbuf + sizeof(bytesbuf), "", "B");
 	readable_humber(c->sa_ipsec_max_packets, packetsbuf, packetsbuf + sizeof(packetsbuf), "", "");
-	show_comment(s, PRI_CONNECTION":   ike_life: %jds; ipsec_life: %jds; ipsec_max_bytes: %s; ipsec_max_packets: %s; replay_window: %u; rekey_margin: %jds; rekey_fuzz: %lu%%; keyingtries: %lu;",
+	show_comment(s, PRI_CONNECTION":   ike_max_time: %jds; ipsex_max_time: %jds; ipsec_max_bytes: %s; ipsec_max_packets: %s; replay_window: %u; rekey_margin: %jds; rekey_fuzz: %lu%%; keyingtries: %lu;",
 		     c->name, instance,
-		     deltasecs(c->sa_ike_life_seconds),
-		     deltasecs(c->sa_ipsec_life_seconds),
+		     deltasecs(c->sa_ike_max_seconds),
+		     deltasecs(c->sa_ipsec_max_seconds),
 		     bytesbuf, packetsbuf,
 		     c->sa_replay_window,
 		     deltasecs(c->sa_rekey_margin),
