@@ -1,0 +1,2 @@
+An Externally created xfrmi device named esp17, if_id, a.k.a. IFLA_XFRM_LINK = 17
+is added manually. Pluto is configured ipsec-interface=17 this shoudl work.
