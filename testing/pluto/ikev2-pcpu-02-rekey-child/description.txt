@@ -1,0 +1,5 @@
+A simple pluto with IKEv2 clones test using PSK on the initiator (west),
+and on the responder, followed by a rekey of one of the Additional Child
+SAs (RFC 9611 per-CPU Child SA) using "ipsec whack --rekey-child --name".
+
+

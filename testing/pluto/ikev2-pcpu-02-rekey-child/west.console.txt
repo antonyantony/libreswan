@@ -1,0 +1,292 @@
+/testing/guestbin/swan-prep --nokeys
+Creating empty NSS database
+west #
+ # confirm that the network is alive
+west #
+ ../../guestbin/wait-until-alive -I 192.0.1.254 192.0.2.254
+destination -I 192.0.1.254 192.0.2.254 is alive
+west #
+ # ensure that clear text does not get through
+west #
+ ../../guestbin/nftable-westneteastnet-ipsec-only.nft
+../../guestbin/nftable-westneteastnet-ipsec-only.nft:2:1-14: Error: Could not process rule: Operation not supported
+flush ruleset
+^^^^^^^^^^^^^^
+../../guestbin/nftable-westneteastnet-ipsec-only.nft:3:1-2: Error: Could not process rule: Operation not supported
+table ip filter {
+^^
+../../guestbin/nftable-westneteastnet-ipsec-only.nft:5:3-40: Error: Chain of type "filter" is not supported, perhaps kernel support is missing?
+		type filter hook input priority filter; policy accept;
+		^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../guestbin/nftable-westneteastnet-ipsec-only.nft:11:3-41: Error: Chain of type "filter" is not supported, perhaps kernel support is missing?
+		type filter hook output priority filter; policy accept;
+		^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../guestbin/nftable-westneteastnet-ipsec-only.nft:6:3-70: Error: Could not process rule: Operation not supported
+		meta ipsec exists ip saddr 192.0.2.0/24 ip daddr 192.0.1.0/24 accept
+		^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../guestbin/nftable-westneteastnet-ipsec-only.nft:7:3-50: Error: Could not process rule: Operation not supported
+		ip saddr 192.0.2.0/24 ip daddr 192.0.1.0/24 drop
+		^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../guestbin/nftable-westneteastnet-ipsec-only.nft:12:3-68: Error: Could not process rule: Operation not supported
+		rt ipsec exists ip saddr 192.0.1.0/24 ip daddr 192.0.2.0/24 accept
+		^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../guestbin/nftable-westneteastnet-ipsec-only.nft:13:3-50: Error: Could not process rule: Operation not supported
+		ip saddr 192.0.1.0/24 ip daddr 192.0.2.0/24 drop
+		^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+west #
+ # confirm clear text does not get through
+west #
+ ../../guestbin/ping-once.sh --down -I 192.0.1.254 192.0.2.254
+up UNEXPECTED
+# ping -n -c 1  -i 2 -w 1   -I 192.0.1.254 192.0.2.254
+PING 192.0.2.254 (192.0.2.254) from 192.0.1.254 : 56(84) bytes of data.
+64 bytes from 192.0.2.254: icmp_seq=1 ttl=64 time=0.207 ms
+--- 192.0.2.254 ping statistics ---
+1 packets transmitted, 1 received, 0% packet loss, time 0ms
+rtt min/avg/max/mdev = 0.207/0.207/0.207/0.000 ms
+west #
+ ipsec start
+Redirecting to: [initsystem]
+west #
+ ../../guestbin/wait-until-pluto-started
+west #
+ ipsec add westnet-eastnet-clones
+"westnet-eastnet-clones": added oriented IKEv2 connection
+west #
+ ipsec connectionstatus westnet-eastnet-clones
+"westnet-eastnet-clones": 192.0.1.0/24===192.1.2.45[@west]...192.1.2.23[@east]===192.0.2.0/24; unrouted; my_ip=unset; their_ip=unset;
+"westnet-eastnet-clones":   host: oriented; local: 192.1.2.45; remote: 192.1.2.23;
+"westnet-eastnet-clones":   my_updown=ipsec _updown; my_updown-config=noasync,noexec;
+"westnet-eastnet-clones":   xauth us:none, xauth them:none, my_username=[any]; their_username=[any]
+"westnet-eastnet-clones":   our auth:secret, their auth:secret, our autheap:none, their autheap:none;
+"westnet-eastnet-clones":   modecfg info: us:none, them:none, modecfg policy:push, dns:unset, domains:unset, cat:unset;
+"westnet-eastnet-clones":   cisco-split: no; cisco-unity: no; cisco-peer: no; nm-configured: no;
+"westnet-eastnet-clones":   sec_label:unset;
+"westnet-eastnet-clones":   ike_life: 28800s; ipsec_life: 28800s; ipsec_max_bytes: 2^63B; ipsec_max_packets: 2^63; replay_window: 128; rekey_margin: 540s; rekey_fuzz: 100%; clones: 4;
+"westnet-eastnet-clones":   iptfs: no; fragmentation: yes; packet-size: 0; max-queue-size: 0; drop-time: 0; init-delay: 0; reorder-window: 0;
+"westnet-eastnet-clones":   retransmit-interval: 9999ms; retransmit-timeout: 99s; iketcp:no; iketcp-port:4500;
+"westnet-eastnet-clones":   initial-contact:no; fake-strongswan:no; send-vendorid:no; send-no-esp-tfc:no;
+"westnet-eastnet-clones":   policy: IKEv2+PSK+ENCRYPT+TUNNEL+PFS+IKE_FRAG_ALLOW+ESN_NO+ESN_YES;
+"westnet-eastnet-clones":   v2-auth-hash-policy: none;
+"westnet-eastnet-clones":   conn_prio: 24,24,0; interface: eth1; metric: 0; mtu: unset; sa_prio:auto; sa_tfc:none;
+"westnet-eastnet-clones":   nflog-group: unset; mark: unset; vti-iface:unset; vti-routing:no; vti-shared:no; nic-offload:no;
+"westnet-eastnet-clones":   our idtype: FQDN; our id=@west; their idtype: FQDN; their id=@east
+"westnet-eastnet-clones":   sendca: all; our sendcert: always; their sendcert: always;
+"westnet-eastnet-clones":   liveness: passive; dpddelay:0s; retransmit-timeout:30s
+"westnet-eastnet-clones":   nat-traversal: encapsulation:auto; keepalive:20s
+"westnet-eastnet-clones":   routing: unrouted;
+"westnet-eastnet-clones":   reqid: REQID;
+"westnet-eastnet-clones":   conn serial: $1;
+west #
+ ipsec whack --impair suppress_retransmits
+west #
+ echo "initdone"
+initdone
+west #
+ ipsec up westnet-eastnet-clones
+"westnet-eastnet-clones" #1: initiating IKEv2 connection to 192.1.2.23 using UDP
+"westnet-eastnet-clones" #1: sent IKE_SA_INIT request to 192.1.2.23:UDP/500
+"westnet-eastnet-clones" #1: processed IKE_SA_INIT response from 192.1.2.23:UDP/500 {cipher=AES_GCM_16_256 integ=n/a prf=HMAC_SHA2_512 ke=DH19}, initiating IKE_AUTH
+"westnet-eastnet-clones" #1: sending SA_RESOURCE_INFO (clones=4)
+"westnet-eastnet-clones" #1: sent IKE_AUTH request to 192.1.2.23:UDP/500 with shared-key-mac and FQDN '@west'; Child SA #2 {ESP <0xESPESP} [192.0.1.0/24===192.0.2.0/24]
+"westnet-eastnet-clones" #1: processing IKE_AUTH response from 192.1.2.23:UDP/500 containing SK{IDr,AUTH,SA,TSi,TSr,N(SA_RESOURCE_INFO)}
+"westnet-eastnet-clones" #1: initiator established IKE SA; authenticated peer using authby=secret and FQDN '@east'
+"westnet-eastnet-clones" #2: per-CPU child SA negotiation complete
+"westnet-eastnet-clones" #2: creating Additional Child SA 0
+"westnet-eastnet-clones" #2: creating Additional Child SA 1
+"westnet-eastnet-clones" #2: creating Additional Child SA 2
+"westnet-eastnet-clones" #2: creating Additional Child SA 3
+"westnet-eastnet-clones" #2: initiator established Child SA using #1; IPsec tunnel [192.0.1.0/24===192.0.2.0/24] {ESP/ESN=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256 DPD=passive}
+"westnet-eastnet-clones" #3: sent CREATE_CHILD_SA request to create Child SA using IKE SA #1 {ESP <0xESPESP} [192.0.1.0/24===192.0.2.0/24]
+"westnet-eastnet-clones" #3: peer installed Additional Child SA on CPU 0 as requested
+"westnet-eastnet-clones" #3: initiator established Child SA using #1; IPsec tunnel [192.0.1.0/24===192.0.2.0/24] {ESP/ESN=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256-DH19 DPD=passive}
+"westnet-eastnet-clones" #4: sent CREATE_CHILD_SA request to create Child SA using IKE SA #1 {ESP <0xESPESP} [192.0.1.0/24===192.0.2.0/24]
+"westnet-eastnet-clones" #4: peer installed Additional Child SA on CPU 1 as requested
+"westnet-eastnet-clones" #4: initiator established Child SA using #1; IPsec tunnel [192.0.1.0/24===192.0.2.0/24] {ESP/ESN=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256-DH19 DPD=passive}
+"westnet-eastnet-clones" #5: sent CREATE_CHILD_SA request to create Child SA using IKE SA #1 {ESP <0xESPESP} [192.0.1.0/24===192.0.2.0/24]
+"westnet-eastnet-clones" #5: peer installed Additional Child SA on CPU 2 as requested
+"westnet-eastnet-clones" #5: initiator established Child SA using #1; IPsec tunnel [192.0.1.0/24===192.0.2.0/24] {ESP/ESN=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256-DH19 DPD=passive}
+"westnet-eastnet-clones" #6: sent CREATE_CHILD_SA request to create Child SA using IKE SA #1 {ESP <0xESPESP} [192.0.1.0/24===192.0.2.0/24]
+"westnet-eastnet-clones" #6: peer installed Additional Child SA on CPU 3 as requested
+"westnet-eastnet-clones" #6: initiator established Child SA using #1; IPsec tunnel [192.0.1.0/24===192.0.2.0/24] {ESP/ESN=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256-DH19 DPD=passive}
+west #
+ # wait for all 4 Additional Child SAs (RFC 9611, clones=4) plus the
+west #
+ # Initial Child SA to establish before checking anything below -
+west #
+ # Additional Child SAs are created via separate, async CREATE_CHILD_SA
+west #
+ # exchanges after the Initial SA is up
+west #
+ ../../guestbin/wait-for.sh --timeout 20 --match '^5$' -- sh -c 'ipsec trafficstatus | wc -l'
+5
+west #
+ ../../guestbin/ping-once.sh --up -I 192.0.1.254 192.0.2.254
+up
+west #
+ ipsec trafficstatus
+#2: "westnet-eastnet-clones", type=ESP, add_time=1234567890, inBytes=0, outBytes=0, maxBytes=2^63B, id='@east'
+#3: "westnet-eastnet-clones", type=ESP, add_time=1234567890, inBytes=0, outBytes=0, maxBytes=2^63B, id='@east'
+#4: "westnet-eastnet-clones", type=ESP, add_time=1234567890, inBytes=0, outBytes=0, maxBytes=2^63B, id='@east'
+#5: "westnet-eastnet-clones", type=ESP, add_time=1234567890, inBytes=0, outBytes=0, maxBytes=2^63B, id='@east'
+#6: "westnet-eastnet-clones", type=ESP, add_time=1234567890, inBytes=84, outBytes=84, maxBytes=2^63B, id='@east'
+west #
+ ipsec trafficstatus | wc -l
+5
+west #
+ ipsec _kernel state | grep -c '^src'
+10
+west #
+ ipsec _kernel state | grep pcpu-num | sort -u | wc -l
+4
+west #
+ # rekey CHILD SA by connection name; this rekeys whichever Child SA is
+west #
+ # .established_child_sa for this connection - the last Additional Child
+west #
+ # SA to establish
+west #
+ ipsec whack --rekey-child --name westnet-eastnet-clones
+"westnet-eastnet-clones" #7: initiating rekey to replace Child SA #6 using IKE SA #1
+"westnet-eastnet-clones" #7: sent CREATE_CHILD_SA request to rekey Child SA #6 using IKE SA #1 {ESP <0xESPESP} [192.0.1.0/24===192.0.2.0/24]
+"westnet-eastnet-clones" #7: peer installed Additional Child SA on CPU 3 as requested
+"westnet-eastnet-clones" #7: initiator rekeyed Child SA #6 using #1; IPsec tunnel [192.0.1.0/24===192.0.2.0/24] {ESP/ESN=>0xESPESP <0xESPESP xfrm=AES_GCM_16_256-DH19 DPD=passive}
+"westnet-eastnet-clones" #6: sent INFORMATIONAL request to delete established Child SA using IKE SA #1
+"westnet-eastnet-clones" #6: ESP traffic information: in=84B out=84B
+west #
+ ../../guestbin/wait-for.sh --timeout 20 --match '^5$' -- sh -c 'ipsec trafficstatus | wc -l'
+5
+west #
+ ../../guestbin/ping-once.sh --up -I 192.0.1.254 192.0.2.254
+up
+west #
+ ipsec trafficstatus
+#2: "westnet-eastnet-clones", type=ESP, add_time=1234567890, inBytes=0, outBytes=0, maxBytes=2^63B, id='@east'
+#3: "westnet-eastnet-clones", type=ESP, add_time=1234567890, inBytes=0, outBytes=0, maxBytes=2^63B, id='@east'
+#4: "westnet-eastnet-clones", type=ESP, add_time=1234567890, inBytes=0, outBytes=0, maxBytes=2^63B, id='@east'
+#5: "westnet-eastnet-clones", type=ESP, add_time=1234567890, inBytes=0, outBytes=0, maxBytes=2^63B, id='@east'
+#7: "westnet-eastnet-clones", type=ESP, add_time=1234567890, inBytes=84, outBytes=84, maxBytes=2^63B, id='@east'
+west #
+ ipsec trafficstatus | wc -l
+5
+west #
+ ipsec _kernel state | grep -c '^src'
+10
+west #
+ ipsec _kernel state | grep pcpu-num | sort -u | wc -l
+4
+west #
+ echo done
+done
+west #
+ ipsec _kernel state
+src 192.1.2.45 dst 192.1.2.23
+	proto esp spi 0xSPISPI reqid REQID mode tunnel
+	replay-window 0 flag af-unspec esn extra-flag dont-encap-dscp
+	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
+	lastused YYYY-MM-DD HH:MM:SS
+	anti-replay esn context:
+	 seq-hi 0x0, seq 0xXX, oseq-hi 0x0, oseq 0xXX
+	 replay_window 0, bitmap-length 0
+	dir out
+	pcpu-num 3
+src 192.1.2.23 dst 192.1.2.45
+	proto esp spi 0xSPISPI reqid REQID mode tunnel
+	replay-window 0 flag af-unspec esn
+	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
+	lastused YYYY-MM-DD HH:MM:SS
+	anti-replay esn context:
+	 seq-hi 0x0, seq 0xXX, oseq-hi 0x0, oseq 0xXX
+	 replay_window 128, bitmap-length 4
+	 00000000 00000000 00000000 XXXXXXXX 
+	dir in
+	pcpu-num 3
+src 192.1.2.45 dst 192.1.2.23
+	proto esp spi 0xSPISPI reqid REQID mode tunnel
+	replay-window 0 flag af-unspec esn extra-flag dont-encap-dscp
+	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
+	anti-replay esn context:
+	 seq-hi 0x0, seq 0xXX, oseq-hi 0x0, oseq 0xXX
+	 replay_window 0, bitmap-length 0
+	dir out
+	pcpu-num 2
+src 192.1.2.23 dst 192.1.2.45
+	proto esp spi 0xSPISPI reqid REQID mode tunnel
+	replay-window 0 flag af-unspec esn
+	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
+	anti-replay esn context:
+	 seq-hi 0x0, seq 0xXX, oseq-hi 0x0, oseq 0xXX
+	 replay_window 128, bitmap-length 4
+	 00000000 00000000 00000000 XXXXXXXX 
+	dir in
+	pcpu-num 2
+src 192.1.2.45 dst 192.1.2.23
+	proto esp spi 0xSPISPI reqid REQID mode tunnel
+	replay-window 0 flag af-unspec esn extra-flag dont-encap-dscp
+	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
+	anti-replay esn context:
+	 seq-hi 0x0, seq 0xXX, oseq-hi 0x0, oseq 0xXX
+	 replay_window 0, bitmap-length 0
+	dir out
+	pcpu-num 1
+src 192.1.2.23 dst 192.1.2.45
+	proto esp spi 0xSPISPI reqid REQID mode tunnel
+	replay-window 0 flag af-unspec esn
+	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
+	anti-replay esn context:
+	 seq-hi 0x0, seq 0xXX, oseq-hi 0x0, oseq 0xXX
+	 replay_window 128, bitmap-length 4
+	 00000000 00000000 00000000 XXXXXXXX 
+	dir in
+	pcpu-num 1
+src 192.1.2.45 dst 192.1.2.23
+	proto esp spi 0xSPISPI reqid REQID mode tunnel
+	replay-window 0 flag af-unspec esn extra-flag dont-encap-dscp
+	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
+	anti-replay esn context:
+	 seq-hi 0x0, seq 0xXX, oseq-hi 0x0, oseq 0xXX
+	 replay_window 0, bitmap-length 0
+	dir out
+	pcpu-num 0
+src 192.1.2.23 dst 192.1.2.45
+	proto esp spi 0xSPISPI reqid REQID mode tunnel
+	replay-window 0 flag af-unspec esn
+	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
+	anti-replay esn context:
+	 seq-hi 0x0, seq 0xXX, oseq-hi 0x0, oseq 0xXX
+	 replay_window 128, bitmap-length 4
+	 00000000 00000000 00000000 XXXXXXXX 
+	dir in
+	pcpu-num 0
+src 192.1.2.45 dst 192.1.2.23
+	proto esp spi 0xSPISPI reqid REQID mode tunnel
+	replay-window 0 flag af-unspec esn extra-flag dont-encap-dscp
+	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
+	anti-replay esn context:
+	 seq-hi 0x0, seq 0xXX, oseq-hi 0x0, oseq 0xXX
+	 replay_window 0, bitmap-length 0
+	dir out
+src 192.1.2.23 dst 192.1.2.45
+	proto esp spi 0xSPISPI reqid REQID mode tunnel
+	replay-window 0 flag af-unspec esn
+	aead rfc4106(gcm(aes)) 0xENCAUTHKEY 128
+	anti-replay esn context:
+	 seq-hi 0x0, seq 0xXX, oseq-hi 0x0, oseq 0xXX
+	 replay_window 128, bitmap-length 4
+	 00000000 00000000 00000000 XXXXXXXX 
+	dir in
+west #
+ ipsec _kernel policy
+src 192.0.1.0/24 dst 192.0.2.0/24
+	dir out priority PRIORITY ptype main
+	tmpl src 192.1.2.45 dst 192.1.2.23
+		proto esp reqid REQID mode tunnel
+src 192.0.2.0/24 dst 192.0.1.0/24
+	dir fwd priority PRIORITY ptype main
+	tmpl src 192.1.2.23 dst 192.1.2.45
+		proto esp reqid REQID mode tunnel
+src 192.0.2.0/24 dst 192.0.1.0/24
+	dir in priority PRIORITY ptype main
+	tmpl src 192.1.2.23 dst 192.1.2.45
+		proto esp reqid REQID mode tunnel
+west #
