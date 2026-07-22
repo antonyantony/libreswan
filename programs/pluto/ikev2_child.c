@@ -298,9 +298,17 @@ bool emit_v2_child_request_payloads(const struct ike_sa *ike,
 	/* SA_RESOURCE_INFO for Additional Child SAs (RFC 9611) */
 	if (!ike_auth_exchange &&
 	    larval_child->sa.st_v2_resource_info.cpu_id != CPU_ID_NONE) {
+		/*
+		 * Include our own CPU choice as an opportunistic hint
+		 * for the peer (private extension - RFC 9611 S5.1
+		 * only sanctions this data for debugging).  The peer
+		 * is free to ignore it or fall back if it can't honor
+		 * it.
+		 */
+		uint32_t cpu_id = htonl(larval_child->sa.st_v2_resource_info.cpu_id);
 		ldbg(logger, "sending SA_RESOURCE_INFO for Additional Child SA (cpu=%u)",
 		     larval_child->sa.st_v2_resource_info.cpu_id);
-		if (!emit_v2N(v2N_SA_RESOURCE_INFO, pbs)) {
+		if (!emit_v2N_bytes(v2N_SA_RESOURCE_INFO, &cpu_id, sizeof(cpu_id), pbs)) {
 			return false;
 		}
 	}
@@ -562,6 +570,22 @@ bool emit_v2_child_response_payloads(struct ike_sa *ike,
 	 */
 	if (!emit_v2TS_response_payloads(outpbs, larval_child)) {
 		return false;
+	}
+
+	/*
+	 * Echo back the CPU we actually installed the Additional Child
+	 * SA on (RFC 9611).  This is for the initiator's logging only
+	 * (S5.1 restricts this field to debugging use) - it is not
+	 * expected to change anything the initiator already installed.
+	 */
+	if (isa_xchg == ISAKMP_v2_CREATE_CHILD_SA &&
+	    larval_child->sa.st_v2_resource_info.cpu_id != CPU_ID_NONE) {
+		uint32_t cpu_id = htonl(larval_child->sa.st_v2_resource_info.cpu_id);
+		ldbg(logger, "echoing SA_RESOURCE_INFO for Additional Child SA (cpu=%u)",
+		     larval_child->sa.st_v2_resource_info.cpu_id);
+		if (!emit_v2N_bytes(v2N_SA_RESOURCE_INFO, &cpu_id, sizeof(cpu_id), outpbs)) {
+			return false;
+		}
 	}
 
 	if (larval_child->sa.st_kernel_mode == KERNEL_MODE_TRANSPORT &&
@@ -1132,6 +1156,7 @@ static v2_notification_t process_v2_IKE_AUTH_request_child_sa_payloads(struct ik
 				return v2N_INVALID_SYNTAX;
 			}
 			child->sa.st_v2_resource_info.state = RESOURCE_INFO_DONE;
+			ike->sa.st_v2_resource_info.state = RESOURCE_INFO_DONE;
 			llog_sa(RC_LOG, child, "per-CPU SA negotiation complete");
 		}
 	}
@@ -1249,6 +1274,7 @@ v2_notification_t process_v2_IKE_AUTH_response_child_payloads(struct ike_sa *ike
 	if (response_md->pd[PD_v2N_SA_RESOURCE_INFO] != NULL) {
 		passert(child->sa.st_v2_resource_info.state == RESOURCE_INFO_SENT);
 		child->sa.st_v2_resource_info.state = RESOURCE_INFO_DONE;
+		ike->sa.st_v2_resource_info.state = RESOURCE_INFO_DONE;
 		llog_sa(RC_LOG, child, "per-CPU child SA negotiation complete");
 
 		/* Note: this Child SA is the Initial SA */

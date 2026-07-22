@@ -916,13 +916,21 @@ static uint32_t count_additional_sas(struct connection *c)
 /*
  * Find first unused CPU (RFC 9611)
  *
+ * If the peer sent a CPU hint (see cpu_hint_from_v2N_SA_RESOURCE_INFO()
+ * below) and that CPU is both in range and not already used by this
+ * connection, honor it - this is a private, best-effort optimization,
+ * not something RFC 9611 requires or even sanctions (S5.1 says a
+ * receiver "MUST only use it for debugging purposes"); always be
+ * willing to fall back.
+ *
  * Notes:
  *
  *  - once all CPUs are used, round-robin follows
  *  - no load-balancing between connections
  *
  */
-static uint32_t assign_least_loaded_cpu(struct connection *c, uint32_t sa_index)
+static uint32_t assign_least_loaded_cpu(struct connection *c, uint32_t sa_index,
+					 bool have_preferred_cpu_id, uint32_t preferred_cpu_id)
 {
 	uint32_t clones_nr = c->config->child.clones.nr;
 	uint32_t actual_cpus = nr_processors_online();
@@ -947,6 +955,12 @@ static uint32_t assign_least_loaded_cpu(struct connection *c, uint32_t sa_index)
 		}
 	}
 
+	if (have_preferred_cpu_id &&
+	    preferred_cpu_id < num_cpus &&
+	    !used[preferred_cpu_id]) {
+		return preferred_cpu_id;
+	}
+
 	uint32_t cpu_id;
 	for (cpu_id = 0; cpu_id < num_cpus; cpu_id++) {
 		if (!used[cpu_id]) {
@@ -956,6 +970,33 @@ static uint32_t assign_least_loaded_cpu(struct connection *c, uint32_t sa_index)
 
 	/* All CPUs are used - use round-robin (normal when multiple SAs per CPU) */
 	return sa_index % num_cpus;
+}
+
+/*
+ * Extract an opportunistic CPU hint from a peer's SA_RESOURCE_INFO
+ * notification (RFC 9611 S5.1 "Resource Identifier").
+ *
+ * This is a private extension: the RFC defines the field as opaque
+ * data that a receiver "MUST only use it for debugging purposes",
+ * not a standardized CPU index.  Treat it as untrusted - only accept
+ * it when it's exactly a 4 byte network-order integer, and the
+ * caller must still be willing to fall back (see
+ * assign_least_loaded_cpu() above) rather than treat this as
+ * authoritative.
+ */
+static bool cpu_hint_from_v2N_SA_RESOURCE_INFO(const struct payload_digest *pd, uint32_t *cpu_id)
+{
+	if (pd == NULL) {
+		return false;
+	}
+	shunk_t data = pbs_in_left(&pd->pbs);
+	if (data.len != sizeof(uint32_t)) {
+		return false;
+	}
+	uint32_t peer_cpu_id;
+	memcpy(&peer_cpu_id, data.ptr, sizeof(peer_cpu_id));
+	*cpu_id = ntohl(peer_cpu_id);
+	return true;
 }
 
 stf_status process_v2_CREATE_CHILD_SA_rekey_child_request(struct ike_sa *ike,
@@ -1010,7 +1051,9 @@ stf_status process_v2_CREATE_CHILD_SA_rekey_child_request(struct ike_sa *ike,
 				return STF_OK;
 			}
 
-			larval_child->sa.st_v2_resource_info.cpu_id = assign_least_loaded_cpu(larval_child->sa.st_connection, count);
+			larval_child->sa.st_v2_resource_info.cpu_id =
+				assign_least_loaded_cpu(larval_child->sa.st_connection, count,
+							/*have_preferred_cpu_id*/false, 0);
 
 			ldbg(larval_child->sa.logger,
 			     "assigned Additional Child SA %u to CPU %u",
@@ -1295,6 +1338,49 @@ stf_status process_v2_CREATE_CHILD_SA_new_child_request(struct ike_sa *ike,
 		delete_child_sa(&larval_child);
 		ike->sa.st_v2_msgid_windows.responder.wip_sa = NULL;
 		return STF_OK; /*IKE*/
+	}
+
+	/* Check if this is an Additional Child SA request (RFC 9611) */
+	if (md->pd[PD_v2N_SA_RESOURCE_INFO] != NULL &&
+	    ike->sa.st_v2_resource_info.state == RESOURCE_INFO_DONE) {
+		ldbg(ike->sa.logger, "new Child SA request carries SA_RESOURCE_INFO - Additional Child SA");
+		larval_child->sa.st_v2_resource_info.state = RESOURCE_INFO_DONE;
+
+		/* Limit Additional Child SAs, reject more with TS_MAX_QUEUE */
+		uint32_t count = count_additional_sas(larval_child->sa.st_connection);
+		if (count >= MAX_ADDITIONAL_SAS) {
+			llog_sa(RC_LOG, larval_child,
+				"refusing Additional Child SA %u (limit=%u)",
+				count + 1, MAX_ADDITIONAL_SAS);
+			record_v2N_response(ike->sa.logger, ike, md,
+					   v2N_TS_MAX_QUEUE, empty_shunk,
+					   ENCRYPTED_PAYLOAD);
+			delete_child_sa(&larval_child);
+			ike->sa.st_v2_msgid_windows.responder.wip_sa = NULL;
+			return STF_OK;
+		}
+
+		uint32_t hint_cpu_id = 0;
+		bool have_hint = cpu_hint_from_v2N_SA_RESOURCE_INFO(md->pd[PD_v2N_SA_RESOURCE_INFO],
+								    &hint_cpu_id);
+
+		larval_child->sa.st_v2_resource_info.cpu_id =
+			assign_least_loaded_cpu(larval_child->sa.st_connection, count,
+						have_hint, hint_cpu_id);
+
+		if (have_hint && hint_cpu_id == larval_child->sa.st_v2_resource_info.cpu_id) {
+			llog_sa(RC_LOG, larval_child,
+				"assigned Additional Child SA %u to CPU %u (honoring peer's request)",
+				count, larval_child->sa.st_v2_resource_info.cpu_id);
+		} else if (have_hint) {
+			llog_sa(RC_LOG, larval_child,
+				"assigned Additional Child SA %u to CPU %u (peer requested CPU %u, unavailable)",
+				count, larval_child->sa.st_v2_resource_info.cpu_id, hint_cpu_id);
+		} else {
+			llog_sa(RC_LOG, larval_child,
+				"assigned Additional Child SA %u to CPU %u",
+				count, larval_child->sa.st_v2_resource_info.cpu_id);
+		}
 	}
 
 	return process_v2_CREATE_CHILD_SA_request(ike, larval_child, md);
@@ -1633,6 +1719,28 @@ stf_status process_v2_CREATE_CHILD_SA_child_response(struct ike_sa *ike,
 	if (n != v2N_NOTHING_WRONG) {
 		return reject_CREATE_CHILD_SA_response(ike, &larval_child,
 						       response_md, n, HERE);
+	}
+
+	/*
+	 * Log (only) what CPU the peer echoed back for our Additional
+	 * Child SA request (RFC 9611).  This never changes what we
+	 * already decided/installed locally - S5.1 restricts this data
+	 * to debugging use.
+	 */
+	if (larval_child->sa.st_v2_resource_info.cpu_id != CPU_ID_NONE) {
+		uint32_t peer_cpu_id;
+		if (cpu_hint_from_v2N_SA_RESOURCE_INFO(response_md->pd[PD_v2N_SA_RESOURCE_INFO],
+						       &peer_cpu_id)) {
+			if (peer_cpu_id == larval_child->sa.st_v2_resource_info.cpu_id) {
+				llog_sa(RC_LOG, larval_child,
+					"peer installed Additional Child SA on CPU %u as requested",
+					peer_cpu_id);
+			} else {
+				llog_sa(RC_LOG, larval_child,
+					"requested CPU %u for Additional Child SA, peer installed on CPU %u instead",
+					larval_child->sa.st_v2_resource_info.cpu_id, peer_cpu_id);
+			}
+		}
 	}
 
 	/*
