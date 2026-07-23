@@ -514,6 +514,8 @@ struct child_sa *submit_v2_CREATE_CHILD_SA_rekey_child(struct ike_sa *ike,
 	 */
 	larval_child->sa.st_policy = capture_child_rekey_policy(&child_being_replaced->sa);
 	larval_child->sa.st_v2_rekey_pred = child_being_replaced->sa.st_serialno;
+	/* rekeyed Child SA keeps the CPU binding of the SA it replaces */
+	larval_child->sa.st_v2_resource_info.cpu_id = child_being_replaced->sa.st_v2_resource_info.cpu_id;
 
 	larval_child->sa.st_v2_create_child_sa_proposals =
 		get_v2_CREATE_CHILD_SA_rekey_child_proposals(ike, child_being_replaced, verbose);
@@ -1024,6 +1026,8 @@ stf_status process_v2_CREATE_CHILD_SA_rekey_child_request(struct ike_sa *ike,
 				       ike, CHILD_SA, SA_RESPONDER,
 				       STATE_V2_REKEY_CHILD_R0);
 	struct verbose verbose = VERBOSE(DEBUG_STREAM, larval_child->sa.logger, NULL);
+	/* rekeyed Child SA keeps the CPU binding of the SA it replaces */
+	larval_child->sa.st_v2_resource_info.cpu_id = predecessor->sa.st_v2_resource_info.cpu_id;
 
 	larval_child->sa.st_v2_rekey_pred = predecessor->sa.st_serialno;
 	larval_child->sa.st_v2_create_child_sa_proposals =
