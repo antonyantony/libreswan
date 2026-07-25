@@ -2003,22 +2003,55 @@ ip_address spd_end_sourceip(const struct spd_end *spde)
 }
 
 /*
+ * .established_child_sa is a single slot shared by all per-CPU
+ * (RFC 9611) Child SAs, so it can't tell if THIS Child SA (one
+ * specific CPU) was superseded; search for the newest established
+ * Child SA bound to the same CPU instead.
+ */
+static so_serial_t get_newer_child_sa_from_connection(struct child_sa *child)
+{
+	struct connection *c = child->sa.st_connection;
+	uint32_t cpu_id = child->sa.st_v2_resource_info.cpu_id;
+
+	struct state_filter sf = {
+		.connection_serialno = c->serialno,
+		.search = {
+			.order = NEW2OLD,
+			.where = HERE,
+		},
+	};
+	while (next_state(&sf)) {
+		if (!IS_CHILD_SA(sf.st) || sf.st == &child->sa) {
+			continue;
+		}
+		struct child_sa *other = pexpect_child_sa(sf.st);
+		if (other->sa.st_v2_resource_info.cpu_id != cpu_id ||
+		    !IS_CHILD_SA_ESTABLISHED(&other->sa)) {
+			continue;
+		}
+		ldbg(child->sa.logger,
+		     "picked established Child SA "PRI_SO" bound to the same CPU for "PRI_SO"",
+		     pri_so(other->sa.st_serialno), pri_so(child->sa.st_serialno));
+		return other->sa.st_serialno;
+	}
+
+	return SOS_NOBODY;
+}
+
+/*
  * If the connection contains a newer SA, return it.
  */
 so_serial_t get_newer_sa_from_connection(struct state *st)
 {
 	struct connection *c = st->st_connection;
-	so_serial_t newest;
 
-	if (IS_IKE_SA(st)) {
-		newest = c->established_ike_sa;
-		ldbg(st->logger, "picked established_ike_sa "PRI_SO" for "PRI_SO"",
-		     pri_so(newest), pri_so(st->st_serialno));
-	} else {
-		newest = c->established_child_sa;
-		ldbg(st->logger, "picked established_child_sa "PRI_SO" for "PRI_SO"",
-		     pri_so(newest), pri_so(st->st_serialno));
+	if (!IS_IKE_SA(st)) {
+		return get_newer_child_sa_from_connection(pexpect_child_sa(st));
 	}
+
+	so_serial_t newest = c->established_ike_sa;
+	ldbg(st->logger, "picked established_ike_sa "PRI_SO" for "PRI_SO"",
+	     pri_so(newest), pri_so(st->st_serialno));
 
 	if (newest != SOS_NOBODY && newest != st->st_serialno) {
 		return newest;

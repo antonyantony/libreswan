@@ -418,7 +418,19 @@ static void dispatch_event(struct state *st, enum event_type event_type,
 					struct child_sa *additional = IS_CHILD_SA(sf.st) ? pexpect_child_sa(sf.st) : NULL;
 					if (additional != NULL &&
 					    additional->sa.st_clonedfrom == child->sa.st_clonedfrom &&
-					    additional->sa.st_v2_resource_info.cpu_id != CPU_ID_NONE) {
+					    additional->sa.st_v2_resource_info.cpu_id != CPU_ID_NONE &&
+					    IS_CHILD_SA_ESTABLISHED(&additional->sa) &&
+					    get_newer_sa_from_connection(&additional->sa) != SOS_NOBODY) {
+						/*
+						 * Only sweep Additional SAs
+						 * already superseded by a
+						 * newer, established SA on
+						 * the same CPU - not every
+						 * Additional SA on this IKE
+						 * SA, or the just-installed
+						 * replacement gets deleted
+						 * too.
+						 */
 						llog(RC_LOG, child->sa.logger,
 							"deleting Additional Child SAs (cpu_id=%u) associated with this Initial SA",
 							additional->sa.st_v2_resource_info.cpu_id);
