@@ -36,18 +36,6 @@ ip_packet packet_from_raw(where_t where,
 		return unset_packet;
 	}
 
-	/*
-	 * An acquire triggered by a packet with no specified source
-	 * port will have a zero source port.
-	 *
-	 * However, the DST_PORT must always be non-zero (when
-	 * required).
-	 */
-	if (PBAD_WHERE(&global_logger, where,
-		       protocol->zero_port_is_any && dst_port.hport == 0)) {
-		return unset_packet;
-	}
-
 	ip_packet packet = {
 		.ip.is_set = true,
 		.ip.version = afi->ip.version,
@@ -58,7 +46,7 @@ ip_packet packet_from_raw(where_t where,
 		},
 		.dst = {
 			.bytes = *dst_bytes,
-			.hport = dst_port.hport,
+			.hport = dst_port.hport, /* can be zero */
 		},
 	};
 
