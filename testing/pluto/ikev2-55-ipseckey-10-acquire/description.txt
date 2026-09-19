@@ -1,0 +1,11 @@
+Regression test for issue #3042. The trigger must be a ping to a
+hostname that resolves to more than one IP address (here,
+east-private.testing.libreswan.org has both an A and an AAAA
+record) -- glibc's getaddrinfo()/connect() replaces the dport ping
+sets, 1025, for its route-probe socket with 0 whenever a
+name resolves to multiple addresses. Pluto used to treat
+dport=0 acquire as fatal since commit
+29b79c912774 ("ip_packet: inline pexpect_packet() into packet_from_raw()")
+and drop the acquire, instead of initiating. If the ping continues,
+ the kernel's xfrm_acq_expires (default 30 seconds), would establish
+the connection.
