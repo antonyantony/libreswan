@@ -33,6 +33,7 @@
 #include "ikev1.h"		/* for send_v1_delete() */
 #include "ikev2_delete.h"	/* for record_n_send_n_log_v2_delete() */
 #include "ikev1_delete.h"	/* for record_n_send_n_log_v2_delete() */
+#include "terminate.h"	/* for terminate_ike_family() */
 
 void whack_deletestate(const struct whack_message *wm, struct show *s)
 {
@@ -100,7 +101,9 @@ void whack_deletestate(const struct whack_message *wm, struct show *s)
 			if (IS_PARENT_SA_ESTABLISHED(&ike->sa)) {
 				submit_v2_delete_exchange(ike, child);
 			} else {
-				connection_teardown_child(&child, REASON_DELETED, HERE);
+				/* larval Child SA: tear down the IKE family */
+				terminate_ike_family(&ike, REASON_DELETED,
+						     VERBOSE(DEBUG_STREAM, ike->sa.logger, NULL));
 			}
 			break;
 		}
